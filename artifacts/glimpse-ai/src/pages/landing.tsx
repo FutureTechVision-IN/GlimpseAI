@@ -1,9 +1,159 @@
-import React, { useState, useRef, MouseEvent, TouchEvent } from "react";
+import React, { useState, useRef, useEffect, useCallback, MouseEvent, TouchEvent } from "react";
 import { Link } from "wouter";
-import { Sparkles, Wand2, ArrowRight, Star, PlayCircle, Zap, Image as ImageIcon } from "lucide-react";
+import { Sparkles, Wand2, ArrowRight, Star, PlayCircle, Zap, Image as ImageIcon, Users, ImageUp, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { motion, AnimatePresence, useInView } from "framer-motion";
 
-function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string, afterSrc: string }) {
+// --- Animation presets ---
+const ease = [0.16, 1, 0.3, 1] as const;
+
+function RevealOnScroll({ children, delay = 0, className = "" }: { children: React.ReactNode; delay?: number; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const isInView = useInView(ref, { once: true, margin: "-60px" });
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, y: 32 }}
+      animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 32 }}
+      transition={{ duration: 0.7, delay, ease }}
+      className={className}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+// --- Rotating Words ---
+const rotatingWords = ["Cinematic", "Stunning", "Effortless", "Pro-grade", "Instant", "Creative", "AI-Powered"];
+
+function RotatingWord() {
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setIndex((p) => (p + 1) % rotatingWords.length), 2600);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <span className="inline-flex h-[1.15em] overflow-hidden align-bottom relative min-w-[140px] md:min-w-[220px] justify-center">
+      <AnimatePresence mode="wait">
+        <motion.span
+          key={rotatingWords[index]}
+          initial={{ y: "110%", opacity: 0, rotateX: -45 }}
+          animate={{ y: "0%", opacity: 1, rotateX: 0 }}
+          exit={{ y: "-110%", opacity: 0, rotateX: 45 }}
+          transition={{ duration: 0.5, ease }}
+          className="absolute bg-gradient-to-r from-purple-400 via-fuchsia-400 to-blue-400 bg-clip-text text-transparent font-bold"
+        >
+          {rotatingWords[index]}
+        </motion.span>
+      </AnimatePresence>
+    </span>
+  );
+}
+
+// --- Testimonials Data ---
+const testimonials = [
+  {
+    quote: "GlimpseAI completely replaced my complex editing workflow. What used to take hours now takes seconds.",
+    name: "Sarah Jenkins",
+    role: "Professional Photographer",
+    avatar: "Sarah",
+  },
+  {
+    quote: "The AI upscaling is mind-blowing. I recovered detail from old photos I thought were lost forever.",
+    name: "Marcus Chen",
+    role: "Content Creator",
+    avatar: "Marcus",
+  },
+  {
+    quote: "Our marketing team switched to GlimpseAI. The cinematic color grading saved us thousands in post-production.",
+    name: "Elena Rodriguez",
+    role: "Marketing Director",
+    avatar: "Elena",
+  },
+  {
+    quote: "I've tested every AI editor on the market. GlimpseAI consistently delivers professional-quality results.",
+    name: "David Park",
+    role: "Film Editor",
+    avatar: "David",
+  },
+  {
+    quote: "From raw footage to polished content in under a minute. GlimpseAI is the tool I can't live without.",
+    name: "Priya Sharma",
+    role: "YouTube Creator",
+    avatar: "Priya",
+  },
+];
+
+// --- Testimonial Carousel ---
+function TestimonialCarousel() {
+  const [current, setCurrent] = useState(0);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const advance = useCallback(() => {
+    setCurrent((p) => (p + 1) % testimonials.length);
+  }, []);
+
+  useEffect(() => {
+    timeoutRef.current = setTimeout(advance, 5000);
+    return () => clearTimeout(timeoutRef.current);
+  }, [current, advance]);
+
+  return (
+    <div className="max-w-4xl mx-auto text-center">
+      <div className="flex justify-center gap-1 mb-6">
+        {[1, 2, 3, 4, 5].map((i) => (
+          <Star key={i} className="w-5 h-5 fill-purple-500 text-purple-500" />
+        ))}
+      </div>
+
+      <div className="relative h-[180px] md:h-[160px] flex items-center justify-center overflow-hidden">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={current}
+            initial={{ opacity: 0, x: 50, filter: "blur(4px)" }}
+            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, x: -50, filter: "blur(4px)" }}
+            transition={{ duration: 0.5, ease }}
+            className="absolute inset-0 flex flex-col items-center justify-center px-4"
+          >
+            <blockquote className="text-xl md:text-3xl font-medium leading-tight mb-6">
+              &ldquo;{testimonials[current].quote}&rdquo;
+            </blockquote>
+            <div className="flex items-center justify-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/20 overflow-hidden">
+                <img
+                  src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${testimonials[current].avatar}`}
+                  alt={testimonials[current].name}
+                  className="w-full h-full"
+                />
+              </div>
+              <div className="text-left">
+                <div className="font-semibold text-sm">{testimonials[current].name}</div>
+                <div className="text-xs text-zinc-400">{testimonials[current].role}</div>
+              </div>
+            </div>
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      <div className="flex justify-center gap-2 mt-4">
+        {testimonials.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setCurrent(i)}
+            aria-label={`Testimonial ${i + 1}`}
+            className={`h-1.5 rounded-full transition-all duration-300 ${
+              i === current ? "bg-purple-500 w-6" : "bg-zinc-700 w-1.5 hover:bg-zinc-500"
+            }`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// --- Before/After Slider (preserved) ---
+function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string; afterSrc: string }) {
   const [sliderPosition, setSliderPosition] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -27,7 +177,7 @@ function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string, afterSr
   };
 
   return (
-    <div 
+    <div
       ref={containerRef}
       className="relative w-full aspect-video rounded-2xl overflow-hidden cursor-ew-resize select-none border border-white/10 shadow-2xl shadow-purple-500/20"
       onMouseMove={onMouseMove}
@@ -38,24 +188,20 @@ function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string, afterSr
       onTouchEnd={() => setIsDragging(false)}
       onMouseLeave={() => setIsDragging(false)}
     >
-      <img 
-        src={beforeSrc} 
-        alt="Before" 
+      <img
+        src={beforeSrc}
+        alt="Before"
         className="absolute inset-0 w-full h-full object-cover grayscale-[50%] contrast-75 brightness-75"
       />
-      
-      <div 
+
+      <div
         className="absolute inset-0 w-full h-full overflow-hidden"
         style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}
       >
-        <img 
-          src={afterSrc} 
-          alt="After" 
-          className="absolute inset-0 w-full h-full object-cover"
-        />
+        <img src={afterSrc} alt="After" className="absolute inset-0 w-full h-full object-cover" />
       </div>
 
-      <div 
+      <div
         className="absolute top-0 bottom-0 w-1 bg-white cursor-ew-resize shadow-[0_0_10px_rgba(0,0,0,0.5)]"
         style={{ left: `calc(${sliderPosition}% - 2px)` }}
       >
@@ -67,15 +213,56 @@ function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string, afterSr
         </div>
       </div>
 
-      <div className="absolute top-4 left-4 px-3 py-1 bg-black/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-white/10">Before</div>
-      <div className="absolute top-4 right-4 px-3 py-1 bg-purple-500/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-purple-500/20 shadow-[0_0_15px_rgba(168,85,247,0.5)]">AI Enhanced</div>
+      <div className="absolute top-4 left-4 px-3 py-1 bg-black/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-white/10">
+        Before
+      </div>
+      <div className="absolute top-4 right-4 px-3 py-1 bg-purple-500/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-purple-500/20 shadow-[0_0_15px_rgba(168,85,247,0.5)]">
+        AI Enhanced
+      </div>
     </div>
   );
 }
 
+// --- Feature Card data ---
+const features = [
+  {
+    icon: ImageIcon,
+    title: "Instant Upscaling",
+    desc: "Turn low-res images into crisp, high-definition masterpieces without losing detail or introducing artifacts.",
+    color: "purple" as const,
+  },
+  {
+    icon: PlayCircle,
+    title: "Video Enhancement",
+    desc: "Stabilize shaky footage, fix lighting, and apply cinematic color grading to your videos automatically.",
+    color: "blue" as const,
+  },
+  {
+    icon: Zap,
+    title: "Magic Retouch",
+    desc: "Remove blemishes, smooth skin, and perfect portraits while maintaining a natural, unedited look.",
+    color: "emerald" as const,
+  },
+];
+
+const colorMap = {
+  purple: { bg: "bg-purple-500/10", text: "text-purple-400", border: "hover:border-purple-500/50", glow: "group-hover:shadow-purple-500/20" },
+  blue: { bg: "bg-blue-500/10", text: "text-blue-400", border: "hover:border-blue-500/50", glow: "group-hover:shadow-blue-500/20" },
+  emerald: { bg: "bg-emerald-500/10", text: "text-emerald-400", border: "hover:border-emerald-500/50", glow: "group-hover:shadow-emerald-500/20" },
+};
+
+// --- Stats ---
+const stats = [
+  { icon: ImageUp, value: "10M+", label: "Photos Enhanced" },
+  { icon: Users, value: "50K+", label: "Creators" },
+  { icon: Clock, value: "<2s", label: "Avg. Processing" },
+];
+
+// ===== LANDING PAGE =====
 export default function Landing() {
   return (
     <div className="min-h-screen bg-black text-white selection:bg-purple-500/30">
+      {/* --- Nav (preserved) --- */}
       <nav className="fixed top-0 w-full z-50 border-b border-white/10 bg-black/50 backdrop-blur-md">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 font-bold text-xl tracking-tighter">
@@ -96,133 +283,199 @@ export default function Landing() {
       </nav>
 
       <main>
+        {/* ===== HERO ===== */}
         <section className="pt-32 pb-20 relative overflow-hidden">
           <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-purple-600/20 blur-[120px] rounded-full pointer-events-none" />
-          
+
           <div className="container mx-auto px-4 relative z-10 text-center">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium mb-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, ease }}
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium mb-8"
+            >
               <Wand2 className="w-4 h-4" />
               <span>Next-gen AI Editor Engine v3.0</span>
-            </div>
-            
-            <h1 className="text-5xl md:text-7xl lg:text-8xl font-bold tracking-tighter mb-6 bg-gradient-to-br from-white via-white to-white/40 bg-clip-text text-transparent animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
-              Cinematic edits.<br />Zero effort.
-            </h1>
-            
-            <p className="text-lg md:text-xl text-white/60 max-w-2xl mx-auto mb-10 animate-in fade-in slide-in-from-bottom-6 duration-700 delay-200">
+            </motion.div>
+
+            <motion.h1
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, delay: 0.1, ease }}
+              className="text-5xl md:text-7xl lg:text-8xl font-bold tracking-tighter mb-4 bg-gradient-to-br from-white via-white to-white/40 bg-clip-text text-transparent"
+            >
+              Cinematic edits.
+              <br />
+              Zero effort.
+            </motion.h1>
+
+            {/* Rotating word line */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, delay: 0.18, ease }}
+              className="text-2xl md:text-3xl font-semibold tracking-tight mb-6 text-white/80"
+            >
+              Make every frame <RotatingWord />
+            </motion.div>
+
+            <motion.p
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, delay: 0.25, ease }}
+              className="text-lg md:text-xl text-white/60 max-w-2xl mx-auto mb-10"
+            >
               Transform ordinary photos and videos into stunning, professional-grade content with a single click. The power of a high-end creative studio, right in your browser.
-            </p>
-            
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-in fade-in slide-in-from-bottom-6 duration-700 delay-300">
+            </motion.p>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, delay: 0.35, ease }}
+              className="flex flex-col sm:flex-row items-center justify-center gap-4"
+            >
               <Link href="/register">
-                <Button size="lg" className="h-14 px-8 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-base font-medium shadow-[0_0_30px_rgba(147,51,234,0.3)] hover:shadow-[0_0_40px_rgba(147,51,234,0.5)] transition-all">
-                  Start Editing Free <ArrowRight className="w-5 h-5 ml-2" />
-                </Button>
+                <motion.div whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}>
+                  <Button
+                    size="lg"
+                    className="h-14 px-8 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-base font-medium shadow-[0_0_30px_rgba(147,51,234,0.3)] hover:shadow-[0_0_40px_rgba(147,51,234,0.5)] transition-all"
+                  >
+                    Start Editing Free <ArrowRight className="w-5 h-5 ml-2" />
+                  </Button>
+                </motion.div>
               </Link>
               <div className="text-sm text-zinc-500 font-medium">No credit card required</div>
-            </div>
+            </motion.div>
 
-            <div className="mt-24 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-12 duration-1000 delay-500">
-              <BeforeAfterSlider 
-                beforeSrc="/hero-before.png" 
-                afterSrc="/hero-after.png" 
-              />
+            <motion.div
+              initial={{ opacity: 0, y: 50, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ duration: 1, delay: 0.55, ease }}
+              className="mt-24 max-w-5xl mx-auto"
+            >
+              <BeforeAfterSlider beforeSrc="/hero-before.png" afterSrc="/hero-after.png" />
+            </motion.div>
+          </div>
+        </section>
+
+        {/* ===== STATS BAR ===== */}
+        <section className="py-10 bg-black border-b border-white/5">
+          <div className="container mx-auto px-4">
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-8 sm:gap-16">
+              {stats.map((stat, i) => (
+                <RevealOnScroll key={stat.label} delay={i * 0.1}>
+                  <div className="flex items-center gap-3 text-center sm:text-left">
+                    <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                      <stat.icon className="w-5 h-5 text-purple-400" />
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold tracking-tight">{stat.value}</div>
+                      <div className="text-xs text-zinc-500 font-medium">{stat.label}</div>
+                    </div>
+                  </div>
+                </RevealOnScroll>
+              ))}
             </div>
           </div>
         </section>
 
+        {/* ===== FEATURES ===== */}
         <section className="py-24 bg-zinc-950 border-y border-white/5 relative">
           <div className="container mx-auto px-4">
-            <div className="text-center mb-16">
+            <RevealOnScroll className="text-center mb-16">
               <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">Professional tools, simplified.</h2>
-              <p className="text-zinc-400 max-w-2xl mx-auto text-lg">Everything you need to make your media stand out, powered by state-of-the-art artificial intelligence.</p>
-            </div>
+              <p className="text-zinc-400 max-w-2xl mx-auto text-lg">
+                Everything you need to make your media stand out, powered by state-of-the-art artificial intelligence.
+              </p>
+            </RevealOnScroll>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
-              <div className="bg-black border border-white/10 rounded-2xl p-8 hover:border-purple-500/50 transition-colors group">
-                <div className="w-12 h-12 bg-purple-500/10 rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <ImageIcon className="w-6 h-6 text-purple-400" />
-                </div>
-                <h3 className="text-xl font-semibold mb-3">Instant Upscaling</h3>
-                <p className="text-zinc-400 leading-relaxed">Turn low-res images into crisp, high-definition masterpieces without losing detail or introducing artifacts.</p>
-              </div>
-
-              <div className="bg-black border border-white/10 rounded-2xl p-8 hover:border-blue-500/50 transition-colors group">
-                <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <PlayCircle className="w-6 h-6 text-blue-400" />
-                </div>
-                <h3 className="text-xl font-semibold mb-3">Video Enhancement</h3>
-                <p className="text-zinc-400 leading-relaxed">Stabilize shaky footage, fix lighting, and apply cinematic color grading to your videos automatically.</p>
-              </div>
-
-              <div className="bg-black border border-white/10 rounded-2xl p-8 hover:border-emerald-500/50 transition-colors group">
-                <div className="w-12 h-12 bg-emerald-500/10 rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <Zap className="w-6 h-6 text-emerald-400" />
-                </div>
-                <h3 className="text-xl font-semibold mb-3">Magic Retouch</h3>
-                <p className="text-zinc-400 leading-relaxed">Remove blemishes, smooth skin, and perfect portraits while maintaining a natural, unedited look.</p>
-              </div>
+              {features.map((feat, i) => {
+                const c = colorMap[feat.color];
+                return (
+                  <RevealOnScroll key={feat.title} delay={i * 0.12}>
+                    <motion.div
+                      whileHover={{ y: -6, transition: { duration: 0.25 } }}
+                      className={`bg-black border border-white/10 rounded-2xl p-8 ${c.border} transition-colors group shadow-lg shadow-transparent ${c.glow}`}
+                    >
+                      <div className={`w-12 h-12 ${c.bg} rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform`}>
+                        <feat.icon className={`w-6 h-6 ${c.text}`} />
+                      </div>
+                      <h3 className="text-xl font-semibold mb-3">{feat.title}</h3>
+                      <p className="text-zinc-400 leading-relaxed">{feat.desc}</p>
+                    </motion.div>
+                  </RevealOnScroll>
+                );
+              })}
             </div>
           </div>
         </section>
 
+        {/* ===== TESTIMONIALS ===== */}
         <section className="py-24 relative">
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-purple-600/10 blur-[100px] rounded-full pointer-events-none" />
-          
+
           <div className="container mx-auto px-4 relative z-10">
-            <div className="max-w-4xl mx-auto text-center">
-              <div className="flex justify-center gap-1 mb-6">
-                {[1, 2, 3, 4, 5].map(i => <Star key={i} className="w-6 h-6 fill-purple-500 text-purple-500" />)}
-              </div>
-              <blockquote className="text-2xl md:text-4xl font-medium leading-tight mb-8">
-                "GlimpseAI completely replaced my complex editing workflow. What used to take hours in professional software now takes seconds in the browser."
-              </blockquote>
-              <div className="flex items-center justify-center gap-4">
-                <div className="w-12 h-12 rounded-full bg-zinc-800 border border-white/20 overflow-hidden">
-                  <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah" alt="Sarah" className="w-full h-full" />
-                </div>
-                <div className="text-left">
-                  <div className="font-semibold">Sarah Jenkins</div>
-                  <div className="text-sm text-zinc-400">Professional Photographer</div>
-                </div>
-              </div>
-            </div>
+            <RevealOnScroll>
+              <TestimonialCarousel />
+            </RevealOnScroll>
           </div>
         </section>
 
+        {/* ===== CTA ===== */}
         <section className="py-32 border-t border-white/10 relative overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-b from-purple-900/20 to-black pointer-events-none" />
-          
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] bg-purple-600/15 blur-[100px] rounded-full pointer-events-none" />
+
           <div className="container mx-auto px-4 relative z-10 text-center">
-            <h2 className="text-4xl md:text-6xl font-bold tracking-tighter mb-6">Ready to create magic?</h2>
-            <p className="text-xl text-zinc-400 mb-10 max-w-xl mx-auto">Join thousands of creators using GlimpseAI to elevate their content. Get 5 free credits when you sign up today.</p>
-            
-            <Link href="/register">
-              <Button size="lg" className="h-14 px-10 bg-white text-black hover:bg-zinc-200 rounded-full text-lg font-medium shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:shadow-[0_0_50px_rgba(255,255,255,0.5)] transition-all">
-                Start Creating Now
-              </Button>
-            </Link>
+            <RevealOnScroll>
+              <h2 className="text-4xl md:text-6xl font-bold tracking-tighter mb-6">Ready to create magic?</h2>
+            </RevealOnScroll>
+            <RevealOnScroll delay={0.1}>
+              <p className="text-xl text-zinc-400 mb-10 max-w-xl mx-auto">
+                Join thousands of creators using GlimpseAI to elevate their content. Get 5 free credits when you sign up today.
+              </p>
+            </RevealOnScroll>
+            <RevealOnScroll delay={0.2}>
+              <Link href="/register">
+                <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }} className="inline-block">
+                  <Button
+                    size="lg"
+                    className="h-14 px-10 bg-white text-black hover:bg-zinc-200 rounded-full text-lg font-medium shadow-[0_0_30px_rgba(255,255,255,0.3)] hover:shadow-[0_0_50px_rgba(255,255,255,0.5)] transition-all"
+                  >
+                    Start Creating Now
+                  </Button>
+                </motion.div>
+              </Link>
+            </RevealOnScroll>
           </div>
         </section>
       </main>
 
+      {/* --- Footer (preserved) --- */}
       <footer className="border-t border-white/10 py-12 bg-zinc-950">
         <div className="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-2 font-bold text-xl tracking-tighter">
             <Sparkles className="w-5 h-5 text-purple-500" />
             GlimpseAI
           </div>
-          
+
           <div className="flex gap-8 text-sm text-zinc-500 font-medium">
-            <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
-            <a href="#" className="hover:text-white transition-colors">Terms</a>
-            <a href="#" className="hover:text-white transition-colors">Privacy</a>
-            <a href="#" className="hover:text-white transition-colors">Contact</a>
+            <Link href="/pricing" className="hover:text-white transition-colors">
+              Pricing
+            </Link>
+            <a href="#" className="hover:text-white transition-colors">
+              Terms
+            </a>
+            <a href="#" className="hover:text-white transition-colors">
+              Privacy
+            </a>
+            <a href="#" className="hover:text-white transition-colors">
+              Contact
+            </a>
           </div>
-          
-          <div className="text-sm text-zinc-600">
-            © {new Date().getFullYear()} GlimpseAI. All rights reserved.
-          </div>
+
+          <div className="text-sm text-zinc-600">&copy; {new Date().getFullYear()} GlimpseAI. All rights reserved.</div>
         </div>
       </footer>
     </div>
