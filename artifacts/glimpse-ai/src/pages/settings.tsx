@@ -67,7 +67,7 @@ export default function Settings() {
                   id="name" 
                   value={name} 
                   onChange={(e) => setName(e.target.value)} 
-                  className="bg-black border-zinc-800 focus-visible:ring-purple-500 max-w-md"
+                  className="bg-black border-zinc-800 focus-visible:ring-teal-500 max-w-md"
                 />
               </div>
               <div className="space-y-2">
@@ -77,7 +77,7 @@ export default function Settings() {
                   type="email" 
                   value={email} 
                   onChange={(e) => setEmail(e.target.value)} 
-                  className="bg-black border-zinc-800 focus-visible:ring-purple-500 max-w-md"
+                  className="bg-black border-zinc-800 focus-visible:ring-teal-500 max-w-md"
                 />
               </div>
             </CardContent>

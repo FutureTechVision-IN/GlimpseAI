@@ -41,7 +41,7 @@ function RotatingWord() {
           animate={{ y: "0%", opacity: 1, rotateX: 0 }}
           exit={{ y: "-110%", opacity: 0, rotateX: 45 }}
           transition={{ duration: 0.5, ease }}
-          className="absolute bg-gradient-to-r from-purple-400 via-fuchsia-400 to-blue-400 bg-clip-text text-transparent font-bold"
+          className="absolute bg-gradient-to-r from-teal-400 via-cyan-400 to-blue-400 bg-clip-text text-transparent font-bold"
         >
           {rotatingWords[index]}
         </motion.span>
@@ -102,7 +102,7 @@ function TestimonialCarousel() {
     <div className="max-w-4xl mx-auto text-center">
       <div className="flex justify-center gap-1 mb-6">
         {[1, 2, 3, 4, 5].map((i) => (
-          <Star key={i} className="w-5 h-5 fill-purple-500 text-purple-500" />
+          <Star key={i} className="w-5 h-5 fill-teal-500 text-teal-500" />
         ))}
       </div>
 
@@ -143,7 +143,7 @@ function TestimonialCarousel() {
             onClick={() => setCurrent(i)}
             aria-label={`Testimonial ${i + 1}`}
             className={`h-1.5 rounded-full transition-all duration-300 ${
-              i === current ? "bg-purple-500 w-6" : "bg-zinc-700 w-1.5 hover:bg-zinc-500"
+              i === current ? "bg-teal-500 w-6" : "bg-zinc-700 w-1.5 hover:bg-zinc-500"
             }`}
           />
         ))}
@@ -179,7 +179,7 @@ function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string; afterSr
   return (
     <div
       ref={containerRef}
-      className="relative w-full aspect-video rounded-2xl overflow-hidden cursor-ew-resize select-none border border-white/10 shadow-2xl shadow-purple-500/20"
+      className="relative w-full aspect-video rounded-2xl overflow-hidden cursor-ew-resize select-none border border-white/10 shadow-2xl shadow-teal-500/20"
       onMouseMove={onMouseMove}
       onTouchMove={onTouchMove}
       onMouseDown={() => setIsDragging(true)}
@@ -216,7 +216,7 @@ function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string; afterSr
       <div className="absolute top-4 left-4 px-3 py-1 bg-black/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-white/10">
         Before
       </div>
-      <div className="absolute top-4 right-4 px-3 py-1 bg-purple-500/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-purple-500/20 shadow-[0_0_15px_rgba(168,85,247,0.5)]">
+      <div className="absolute top-4 right-4 px-3 py-1 bg-teal-500/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-teal-500/20 shadow-[0_0_15px_rgba(45,212,191,0.5)]">
         AI Enhanced
       </div>
     </div>
@@ -229,7 +229,7 @@ const features = [
     icon: ImageIcon,
     title: "Instant Upscaling",
     desc: "Turn low-res images into crisp, high-definition masterpieces without losing detail or introducing artifacts.",
-    color: "purple" as const,
+    color: "teal" as const,
   },
   {
     icon: PlayCircle,
@@ -246,7 +246,7 @@ const features = [
 ];
 
 const colorMap = {
-  purple: { bg: "bg-purple-500/10", text: "text-purple-400", border: "hover:border-purple-500/50", glow: "group-hover:shadow-purple-500/20" },
+  teal: { bg: "bg-teal-500/10", text: "text-teal-400", border: "hover:border-teal-500/50", glow: "group-hover:shadow-teal-500/20" },
   blue: { bg: "bg-blue-500/10", text: "text-blue-400", border: "hover:border-blue-500/50", glow: "group-hover:shadow-blue-500/20" },
   emerald: { bg: "bg-emerald-500/10", text: "text-emerald-400", border: "hover:border-emerald-500/50", glow: "group-hover:shadow-emerald-500/20" },
 };
@@ -261,12 +261,12 @@ const stats = [
 // ===== LANDING PAGE =====
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-black text-white selection:bg-purple-500/30">
+    <div className="min-h-screen bg-black text-white selection:bg-teal-500/30">
       {/* --- Nav (preserved) --- */}
       <nav className="fixed top-0 w-full z-50 border-b border-white/10 bg-black/50 backdrop-blur-md">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 font-bold text-xl tracking-tighter">
-            <Sparkles className="w-5 h-5 text-purple-500" />
+            <Sparkles className="w-5 h-5 text-teal-500" />
             GlimpseAI
           </div>
           <div className="flex items-center gap-4">
@@ -285,14 +285,14 @@ export default function Landing() {
       <main>
         {/* ===== HERO ===== */}
         <section className="pt-32 pb-20 relative overflow-hidden">
-          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-purple-600/20 blur-[120px] rounded-full pointer-events-none" />
+          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-teal-600/20 blur-[120px] rounded-full pointer-events-none" />
 
           <div className="container mx-auto px-4 relative z-10 text-center">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, ease }}
-              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium mb-8"
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-400 text-sm font-medium mb-8"
             >
               <Wand2 className="w-4 h-4" />
               <span>Next-gen AI Editor Engine v3.0</span>
@@ -338,7 +338,7 @@ export default function Landing() {
                 <motion.div whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}>
                   <Button
                     size="lg"
-                    className="h-14 px-8 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-base font-medium shadow-[0_0_30px_rgba(147,51,234,0.3)] hover:shadow-[0_0_40px_rgba(147,51,234,0.5)] transition-all"
+                    className="h-14 px-8 bg-teal-600 hover:bg-teal-700 text-white rounded-full text-base font-medium shadow-[0_0_30px_rgba(20,184,166,0.3)] hover:shadow-[0_0_40px_rgba(20,184,166,0.5)] transition-all"
                   >
                     Start Editing Free <ArrowRight className="w-5 h-5 ml-2" />
                   </Button>
@@ -365,8 +365,8 @@ export default function Landing() {
               {stats.map((stat, i) => (
                 <RevealOnScroll key={stat.label} delay={i * 0.1}>
                   <div className="flex items-center gap-3 text-center sm:text-left">
-                    <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                      <stat.icon className="w-5 h-5 text-purple-400" />
+                    <div className="w-10 h-10 rounded-lg bg-teal-500/10 flex items-center justify-center">
+                      <stat.icon className="w-5 h-5 text-teal-400" />
                     </div>
                     <div>
                       <div className="text-2xl font-bold tracking-tight">{stat.value}</div>
@@ -413,7 +413,7 @@ export default function Landing() {
 
         {/* ===== TESTIMONIALS ===== */}
         <section className="py-24 relative">
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-purple-600/10 blur-[100px] rounded-full pointer-events-none" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-teal-600/10 blur-[100px] rounded-full pointer-events-none" />
 
           <div className="container mx-auto px-4 relative z-10">
             <RevealOnScroll>
@@ -424,8 +424,8 @@ export default function Landing() {
 
         {/* ===== CTA ===== */}
         <section className="py-32 border-t border-white/10 relative overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-b from-purple-900/20 to-black pointer-events-none" />
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] bg-purple-600/15 blur-[100px] rounded-full pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-b from-teal-900/20 to-black pointer-events-none" />
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] bg-teal-600/15 blur-[100px] rounded-full pointer-events-none" />
 
           <div className="container mx-auto px-4 relative z-10 text-center">
             <RevealOnScroll>
@@ -456,7 +456,7 @@ export default function Landing() {
       <footer className="border-t border-white/10 py-12 bg-zinc-950">
         <div className="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-2 font-bold text-xl tracking-tighter">
-            <Sparkles className="w-5 h-5 text-purple-500" />
+            <Sparkles className="w-5 h-5 text-teal-500" />
             GlimpseAI
           </div>
 

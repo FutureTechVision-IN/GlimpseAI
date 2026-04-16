@@ -108,7 +108,7 @@ export default function Editor() {
         <aside className="w-full lg:w-80 border-r border-white/10 bg-zinc-950 flex flex-col">
           <div className="p-4 border-b border-white/10">
             <h2 className="font-semibold text-lg flex items-center gap-2">
-              <Settings2 className="w-5 h-5 text-purple-500" />
+              <Settings2 className="w-5 h-5 text-teal-500" />
               Enhancement Settings
             </h2>
           </div>
@@ -124,7 +124,7 @@ export default function Editor() {
                       key={type}
                       variant="outline" 
                       size="sm"
-                      className={`justify-start capitalize border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 ${enhancementType === type ? 'border-purple-500 text-purple-400 bg-purple-500/10 hover:bg-purple-500/20' : ''}`}
+                      className={`justify-start capitalize border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 ${enhancementType === type ? 'border-teal-500 text-teal-400 bg-teal-500/10 hover:bg-teal-500/20' : ''}`}
                       onClick={() => setEnhancementType(type)}
                     >
                       {type === "auto" && <Wand2 className="w-3 h-3 mr-2" />}
@@ -144,7 +144,7 @@ export default function Editor() {
                         key={preset.id}
                         variant="outline" 
                         size="sm"
-                        className={`justify-start border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 ${presetId === preset.id ? 'border-purple-500 text-purple-400 bg-purple-500/10' : ''}`}
+                        className={`justify-start border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 ${presetId === preset.id ? 'border-teal-500 text-teal-400 bg-teal-500/10' : ''}`}
                         onClick={() => setPresetId(preset.id === presetId ? undefined : preset.id)}
                       >
                         <Sparkles className={`w-3 h-3 mr-2 ${preset.isPremium ? 'text-amber-400' : ''}`} />
@@ -159,7 +159,7 @@ export default function Editor() {
 
           <div className="p-4 border-t border-white/10 bg-zinc-950">
             <Button 
-              className="w-full bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-500/20"
+              className="w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20"
               onClick={handleProcess}
               disabled={!file || isProcessing}
             >
@@ -223,7 +223,7 @@ export default function Editor() {
                 <div className="relative max-w-full max-h-full rounded-lg overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
                   {isProcessing && (
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-20">
-                      <Loader2 className="w-10 h-10 text-purple-500 animate-spin mb-4" />
+                      <Loader2 className="w-10 h-10 text-teal-500 animate-spin mb-4" />
                       <div className="text-lg font-medium">Applying Magic...</div>
                       <div className="text-sm text-zinc-400 mt-2">This may take a few moments</div>
                     </div>

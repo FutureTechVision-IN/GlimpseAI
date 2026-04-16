@@ -43,25 +43,25 @@ export default function Pricing() {
               id="billing-toggle" 
               checked={isAnnual} 
               onCheckedChange={setIsAnnual} 
-              className="data-[state=checked]:bg-purple-600"
+              className="data-[state=checked]:bg-teal-600"
             />
             <Label htmlFor="billing-toggle" className={`text-sm font-medium flex items-center gap-2 ${isAnnual ? 'text-white' : 'text-zinc-500'}`}>
-              Annually <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 text-xs">Save 20%</span>
+              Annually <span className="px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-400 text-xs">Save 20%</span>
             </Label>
           </div>
         </div>
 
         {isLoading ? (
-          <div className="flex justify-center"><div className="w-8 h-8 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" /></div>
+          <div className="flex justify-center"><div className="w-8 h-8 rounded-full border-2 border-teal-500 border-t-transparent animate-spin" /></div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {plans?.map((plan) => (
               <Card 
                 key={plan.id} 
-                className={`relative bg-zinc-950 border-zinc-800 flex flex-col ${plan.isPopular ? 'border-purple-500 shadow-2xl shadow-purple-500/10 scale-105 z-10' : ''}`}
+                className={`relative bg-zinc-950 border-zinc-800 flex flex-col ${plan.isPopular ? 'border-teal-500 shadow-2xl shadow-teal-500/10 scale-105 z-10' : ''}`}
               >
                 {plan.isPopular && (
-                  <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-purple-600 text-white px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider flex items-center gap-1">
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-teal-600 text-white px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider flex items-center gap-1">
                     <Sparkles className="w-3 h-3" /> Most Popular
                   </div>
                 )}
@@ -80,7 +80,7 @@ export default function Pricing() {
                   <ul className="space-y-3">
                     {plan.features.map((feature, i) => (
                       <li key={i} className="flex items-start gap-3 text-sm text-zinc-300">
-                        <Check className="w-4 h-4 text-purple-500 shrink-0 mt-0.5" />
+                        <Check className="w-4 h-4 text-teal-500 shrink-0 mt-0.5" />
                         <span>{feature}</span>
                       </li>
                     ))}
@@ -88,7 +88,7 @@ export default function Pricing() {
                 </CardContent>
                 <CardFooter>
                   <Button 
-                    className={`w-full ${plan.isPopular ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-white text-black hover:bg-white/90'}`}
+                    className={`w-full ${plan.isPopular ? 'bg-teal-600 hover:bg-teal-700 text-white' : 'bg-white text-black hover:bg-white/90'}`}
                     onClick={() => handleSubscribe(plan.id)}
                     disabled={createOrder.isPending}
                   >

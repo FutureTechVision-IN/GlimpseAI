@@ -23,7 +23,7 @@ export default function Billing() {
           </CardHeader>
           <CardContent>
             {isLoading ? (
-              <div className="flex justify-center p-8"><div className="w-6 h-6 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" /></div>
+              <div className="flex justify-center p-8"><div className="w-6 h-6 rounded-full border-2 border-teal-500 border-t-transparent animate-spin" /></div>
             ) : payments && payments.length > 0 ? (
               <div className="rounded-md border border-zinc-800">
                 <Table>

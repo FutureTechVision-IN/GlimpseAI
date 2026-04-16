@@ -30,7 +30,7 @@ export default function ForgotPassword() {
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
       <Link href="/" className="flex items-center gap-2 font-bold text-2xl tracking-tighter text-white mb-8">
-        <Sparkles className="w-6 h-6 text-purple-500" />
+        <Sparkles className="w-6 h-6 text-teal-500" />
         GlimpseAI
       </Link>
       
@@ -48,7 +48,7 @@ export default function ForgotPassword() {
               type="email" 
               value={email} 
               onChange={(e) => setEmail(e.target.value)}
-              className="bg-black border-white/10 text-white focus-visible:ring-purple-500"
+              className="bg-black border-white/10 text-white focus-visible:ring-teal-500"
               required
             />
           </div>

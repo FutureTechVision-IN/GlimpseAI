@@ -14,7 +14,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <aside className="w-64 border-r border-white/10 bg-zinc-950 flex flex-col hidden md:flex">
         <div className="p-6">
           <Link href="/dashboard" className="flex items-center gap-2 font-bold text-xl tracking-tighter">
-            <Sparkles className="w-5 h-5 text-purple-500" />
+            <Sparkles className="w-5 h-5 text-teal-500" />
             GlimpseAI
           </Link>
         </div>
@@ -46,7 +46,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 Settings
               </Link>
               {user?.role === "admin" && (
-                <Link href="/admin" className="flex items-center gap-3 px-3 py-2 rounded-lg text-purple-400 hover:bg-white/5 transition-colors">
+                <Link href="/admin" className="flex items-center gap-3 px-3 py-2 rounded-lg text-teal-400 hover:bg-white/5 transition-colors">
                   <Shield className="w-4 h-4" />
                   Admin
                 </Link>

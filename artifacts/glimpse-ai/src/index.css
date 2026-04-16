@@ -61,7 +61,7 @@
   --popover-foreground: 0 0% 98%;
   --popover-border: 240 10% 15%;
 
-  --primary: 270 70% 60%;
+  --primary: 173 80% 40%;
   --primary-foreground: 0 0% 98%;
   
   --secondary: 240 10% 15%;
@@ -70,14 +70,14 @@
   --muted: 240 10% 12%;
   --muted-foreground: 240 5% 65%;
   
-  --accent: 270 70% 60%;
+  --accent: 173 80% 40%;
   --accent-foreground: 0 0% 98%;
   
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 0 0% 98%;
   
   --input: 240 10% 15%;
-  --ring: 270 70% 60%;
+  --ring: 173 80% 40%;
   
   --radius: 0.5rem;
   --app-font-sans: 'Inter', sans-serif;
@@ -97,7 +97,7 @@
   --popover-foreground: 0 0% 98%;
   --popover-border: 240 10% 15%;
 
-  --primary: 270 70% 60%;
+  --primary: 173 80% 40%;
   --primary-foreground: 0 0% 98%;
   
   --secondary: 240 10% 15%;
@@ -106,14 +106,14 @@
   --muted: 240 10% 12%;
   --muted-foreground: 240 5% 65%;
   
-  --accent: 270 70% 60%;
+  --accent: 173 80% 40%;
   --accent-foreground: 0 0% 98%;
   
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 0 0% 98%;
   
   --input: 240 10% 15%;
-  --ring: 270 70% 60%;
+  --ring: 173 80% 40%;
 }
 
 @layer base {

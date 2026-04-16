@@ -60,13 +60,13 @@ type AdminSection =
   | "providers";
 
 function StatCard({
-  title, value, sub, icon: Icon, trend, color = "purple"
+  title, value, sub, icon: Icon, trend, color = "teal"
 }: {
   title: string; value: string | number; sub?: string;
   icon: React.ElementType; trend?: number; color?: string;
 }) {
   const colors: Record<string, string> = {
-    purple: "text-purple-400", emerald: "text-emerald-400",
+    teal: "text-teal-400", emerald: "text-emerald-400",
     blue: "text-blue-400", amber: "text-amber-400", rose: "text-rose-400"
   };
   return (
@@ -154,14 +154,14 @@ function Overview() {
   ] : [];
 
   if (isLoading) {
-    return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-purple-500" /></div>;
+    return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>;
   }
 
   return (
     <div className="space-y-8">
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total Users" value={stats?.totalUsers.toLocaleString() ?? "—"} sub={`${stats?.freeUsers ?? 0} free · ${stats?.paidUsers ?? 0} paid`} icon={Users} color="purple" />
+        <StatCard title="Total Users" value={stats?.totalUsers.toLocaleString() ?? "—"} sub={`${stats?.freeUsers ?? 0} free · ${stats?.paidUsers ?? 0} paid`} icon={Users} color="teal" />
         <StatCard title="Revenue" value={stats ? `₹${(stats.totalRevenue / 100).toLocaleString("en-IN", { minimumFractionDigits: 0 })}` : "—"} sub={`${stats?.activeSubscriptions ?? 0} active subs`} icon={BadgeDollarSign} color="emerald" />
         <StatCard title="Media Processed" value={stats ? (stats.totalPhotosProcessed + stats.totalVideosProcessed).toLocaleString() : "—"} sub={`${stats?.totalPhotosProcessed ?? 0} photos · ${stats?.totalVideosProcessed ?? 0} videos`} icon={ImageIcon} color="blue" />
         <StatCard title="Jobs Today" value={stats?.jobsToday.toLocaleString() ?? "—"} sub={`${stats?.failedJobsToday ?? 0} failed`} icon={Activity} color={stats && stats.failedJobsToday > 0 ? "rose" : "amber"} />
@@ -277,7 +277,7 @@ function Overview() {
                 <div className="pt-2 border-t border-zinc-800">
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-500">Conversion rate</span>
-                    <span className="text-purple-400 font-semibold">{stats?.conversionRate ? `${(stats.conversionRate * 100).toFixed(1)}%` : "0%"}</span>
+                    <span className="text-teal-400 font-semibold">{stats?.conversionRate ? `${(stats.conversionRate * 100).toFixed(1)}%` : "0%"}</span>
                   </div>
                 </div>
               </div>
@@ -298,7 +298,7 @@ function Overview() {
               {stats?.recentSignups.map(u => (
                 <div key={u.id} className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold text-purple-400">{u.name[0]}</div>
+                    <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold text-teal-400">{u.name[0]}</div>
                     <div>
                       <div className="text-sm font-medium">{u.name}</div>
                       <div className="text-xs text-zinc-500">{u.email}</div>
@@ -384,7 +384,7 @@ function UsersSection() {
       </div>
 
       {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-500" /></div>
+        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>
       ) : (
         <Card className="bg-zinc-900 border-zinc-800">
           <Table>
@@ -404,7 +404,7 @@ function UsersSection() {
                 <TableRow key={user.id} className="border-zinc-800 hover:bg-zinc-800/40">
                   <TableCell>
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold text-purple-400">{user.name[0]}</div>
+                      <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold text-teal-400">{user.name[0]}</div>
                       <div>
                         <div className="text-sm font-medium">{user.name}</div>
                         <div className="text-xs text-zinc-500">{user.email}</div>
@@ -412,7 +412,7 @@ function UsersSection() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={user.role === "admin" ? "border-purple-500/40 text-purple-400 bg-purple-500/10" : "border-zinc-700 text-zinc-400"}>
+                    <Badge variant="outline" className={user.role === "admin" ? "border-teal-500/40 text-teal-400 bg-teal-500/10" : "border-zinc-700 text-zinc-400"}>
                       {user.role}
                     </Badge>
                   </TableCell>
@@ -474,7 +474,7 @@ function UsersSection() {
           </div>
           <DialogFooter>
             <Button variant="outline" className="border-zinc-700" onClick={() => setCreditDialog(null)}>Cancel</Button>
-            <Button className="bg-purple-600 hover:bg-purple-500" onClick={handleCredits} disabled={creditMutation.isPending}>
+            <Button className="bg-teal-600 hover:bg-teal-500" onClick={handleCredits} disabled={creditMutation.isPending}>
               {creditMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
             </Button>
           </DialogFooter>
@@ -497,7 +497,7 @@ function JobsSection() {
       <div className="flex gap-2 mb-5">
         {["all", "pending", "processing", "completed", "failed"].map(s => (
           <Button key={s} size="sm" variant="ghost"
-            className={`capitalize h-7 px-3 text-xs rounded-full ${statusFilter === s ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`}
+            className={`capitalize h-7 px-3 text-xs rounded-full ${statusFilter === s ? "bg-teal-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"}`}
             onClick={() => { setStatusFilter(s); setPage(1); }}>
             {s === "all" ? "All Jobs" : s}
           </Button>
@@ -505,7 +505,7 @@ function JobsSection() {
       </div>
 
       {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-500" /></div>
+        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>
       ) : (
         <Card className="bg-zinc-900 border-zinc-800">
           <Table>
@@ -569,10 +569,10 @@ function PaymentsSection() {
       <div className="grid grid-cols-3 gap-4 mb-6">
         <StatCard title="Total Revenue" value={`₹${(totalRevenue / 100).toLocaleString("en-IN")}`} icon={BadgeDollarSign} color="emerald" />
         <StatCard title="Transactions" value={data?.total ?? "—"} icon={CreditCard} color="blue" />
-        <StatCard title="Success Rate" value={data ? `${data.payments.length > 0 ? Math.round(data.payments.filter(p => p.status === "success").length / data.payments.length * 100) : 0}%` : "—"} icon={TrendingUp} color="purple" />
+        <StatCard title="Success Rate" value={data ? `${data.payments.length > 0 ? Math.round(data.payments.filter(p => p.status === "success").length / data.payments.length * 100) : 0}%` : "—"} icon={TrendingUp} color="teal" />
       </div>
       {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-500" /></div>
+        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>
       ) : (
         <Card className="bg-zinc-900 border-zinc-800">
           <Table>
@@ -667,17 +667,17 @@ function PlansSection() {
   return (
     <div>
       <SectionHeader title="Plan Management" description="Manage subscription tiers and pricing"
-        action={<Button size="sm" className="bg-purple-600 hover:bg-purple-500" onClick={() => { resetForm(); setShowCreate(true); }}><Plus className="w-4 h-4 mr-1" /> New Plan</Button>} />
+        action={<Button size="sm" className="bg-teal-600 hover:bg-teal-500" onClick={() => { resetForm(); setShowCreate(true); }}><Plus className="w-4 h-4 mr-1" /> New Plan</Button>} />
 
       {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-500" /></div>
+        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {plans?.map(plan => (
-            <Card key={plan.id} className={`bg-zinc-900 border-zinc-800 relative ${plan.isPopular ? "ring-1 ring-purple-500/50" : ""}`}>
+            <Card key={plan.id} className={`bg-zinc-900 border-zinc-800 relative ${plan.isPopular ? "ring-1 ring-teal-500/50" : ""}`}>
               {plan.isPopular && (
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                  <Badge className="bg-purple-600 text-white text-xs px-3">Most Popular</Badge>
+                  <Badge className="bg-teal-600 text-white text-xs px-3">Most Popular</Badge>
                 </div>
               )}
               <CardHeader>
@@ -700,7 +700,7 @@ function PlansSection() {
                 <ul className="space-y-1.5 mb-4">
                   {plan.features.map(f => (
                     <li key={f} className="flex items-start gap-2 text-sm text-zinc-400">
-                      <CheckCircle className="w-3.5 h-3.5 text-purple-400 mt-0.5 shrink-0" />{f}
+                      <CheckCircle className="w-3.5 h-3.5 text-teal-400 mt-0.5 shrink-0" />{f}
                     </li>
                   ))}
                 </ul>
@@ -734,7 +734,7 @@ function PlansSection() {
           </div>
           <DialogFooter>
             <Button variant="outline" className="border-zinc-700" onClick={() => { setEditPlan(null); setShowCreate(false); }}>Cancel</Button>
-            <Button className="bg-purple-600 hover:bg-purple-500" onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending}>
+            <Button className="bg-teal-600 hover:bg-teal-500" onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending}>
               {(createMutation.isPending || updateMutation.isPending) ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
             </Button>
           </DialogFooter>
@@ -792,10 +792,10 @@ function ProvidersSection() {
   return (
     <div>
       <SectionHeader title="AI Provider Management" description="Configure and monitor AI API providers"
-        action={<Button size="sm" className="bg-purple-600 hover:bg-purple-500" onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-1" /> Add Provider</Button>} />
+        action={<Button size="sm" className="bg-teal-600 hover:bg-teal-500" onClick={() => setShowCreate(true)}><Plus className="w-4 h-4 mr-1" /> Add Provider</Button>} />
 
       {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-500" /></div>
+        <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>
       ) : (
         <div className="space-y-4">
           {providers?.length === 0 && (
@@ -803,7 +803,7 @@ function ProvidersSection() {
               <CardContent className="flex flex-col items-center justify-center py-16 text-zinc-500 space-y-3">
                 <Cpu className="w-10 h-10 opacity-30" />
                 <p>No AI providers configured</p>
-                <Button size="sm" className="bg-purple-600 hover:bg-purple-500" onClick={() => setShowCreate(true)}>Add your first provider</Button>
+                <Button size="sm" className="bg-teal-600 hover:bg-teal-500" onClick={() => setShowCreate(true)}>Add your first provider</Button>
               </CardContent>
             </Card>
           )}
@@ -813,7 +813,7 @@ function ProvidersSection() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
                     <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center">
-                      <Cpu className="w-5 h-5 text-purple-400" />
+                      <Cpu className="w-5 h-5 text-teal-400" />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
@@ -875,7 +875,7 @@ function ProvidersSection() {
           </div>
           <DialogFooter>
             <Button variant="outline" className="border-zinc-700" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button className="bg-purple-600 hover:bg-purple-500" onClick={handleCreate} disabled={createMutation.isPending}>
+            <Button className="bg-teal-600 hover:bg-teal-500" onClick={handleCreate} disabled={createMutation.isPending}>
               {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Add Provider"}
             </Button>
           </DialogFooter>
@@ -896,7 +896,7 @@ function ProvidersSection() {
           </div>
           <DialogFooter>
             <Button variant="outline" className="border-zinc-700" onClick={() => setShowKeyDialog(null)}>Cancel</Button>
-            <Button className="bg-purple-600 hover:bg-purple-500" onClick={handleRotateKey} disabled={!newKey.trim() || updateMutation.isPending}>
+            <Button className="bg-teal-600 hover:bg-teal-500" onClick={handleRotateKey} disabled={!newKey.trim() || updateMutation.isPending}>
               {updateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Rotate Key"}
             </Button>
           </DialogFooter>
@@ -932,7 +932,7 @@ export default function Admin() {
       <aside className="w-60 shrink-0 border-r border-zinc-800 bg-zinc-950 flex flex-col">
         <div className="p-5 border-b border-zinc-800">
           <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-purple-400" />
+            <Shield className="w-5 h-5 text-teal-400" />
             <span className="font-semibold text-sm">Admin Console</span>
           </div>
           <p className="text-xs text-zinc-500 mt-1 truncate">{user?.email}</p>
@@ -945,7 +945,7 @@ export default function Admin() {
               onClick={() => setSection(item.id)}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
                 section === item.id
-                  ? "bg-purple-600/20 text-purple-300 font-medium"
+                  ? "bg-teal-600/20 text-teal-300 font-medium"
                   : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
               }`}
             >

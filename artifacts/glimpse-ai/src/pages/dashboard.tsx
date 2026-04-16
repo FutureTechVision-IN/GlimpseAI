@@ -32,7 +32,7 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-3">
             <Link href="/editor">
-              <Button className="bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-500/20">
+              <Button className="bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20">
                 <Wand2 className="w-4 h-4 mr-2" />
                 New Enhancement
               </Button>
@@ -45,7 +45,7 @@ export default function Dashboard() {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-zinc-400 flex items-center justify-between">
                 Credits Used
-                <Zap className="w-4 h-4 text-purple-500" />
+                <Zap className="w-4 h-4 text-teal-500" />
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -98,7 +98,7 @@ export default function Dashboard() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold">Recent Jobs</h2>
-            <Link href="/history" className="text-sm text-purple-400 hover:text-purple-300 flex items-center">
+            <Link href="/history" className="text-sm text-teal-400 hover:text-teal-300 flex items-center">
               View all <ArrowRight className="w-4 h-4 ml-1" />
             </Link>
           </div>
@@ -122,7 +122,7 @@ export default function Dashboard() {
                   <Wand2 className="w-8 h-8 mx-auto mb-3 opacity-20" />
                   <p>No recent enhancements.</p>
                   <Link href="/editor">
-                    <Button variant="link" className="text-purple-400 mt-2">Start your first edit</Button>
+                    <Button variant="link" className="text-teal-400 mt-2">Start your first edit</Button>
                   </Link>
                 </div>
               ) : (
