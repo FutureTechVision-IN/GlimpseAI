@@ -36,6 +36,16 @@ function Router() {
           <Editor />
         </ProtectedRoute>
       </Route>
+      <Route path="/photo-studio">
+        <ProtectedRoute>
+          <Editor />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/video-studio">
+        <ProtectedRoute>
+          <Editor />
+        </ProtectedRoute>
+      </Route>
       <Route path="/history">
         <ProtectedRoute>
           <History />

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import Layout from "../components/layout";
 import {
@@ -438,6 +439,10 @@ function OnboardingWalkthrough({ onComplete }: { onComplete: () => void }) {
 // ---------------------------------------------------------------------------
 
 export default function Editor() {
+  // Route-based studio mode
+  const [location] = useLocation();
+  const studioMode: "photo" | "video" = location.includes("video-studio") ? "video" : "photo";
+
   // Onboarding
   const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem(ONBOARDING_KEY));
   const completeOnboarding = () => { localStorage.setItem(ONBOARDING_KEY, "1"); setShowOnboarding(false); };
@@ -782,7 +787,8 @@ export default function Editor() {
 
     if (editorMode === "advanced" && mediaType === "photo" && (hasT || hasF || hasC)) {
       try {
-        finalBase64 = await applyTransformsToBase64(file, transform, cropEnabled ? cropBox : DEFAULT_CROP, filters, activePresetCssExtra);
+        const cssExtra = selectedFilter ? FILTER_PRESETS.find(p => p.key === selectedFilter)?.cssExtra : undefined;
+        finalBase64 = await applyTransformsToBase64(file, transform, cropEnabled ? cropBox : DEFAULT_CROP, filters, cssExtra);
       } catch {
         toast({ title: "Transform error", description: "Could not apply edits. Uploading original.", variant: "destructive" });
       }
@@ -910,12 +916,12 @@ export default function Editor() {
         <div className="flex flex-col lg:flex-row h-full min-h-[calc(100vh-4rem)]">
 
           {/* Sidebar */}
-          <aside className="w-full lg:w-72 xl:w-80 border-r border-white/10 bg-zinc-950 flex flex-col">
+          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-10">
             <div className="p-3 border-b border-white/10">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="font-semibold text-base flex items-center gap-2">
                   <Settings2 className="w-4 h-4 text-teal-500" />
-                  Editor
+                  {studioMode === "video" ? "Video Studio" : "Photo Studio"}
                 </h2>
                 <button onClick={() => setShowOnboarding(true)} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors" title="Show walkthrough">?</button>
               </div>
@@ -1559,7 +1565,7 @@ export default function Editor() {
                 <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full">
                   <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-all cursor-pointer relative overflow-hidden group">
                     <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                      accept="image/*,video/*" onChange={handleFileChange} />
+                      accept={studioMode === "video" ? "video/*" : "image/*"} onChange={handleFileChange} />
                     <CardContent className="flex flex-col items-center justify-center py-16 text-center">
                       <motion.div
                         animate={{ y: [0, -6, 0] }}
@@ -1644,7 +1650,7 @@ export default function Editor() {
                   </div>
 
                   {/* Image preview */}
-                  <div className="relative max-w-full rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
+                  <div className="relative max-w-[calc(100%-2rem)] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
                     <AnimatePresence>
                       {isProcessing && (
                         <motion.div
@@ -1699,15 +1705,15 @@ export default function Editor() {
                     {isCompleted && currentJob?.processedUrl && !showCompare ? (
                       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                         {mediaType === "video"
-                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[68vh] object-contain" />
-                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[68vh] object-contain" />
+                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[55vh] object-contain" />
+                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[55vh] object-contain" />
                         }
                       </motion.div>
                     ) : (
                       mediaType === "video"
-                        ? <video src={previewUrl} controls className="max-w-full max-h-[68vh] object-contain" />
+                        ? <video src={previewUrl} controls className="max-w-full max-h-[55vh] object-contain" />
                         : <img src={previewUrl} alt="Original"
-                            className="max-w-full max-h-[68vh] object-contain transition-all duration-200"
+                            className="max-w-full max-h-[55vh] object-contain transition-all duration-200"
                             style={isProcessing ? { opacity: 0.5 } : previewStyle} />
                     )}
                   </div>

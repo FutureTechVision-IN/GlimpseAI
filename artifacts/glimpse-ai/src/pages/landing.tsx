@@ -74,7 +74,7 @@ const testimonials = [
   },
   {
     quote: "From raw footage to polished content in under a minute. GlimpseAI is the tool I can't live without.",
-    name: "Priya Sharma",
+    name: "Jessica Morgan",
     role: "YouTube Creator",
   },
 ];

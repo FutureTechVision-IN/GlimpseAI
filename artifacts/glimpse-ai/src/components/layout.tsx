@@ -2,7 +2,7 @@ import React from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "../lib/auth-context";
 import { Button } from "@/components/ui/button";
-import { Sparkles, LogOut, LayoutDashboard, Wand2, Clock, Settings, CreditCard, Shield } from "lucide-react";
+import { Sparkles, LogOut, LayoutDashboard, Wand2, Clock, Settings, CreditCard, Shield, ImageIcon, Video } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function NavLink({ href, icon: Icon, label, exact = false }: {
@@ -46,7 +46,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <div className="px-3 py-2 flex-1 overflow-y-auto">
           <div className="space-y-0.5">
             <NavLink href="/dashboard" icon={LayoutDashboard} label="Dashboard" exact />
-            <NavLink href="/editor"    icon={Wand2}           label="Editor" />
+            <NavLink href="/photo-studio" icon={ImageIcon}    label="Photo Studio" />
+            <NavLink href="/video-studio" icon={Video}        label="Video Studio" />
             <NavLink href="/history"   icon={Clock}           label="History" />
           </div>
 
