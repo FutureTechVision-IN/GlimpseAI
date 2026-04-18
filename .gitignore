@@ -28,3 +28,4 @@ Thumbs.db
 
 # Key validation logs (may contain secrets)
 .key-validation-logs/
+backup.sql
