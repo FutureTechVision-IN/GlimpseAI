@@ -366,31 +366,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/MediaStats"
 
-  /media/analyze:
-    post:
-      operationId: analyzeMedia
-      tags: [media]
-      summary: AI-powered image analysis and enhancement suggestions
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AnalyzeMediaBody"
-      responses:
-        "200":
-          description: AI analysis result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AnalysisResult"
-        "400":
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
   # Plans
   /plans:
     get:
@@ -1070,45 +1045,6 @@ components:
         - avgProcessingTimeMs
         - topEnhancementTypes
         - recentActivity
-
-    AnalyzeMediaBody:
-      type: object
-      properties:
-        base64Data:
-          type: string
-          description: Raw base64 encoded image data
-        mimeType:
-          type: string
-          description: MIME type of the image
-      required:
-        - base64Data
-
-    AnalysisResult:
-      type: object
-      properties:
-        description:
-          type: string
-        suggestedEnhancement:
-          type: string
-        suggestedFilter:
-          type: ["string", "null"]
-        detectedSubjects:
-          type: array
-          items:
-            type: string
-        issues:
-          type: array
-          items:
-            type: string
-        suggestedSettings:
-          type: object
-          additionalProperties: true
-        confidence:
-          type: number
-      required:
-        - description
-        - suggestedEnhancement
-        - confidence
 
     Plan:
       type: object
