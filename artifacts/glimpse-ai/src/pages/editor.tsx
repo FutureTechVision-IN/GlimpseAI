@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import Layout from "../components/layout";
 import {
   useUploadMedia,
   useEnhanceMedia,
+  useAnalyzeMedia,
   useListPresets,
   useGetMediaJob,
   UploadMediaBodyMediaType,
@@ -18,6 +20,12 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   UploadCloud,
@@ -47,6 +55,15 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Thermometer,
+  Droplets,
+  Mountain,
+  Focus,
+  Layers,
+  Paintbrush,
+  Contrast,
+  CircleDot,
+  ScanEye,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -61,6 +78,10 @@ interface FilterState {
   contrast: number;
   saturation: number;
   sharpness: number;
+  warmth: number;
+  highlights: number;
+  shadows: number;
+  hue: number;
 }
 
 interface TransformState {
@@ -76,43 +97,73 @@ interface CropBox {
   y2: number;
 }
 
+interface AISuggestion {
+  description: string;
+  suggestedEnhancement: string;
+  suggestedFilter?: string | null;
+  detectedSubjects: string[];
+  confidence: number;
+}
+
 // ---------------------------------------------------------------------------
 // Defaults & constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_FILTERS: FilterState = { brightness: 100, contrast: 100, saturation: 100, sharpness: 100 };
+const DEFAULT_FILTERS: FilterState = {
+  brightness: 100, contrast: 100, saturation: 100, sharpness: 100,
+  warmth: 0, highlights: 0, shadows: 0, hue: 0,
+};
 const DEFAULT_TRANSFORM: TransformState = { rotation: 0, flipH: false, flipV: false };
 const DEFAULT_CROP: CropBox = { x: 0, y: 0, x2: 100, y2: 100 };
 const MAX_FILE_MB = 100;
 const ONBOARDING_KEY = "glimpse_onboarding_done";
 
-// -- Filter Gallery (15 presets) --
-const FILTER_PRESETS = [
-  { name: "Original",    key: "original",   f: DEFAULT_FILTERS,                                                      serverFilter: null as string | null },
-  { name: "Vivid",       key: "vivid",      f: { brightness: 108, contrast: 120, saturation: 140, sharpness: 110 }, serverFilter: "vivid" as string | null },
-  { name: "Portrait",    key: "portrait",   f: { brightness: 105, contrast: 95,  saturation: 88,  sharpness: 105 }, serverFilter: "portrait" as string | null },
-  { name: "B&W",         key: "bw",         f: { brightness: 100, contrast: 115, saturation: 0,   sharpness: 100 }, serverFilter: "bw" as string | null },
-  { name: "Film",        key: "film",       f: { brightness: 95,  contrast: 90,  saturation: 78,  sharpness: 92  }, serverFilter: "film" as string | null },
-  { name: "HDR",         key: "hdr",        f: { brightness: 100, contrast: 145, saturation: 118, sharpness: 118 }, serverFilter: "hdr" as string | null },
-  { name: "Vintage",     key: "vintage",    f: { brightness: 95,  contrast: 90,  saturation: 70,  sharpness: 90  }, serverFilter: "vintage" as string | null },
-  { name: "Cinematic",   key: "cinematic",  f: { brightness: 96,  contrast: 105, saturation: 85,  sharpness: 100 }, serverFilter: "cinematic" as string | null },
-  { name: "Vibrant",     key: "vibrant",    f: { brightness: 105, contrast: 110, saturation: 145, sharpness: 108 }, serverFilter: "vibrant" as string | null },
-  { name: "Film Noir",   key: "filmnoir",   f: { brightness: 90,  contrast: 130, saturation: 0,   sharpness: 112 }, serverFilter: "filmnoir" as string | null },
-  { name: "Golden Hour", key: "goldenhour", f: { brightness: 106, contrast: 100, saturation: 110, sharpness: 100 }, serverFilter: "goldenhour" as string | null },
-  { name: "Moody",       key: "moody",      f: { brightness: 92,  contrast: 105, saturation: 75,  sharpness: 100 }, serverFilter: "moody" as string | null },
-  { name: "Fresh",       key: "fresh",      f: { brightness: 108, contrast: 100, saturation: 115, sharpness: 100 }, serverFilter: "fresh" as string | null },
-  { name: "Retro",       key: "retro",      f: { brightness: 98,  contrast: 95,  saturation: 65,  sharpness: 90  }, serverFilter: "retro" as string | null },
-  { name: "Dramatic",    key: "dramatic",   f: { brightness: 95,  contrast: 140, saturation: 110, sharpness: 120 }, serverFilter: "dramatic" as string | null },
+// -- Filter Gallery (29 presets including premium) --
+const FILTER_PRESETS: { name: string; key: string; f: FilterState; serverFilter: string | null; gradient: string; premium?: boolean }[] = [
+  { name: "Original",    key: "original",      f: DEFAULT_FILTERS,                                                                                      serverFilter: null, gradient: "from-zinc-700 to-zinc-800" },
+  { name: "Vivid",       key: "vivid",         f: { ...DEFAULT_FILTERS, brightness: 108, contrast: 120, saturation: 140, sharpness: 110 },              serverFilter: "vivid", gradient: "from-red-500 to-amber-500" },
+  { name: "Portrait",    key: "portrait",      f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 95, saturation: 88, sharpness: 105 },                serverFilter: "portrait", gradient: "from-rose-400 to-pink-500" },
+  { name: "B&W",         key: "bw",            f: { ...DEFAULT_FILTERS, contrast: 115, saturation: 0 },                                                 serverFilter: "bw", gradient: "from-zinc-300 to-zinc-600" },
+  { name: "Film",        key: "film",          f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 90, saturation: 78, sharpness: 92 },                  serverFilter: "film", gradient: "from-amber-600 to-yellow-800" },
+  { name: "HDR",         key: "hdr",           f: { ...DEFAULT_FILTERS, contrast: 145, saturation: 118, sharpness: 118 },                               serverFilter: "hdr", gradient: "from-cyan-500 to-blue-600" },
+  { name: "Vintage",     key: "vintage",       f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 90, saturation: 70, sharpness: 90 },                  serverFilter: "vintage", gradient: "from-amber-400 to-orange-700" },
+  { name: "Cinematic",   key: "cinematic",     f: { ...DEFAULT_FILTERS, brightness: 96, contrast: 105, saturation: 85 },                                serverFilter: "cinematic", gradient: "from-teal-600 to-cyan-800" },
+  { name: "Vibrant",     key: "vibrant",       f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 110, saturation: 145, sharpness: 108 },              serverFilter: "vibrant", gradient: "from-fuchsia-500 to-pink-600" },
+  { name: "Film Noir",   key: "filmnoir",      f: { ...DEFAULT_FILTERS, brightness: 90, contrast: 130, saturation: 0, sharpness: 112 },                 serverFilter: "filmnoir", gradient: "from-zinc-900 to-zinc-700" },
+  { name: "Golden Hour", key: "goldenhour",    f: { ...DEFAULT_FILTERS, brightness: 106, saturation: 110 },                                             serverFilter: "goldenhour", gradient: "from-yellow-400 to-orange-500" },
+  { name: "Moody",       key: "moody",         f: { ...DEFAULT_FILTERS, brightness: 92, contrast: 105, saturation: 75 },                                serverFilter: "moody", gradient: "from-indigo-800 to-purple-900" },
+  { name: "Fresh",       key: "fresh",         f: { ...DEFAULT_FILTERS, brightness: 108, saturation: 115 },                                             serverFilter: "fresh", gradient: "from-green-400 to-emerald-500" },
+  { name: "Retro",       key: "retro",         f: { ...DEFAULT_FILTERS, brightness: 98, contrast: 95, saturation: 65, sharpness: 90 },                  serverFilter: "retro", gradient: "from-orange-600 to-red-800" },
+  { name: "Dramatic",    key: "dramatic",      f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 140, saturation: 110, sharpness: 120 },               serverFilter: "dramatic", gradient: "from-red-700 to-zinc-900" },
+  { name: "Warm Tone",   key: "warm_tone",     f: { ...DEFAULT_FILTERS, brightness: 105, saturation: 110, warmth: 20 },                                 serverFilter: "warm_tone", gradient: "from-orange-400 to-red-500" },
+  { name: "Cool Tone",   key: "cool_tone",     f: { ...DEFAULT_FILTERS, brightness: 102, saturation: 95, warmth: -20 },                                 serverFilter: "cool_tone", gradient: "from-sky-400 to-blue-600" },
+  { name: "Sunset",      key: "sunset",        f: { ...DEFAULT_FILTERS, brightness: 105, saturation: 120, warmth: 25 },                                 serverFilter: "sunset", gradient: "from-orange-500 to-pink-600" },
+  { name: "Matte",       key: "matte",         f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 85, saturation: 80 },                                serverFilter: "matte", gradient: "from-stone-400 to-stone-600" },
+  { name: "Neon",        key: "neon",          f: { ...DEFAULT_FILTERS, contrast: 130, saturation: 160, sharpness: 115 },                               serverFilter: "neon", gradient: "from-violet-500 to-fuchsia-600" },
+  // Premium filters
+  { name: "Airy",        key: "airy",          f: { ...DEFAULT_FILTERS, brightness: 112, contrast: 90, saturation: 85 },                                serverFilter: "airy", gradient: "from-sky-200 to-blue-300", premium: true },
+  { name: "Teal & Orange", key: "teal_orange", f: { ...DEFAULT_FILTERS, contrast: 115, saturation: 110 },                                              serverFilter: "teal_orange", gradient: "from-teal-500 to-orange-500", premium: true },
+  { name: "Pastel",      key: "pastel",        f: { ...DEFAULT_FILTERS, brightness: 110, contrast: 85, saturation: 70 },                                serverFilter: "pastel", gradient: "from-pink-300 to-violet-300", premium: true },
+  { name: "Noir Color",  key: "noir_color",    f: { ...DEFAULT_FILTERS, brightness: 92, contrast: 125, saturation: 60 },                                serverFilter: "noir_color", gradient: "from-zinc-800 to-amber-900", premium: true },
+  { name: "Cross Process", key: "cross_process", f: { ...DEFAULT_FILTERS, contrast: 120, saturation: 130 },                                            serverFilter: "cross_process", gradient: "from-green-500 to-purple-600", premium: true },
+  { name: "Cyberpunk",   key: "cyberpunk",     f: { ...DEFAULT_FILTERS, contrast: 130, saturation: 140 },                                               serverFilter: "cyberpunk", gradient: "from-cyan-400 to-fuchsia-600", premium: true },
+  { name: "Arctic",      key: "arctic",        f: { ...DEFAULT_FILTERS, brightness: 108, contrast: 95, saturation: 75, warmth: -30 },                   serverFilter: "arctic", gradient: "from-cyan-200 to-blue-400", premium: true },
+  { name: "Ember",       key: "ember",         f: { ...DEFAULT_FILTERS, brightness: 98, contrast: 115, saturation: 110, warmth: 30 },                   serverFilter: "ember", gradient: "from-orange-600 to-red-700", premium: true },
+  { name: "Chrome",      key: "chrome",        f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 120, saturation: 20, sharpness: 115 },               serverFilter: "chrome", gradient: "from-zinc-300 to-zinc-500", premium: true },
 ];
 
-// -- Simple-mode one-click presets --
+// -- Simple-mode one-click presets (expanded) --
 const SIMPLE_PRESETS: { type: EnhanceMediaBodyEnhancementType; label: string; desc: string; icon: React.ReactNode; filterName?: string }[] = [
-  { type: "auto",     label: "Auto Enhance",   desc: "AI-powered one-click fix",       icon: <Wand2   className="w-5 h-5" /> },
-  { type: "portrait", label: "Portrait Polish", desc: "Smooth skin & warm tones",       icon: <Eye     className="w-5 h-5" /> },
-  { type: "color",    label: "Vivid Color",     desc: "Boost saturation & vibrancy",    icon: <Palette className="w-5 h-5" /> },
-  { type: "filter",   label: "Cinematic",       desc: "Film-grade color grading",       icon: <Film    className="w-5 h-5" />, filterName: "cinematic" },
-  { type: "lighting", label: "Fix Lighting",    desc: "Correct dark/bright areas",      icon: <Sun     className="w-5 h-5" /> },
-  { type: "upscale",  label: "2x Upscale",      desc: "Double resolution with AI",      icon: <ZoomIn  className="w-5 h-5" /> },
+  { type: "auto",                   label: "Auto Enhance",     desc: "AI-powered one-click fix",            icon: <Wand2        className="w-5 h-5" /> },
+  { type: "portrait",               label: "Portrait Polish",  desc: "Smooth skin & warm tones",            icon: <Eye          className="w-5 h-5" /> },
+  { type: "lighting_enhance",       label: "Fix Lighting",     desc: "Mood-aware shadow & highlight fix",   icon: <Sun          className="w-5 h-5" /> },
+  { type: "color_grade_cinematic",  label: "Cinematic Grade",  desc: "Film-grade color grading",            icon: <Film         className="w-5 h-5" /> },
+  { type: "color_grade_warm",       label: "Warm Tones",       desc: "Golden, warm color palette",          icon: <Thermometer  className="w-5 h-5" /> },
+  { type: "color_grade_cool",       label: "Cool Tones",       desc: "Crisp, blue-shift palette",           icon: <Droplets     className="w-5 h-5" /> },
+  { type: "blur_background",        label: "Background Blur",  desc: "Intelligent portrait bokeh",          icon: <Focus        className="w-5 h-5" /> },
+  { type: "skin_retouch",           label: "Skin Retouch",     desc: "Smooth skin with natural detail",     icon: <Paintbrush   className="w-5 h-5" /> },
+  { type: "upscale",                label: "2x Upscale",       desc: "Double resolution with AI",           icon: <ZoomIn       className="w-5 h-5" /> },
+  { type: "upscale_4x",             label: "4x Upscale",       desc: "Quadruple resolution (pro)",          icon: <Layers       className="w-5 h-5" /> },
 ];
 
 const STAGE_INFO: Record<ProcessStage, { label: string; colorClass: string }> = {
@@ -129,11 +180,15 @@ const STAGE_INFO: Record<ProcessStage, { label: string; colorClass: string }> = 
 
 function buildCssFilter(f: FilterState): string {
   const blurPx = f.sharpness < 100 ? ((100 - f.sharpness) / 100) * 3 : 0;
+  const hueRot = f.hue ?? 0;
+  const warmthShift = f.warmth ?? 0;
   return [
     `brightness(${f.brightness}%)`,
     `contrast(${f.contrast}%)`,
     `saturate(${f.saturation}%)`,
     blurPx > 0 ? `blur(${blurPx.toFixed(2)}px)` : "",
+    hueRot !== 0 ? `hue-rotate(${hueRot}deg)` : "",
+    warmthShift > 0 ? `sepia(${Math.min(warmthShift * 2, 50)}%)` : "",
   ].filter(Boolean).join(" ");
 }
 
