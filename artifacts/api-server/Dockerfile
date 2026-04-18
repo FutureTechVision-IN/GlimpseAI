@@ -17,6 +17,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
+RUN pnpm --filter @workspace/api-server run build
+
 EXPOSE 3001
 
-CMD ["sh", "-lc", "pnpm --filter @workspace/db run push && pnpm --filter @workspace/api-server run dev"]
+CMD ["sh", "-lc", "pnpm --filter @workspace/db run push && pnpm --filter @workspace/api-server run start"]
