@@ -1,0 +1,8 @@
+# Never allow secrets on gh-pages
+.env
+.env.*
+*.env
+node_modules/
+artifacts/
+lib/
+scripts/
