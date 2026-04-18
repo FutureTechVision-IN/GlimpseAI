@@ -14,6 +14,7 @@ export interface KeyEntry {
   tier: "free" | "premium";
   status: "active" | "inactive" | "degraded" | "validating";
   priority: number;
+  group: "primary" | "standard" | "germany" | "gemini";
   totalCalls: number;
   totalErrors: number;
   consecutiveErrors: number;
@@ -218,12 +219,29 @@ class ProviderKeyManager {
       Array.from(this.keys.values()).map((k) => k.key.slice(-8))
     );
 
+    // FIX: Tokenize each entry by whitespace so space-separated pastes work.
+    // Also filter out non-key tokens (model names, labels, blank lines).
+    const tokens: string[] = [];
     for (const raw of keys) {
-      const key = raw.trim();
-      if (!key || existingHashes.has(key.slice(-8))) continue;
-      await this.upsertKey(key, provider, model, tier);
+      // Split each element by whitespace and collect valid-looking keys
+      for (const token of raw.split(/\s+/)) {
+        const t = token.trim();
+        if (isValidKeyFormat(t)) tokens.push(t);
+      }
+    }
+
+    const group: "primary" | "standard" | "germany" = MODEL_GROUP[model] === "primary"
+      ? "primary"
+      : "standard";
+
+    for (const key of tokens) {
+      if (existingHashes.has(key.slice(-8))) continue;
+      await this.upsertKey(key, provider, model, tier, group);
+      existingHashes.add(key.slice(-8)); // prevent in-batch duplicates
       added++;
     }
+
+    logger.info({ model, provider, tier, requested: keys.length, tokensFound: tokens.length, added }, "Bulk key import complete");
     return added;
   }
 
@@ -344,24 +362,33 @@ class ProviderKeyManager {
   }
 
   /**
-   * Tier-based key selection:
-   * - Free → OpenRouter keys first
-   * - Premium → Gemini first, then OpenRouter fallback
+   * Tier-based key selection with 4-level priority cascade:
+   *   1. Primary OpenRouter (Seedance, WAN, Kimi, Elephant)   — all tiers
+   *   2. Standard OpenRouter (Stepfun, NVIDIA, GLM)            — all tiers
+   *   3. Germany OpenRouter keys (dedicated fallback)          — all tiers
+   *   4. Gemini                                                — premium only
+   *
+   * Within each level: active > degraded, then pick lowest latency.
    */
   pickKeyForTier(userTier: "free" | "premium"): KeyEntry | null {
-    const allEntries = Array.from(this.keys.values()).filter((k) => k.status === "active");
+    const all = Array.from(this.keys.values());
 
-    if (userTier === "premium") {
-      const gemini = allEntries.filter((k) => k.provider === "gemini");
-      if (gemini.length > 0) return this.pickBest(gemini);
-      const openrouter = allEntries.filter((k) => k.provider === "openrouter");
-      return this.pickBest(openrouter);
-    }
+    const tryGroup = (group: "primary" | "standard" | "germany" | "gemini"): KeyEntry | null => {
+      const active = all.filter((k) => k.group === group && k.status === "active");
+      if (active.length > 0) return this.pickBest(active);
+      // Degrade-fallback: if all keys in this group are degraded, try them anyway
+      const degraded = all.filter((k) => k.group === group && k.status === "degraded");
+      if (degraded.length > 0) return this.pickBest(degraded);
+      return null;
+    };
 
-    const openrouter = allEntries.filter((k) => k.provider === "openrouter");
-    if (openrouter.length > 0) return this.pickBest(openrouter);
-    const gemini = allEntries.filter((k) => k.provider === "gemini");
-    return this.pickBest(gemini);
+    return (
+      tryGroup("primary") ??
+      tryGroup("standard") ??
+      tryGroup("germany") ??
+      // Gemini is reserved: premium users only, last resort
+      (userTier === "premium" ? tryGroup("gemini") : null)
+    );
   }
 
   pickKey(model: string): KeyEntry | null {
