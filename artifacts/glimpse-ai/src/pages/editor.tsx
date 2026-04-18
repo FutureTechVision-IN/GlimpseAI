@@ -447,14 +447,14 @@ export default function Editor() {
   const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem(ONBOARDING_KEY));
   const completeOnboarding = () => { localStorage.setItem(ONBOARDING_KEY, "1"); setShowOnboarding(false); };
 
-  // Mode toggle
-  const [editorMode, setEditorMode] = useState<EditorMode>("simple");
+  // Mode toggle — video studio defaults to advanced
+  const [editorMode, setEditorMode] = useState<EditorMode>(studioMode === "video" ? "advanced" : "simple");
 
-  // Media state
+  // Media state — default mediaType matches studio route
   const [file, setFile] = useState<File | null>(null);
   const [base64Data, setBase64Data] = useState<string>("");
   const [previewUrl, setPreviewUrl] = useState<string>("");
-  const [mediaType, setMediaType] = useState<UploadMediaBodyMediaType>("photo");
+  const [mediaType, setMediaType] = useState<UploadMediaBodyMediaType>(studioMode === "video" ? "video" : "photo");
   const [enhancementType, setEnhancementType] = useState<EnhanceMediaBodyEnhancementType>("auto");
   const [selectedFilter, setSelectedFilter] = useState<string | null>(null);
   const [presetId, setPresetId] = useState<number | undefined>(undefined);
@@ -925,7 +925,8 @@ export default function Editor() {
                 </h2>
                 <button onClick={() => setShowOnboarding(true)} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors" title="Show walkthrough">?</button>
               </div>
-              {/* Mode toggle */}
+              {/* Mode toggle — hidden in Video Studio (always advanced) */}
+              {studioMode !== "video" && (
               <div className="flex bg-zinc-900 rounded-lg p-0.5">
                 <button className={cn("flex-1 text-xs font-medium py-1.5 px-3 rounded-md transition-all", editorMode === "simple" ? "bg-teal-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-300")} onClick={() => setEditorMode("simple")}>
                   <Zap className="w-3 h-3 inline mr-1" />Simple
@@ -934,6 +935,7 @@ export default function Editor() {
                   <SlidersHorizontal className="w-3 h-3 inline mr-1" />Advanced
                 </button>
               </div>
+              )}
             </div>
 
             <ScrollArea className="flex-1">
@@ -1574,12 +1576,12 @@ export default function Editor() {
                       >
                         <UploadCloud className="w-10 h-10 text-teal-400" />
                       </motion.div>
-                      <h3 className="text-xl font-bold mb-2">Upload Media</h3>
+                      <h3 className="text-xl font-bold mb-2">{studioMode === "video" ? "Upload Video" : "Upload Photo"}</h3>
                       <p className="text-zinc-500 text-sm mb-1">Drag &amp; drop or click to browse</p>
-                      <p className="text-zinc-600 text-xs mb-6">AI will analyze and suggest the best enhancement</p>
+                      <p className="text-zinc-600 text-xs mb-6">{studioMode === "video" ? "AI will stabilize, color grade, and enhance your video" : "AI will analyze and suggest the best enhancement"}</p>
                       <div className="flex items-center gap-6 text-xs text-zinc-600">
-                        <span className="flex items-center gap-1.5"><ImageIcon className="w-3.5 h-3.5" /> Photos up to {MAX_FILE_MB} MB</span>
-                        <span className="flex items-center gap-1.5"><Video className="w-3.5 h-3.5" /> Videos up to {MAX_FILE_MB} MB</span>
+                        {studioMode === "photo" && <span className="flex items-center gap-1.5"><ImageIcon className="w-3.5 h-3.5" /> Photos up to {MAX_FILE_MB} MB</span>}
+                        {studioMode === "video" && <span className="flex items-center gap-1.5"><Video className="w-3.5 h-3.5" /> Videos up to {MAX_FILE_MB} MB</span>}
                       </div>
                     </CardContent>
                   </Card>
