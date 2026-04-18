@@ -41,7 +41,7 @@ export default function Privacy() {
         <p>We use industry-standard encryption (HTTPS, bcrypt password hashing) to protect your data. However, no system is 100% secure.</p>
 
         <h2>7. Your Rights</h2>
-        <p>You have the right to access, correct, or delete your personal data. Contact us at <a href="mailto:support@glimpse.ai" className="text-teal-400">support@glimpse.ai</a> to exercise these rights.</p>
+        <p>You have the right to access, correct, or delete your personal data. Contact us at <a href="mailto:futuretechvision.global@gmail.com" className="text-teal-400">futuretechvision.global@gmail.com</a> to exercise these rights.</p>
 
         <h2>8. Cookies</h2>
         <p>We use a session token stored in localStorage for authentication. We do not use third-party tracking cookies.</p>

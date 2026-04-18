@@ -36,7 +36,7 @@ export default function Terms() {
         <p>We may update these Terms at any time. Continued use after changes constitutes acceptance.</p>
 
         <h2>10. Contact</h2>
-        <p>Questions about these Terms? Contact us at <a href="mailto:support@glimpse.ai" className="text-teal-400">support@glimpse.ai</a>.</p>
+        <p>Questions about these Terms? Contact us at <a href="mailto:futuretechvision.global@gmail.com" className="text-teal-400">futuretechvision.global@gmail.com</a>.</p>
       </div>
     </Layout>
   );
