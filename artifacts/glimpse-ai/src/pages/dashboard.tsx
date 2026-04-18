@@ -203,6 +203,85 @@ export default function Dashboard() {
           </motion.div>
         </div>
 
+        {/* Quota Overview + Upgrade Prompt */}
+        {!isLoadingUsage && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.3 }}
+            className="grid grid-cols-1 lg:grid-cols-3 gap-4"
+          >
+            {/* Daily Quota */}
+            <Card className="bg-gradient-to-br from-zinc-900/90 to-zinc-950 border-zinc-800/60">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Daily Quota</span>
+                  <span className="text-xs font-mono text-zinc-400">{dailyUsed}/{dailyLimit}</span>
+                </div>
+                <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${dailyPercent}%` }}
+                    transition={{ duration: 1, ease: "easeOut", delay: 0.4 }}
+                    className={`h-full rounded-full ${dailyPercent > 80 ? "bg-gradient-to-r from-amber-500 to-red-500" : "bg-gradient-to-r from-teal-500 to-cyan-400"}`}
+                  />
+                </div>
+                <p className="text-[11px] text-zinc-500 mt-2">
+                  {dailyLimit - dailyUsed} enhancements remaining today
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* Monthly Quota */}
+            <Card className="bg-gradient-to-br from-zinc-900/90 to-zinc-950 border-zinc-800/60">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Monthly Quota</span>
+                  <span className="text-xs font-mono text-zinc-400">{creditsUsed}/{creditsLimit}</span>
+                </div>
+                <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${creditsPercent}%` }}
+                    transition={{ duration: 1, ease: "easeOut", delay: 0.5 }}
+                    className={`h-full rounded-full ${creditsPercent > 80 ? "bg-gradient-to-r from-amber-500 to-red-500" : "bg-gradient-to-r from-blue-500 to-indigo-400"}`}
+                  />
+                </div>
+                <p className="text-[11px] text-zinc-500 mt-2">
+                  {usage?.planName ? `${usage.planName} plan` : "Free tier"} · {creditsLimit - creditsUsed} remaining
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* Upgrade Prompt (shown to free users or when quota is near limit) */}
+            {(isFreeUser || creditsPercent > 80) && (
+              <Card className="relative overflow-hidden bg-gradient-to-br from-teal-950/40 to-zinc-950 border-teal-500/20">
+                <div className="absolute inset-0 bg-gradient-to-br from-teal-500/5 to-transparent" />
+                <CardContent className="relative p-5 flex flex-col justify-between h-full">
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Crown className="w-4 h-4 text-amber-400" />
+                      <span className="text-xs font-semibold text-teal-300 uppercase tracking-wider">
+                        {isFreeUser ? "Upgrade Now" : "Running Low"}
+                      </span>
+                    </div>
+                    <p className="text-sm text-zinc-300 mb-3">
+                      {isFreeUser
+                        ? "Get 20 enhancements/day with 4× upscaling & more."
+                        : "Your quota is running low. Upgrade for more features."}
+                    </p>
+                  </div>
+                  <Link href="/pricing">
+                    <Button size="sm" className="w-full bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white text-xs">
+                      View Plans <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                    </Button>
+                  </Link>
+                </CardContent>
+              </Card>
+            )}
+          </motion.div>
+        )}
+
         {/* Recent Activity */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
