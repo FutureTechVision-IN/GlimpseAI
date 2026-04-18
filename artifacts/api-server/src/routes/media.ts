@@ -97,6 +97,21 @@ function jobToListResponse(j: typeof mediaJobsTable.$inferSelect) {
   };
 }
 
+// ── Daily quota helper ────────────────────────────────────────
+function resetDailyIfNeeded(user: { dailyCreditsUsed: number; dailyResetAt: Date | null }) {
+  const now = new Date();
+  if (!user.dailyResetAt || now >= user.dailyResetAt) {
+    return { dailyCreditsUsed: 0, dailyResetAt: getNextMidnightUTC() };
+  }
+  return null; // no reset needed
+}
+
+function getNextMidnightUTC(): Date {
+  const d = new Date();
+  d.setUTCHours(24, 0, 0, 0);
+  return d;
+}
+
 // ─── Upload ───────────────────────────────────────────────────
 router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const parsed = UploadMediaBody.safeParse(req.body);
@@ -111,8 +126,33 @@ router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise
     return;
   }
 
+  // Reset daily counter if past midnight
+  const dailyReset = resetDailyIfNeeded(user);
+  if (dailyReset) {
+    await db.update(usersTable).set(dailyReset).where(eq(usersTable.id, user.id));
+    user.dailyCreditsUsed = 0;
+  }
+
+  // Enforce monthly limit
   if (user.creditsUsed >= user.creditsLimit) {
-    res.status(403).json({ error: "Free quota exceeded. Please upgrade to continue." });
+    const isPaid = user.planId !== null;
+    res.status(403).json({
+      error: isPaid
+        ? "Monthly enhancement limit reached. Your quota resets on your next billing cycle."
+        : "Free trial limit reached (5 enhancements). Upgrade to continue creating.",
+      code: "QUOTA_EXCEEDED",
+      quotaType: "monthly",
+    });
+    return;
+  }
+
+  // Enforce daily limit (paid users: 20/day, free: no separate daily limit — they only get 5 total)
+  if (user.planId && user.dailyCreditsUsed >= user.dailyLimit) {
+    res.status(403).json({
+      error: "Daily enhancement limit reached (20/day). Come back tomorrow or upgrade your plan.",
+      code: "QUOTA_EXCEEDED",
+      quotaType: "daily",
+    });
     return;
   }
 
@@ -159,9 +199,12 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     .set({ status: "processing", enhancementType, presetId: presetId ?? null })
     .where(eq(mediaJobsTable.id, jobId));
 
-  // Debit credit
+  // Debit credit (monthly + daily)
   await db.update(usersTable)
-    .set({ creditsUsed: sql`${usersTable.creditsUsed} + 1` })
+    .set({
+      creditsUsed: sql`${usersTable.creditsUsed} + 1`,
+      dailyCreditsUsed: sql`${usersTable.dailyCreditsUsed} + 1`,
+    })
     .where(eq(usersTable.id, req.userId!));
 
   // Respond immediately with "processing" status
