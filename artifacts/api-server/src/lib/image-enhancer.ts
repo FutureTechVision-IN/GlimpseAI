@@ -201,27 +201,27 @@ export async function enhanceImage(
         pipeline = sharp(toneMapped);
 
         if (stats.isDark) {
-          // Dark image: shadow recovery + warmth + denoising
+          // Dark image: shadow recovery + warmth + color revival
           pipeline = pipeline
-            .gamma(1.3)
-            .modulate({ brightness: 1.15, saturation: 1.12 })
+            .gamma(1.2)
             .normalize()
+            .modulate({ brightness: 1.1, saturation: 1.35 })
             // Subtle warm shift to counteract blue shadow noise
-            .tint({ r: 140, g: 133, b: 125 })
+            .recomb([[1.06, 0.02, 0], [0.01, 1.0, 0.01], [0, 0.02, 0.93]])
             .sharpen({ sigma: 1.2, m1: 1.5, m2: 0.4 });
         } else if (stats.isBright) {
           // Overexposed: recover detail + add richness
           pipeline = pipeline
             .gamma(0.82)
-            .modulate({ brightness: 0.93, saturation: 1.15 })
             .normalize()
+            .modulate({ brightness: 0.93, saturation: 1.2 })
             .sharpen({ sigma: 1.0, m1: 1.2, m2: 0.4 });
         } else if (stats.isLowContrast) {
           // Flat/hazy: strong clarity + vibrance
           pipeline = pipeline
             .normalize()
             .linear(1.12, -10)
-            .modulate({ brightness: 1.03, saturation: 1.2 })
+            .modulate({ brightness: 1.03, saturation: 1.25 })
             .sharpen({ sigma: 1.8, m1: 2.0, m2: 0.6 })
             .gamma(1.06);
         } else {
@@ -236,10 +236,10 @@ export async function enhanceImage(
         // Step 2: Color temperature correction
         if (stats.colorTemp > 20) {
           // Too warm — add subtle cool correction
-          pipeline = pipeline.tint({ r: 125, g: 130, b: 138 });
+          pipeline = pipeline.recomb([[0.94, 0.02, 0], [0.01, 1.0, 0.01], [0, 0.02, 1.06]]);
         } else if (stats.colorTemp < -20) {
           // Too cool — add subtle warm correction
-          pipeline = pipeline.tint({ r: 138, g: 132, b: 125 });
+          pipeline = pipeline.recomb([[1.06, 0.02, 0], [0.01, 1.0, 0.01], [0, 0.02, 0.94]]);
         }
         break;
       }
@@ -270,7 +270,7 @@ export async function enhanceImage(
 
         // Warm skin tone undertone (subtle, not orange)
         pipeline = pipeline
-          .tint({ r: 245, g: 236, b: 228 })
+          .recomb([[1.04, 0.02, 0], [0.01, 1.0, 0.01], [0, 0.01, 0.95]])
           .gamma(1.06)
           .linear(0.96, 6)  // Lift shadows for flattering under-eye area
           .modulate({ brightness: 1.04, saturation: 0.96 });
@@ -439,7 +439,7 @@ export async function enhanceImage(
 
         pipeline = pipeline
           .modulate({ saturation: 0.78, brightness: 0.95 })
-          .tint({ r: 170, g: 190, b: 215 })  // Teal shadow push
+          .recomb([[0.88, 0.04, 0.02], [0.02, 1.0, 0.06], [0.02, 0.06, 1.12]])  // Teal shadow push
           .gamma(1.12)
           .linear(0.92, 12)  // Lifted blacks for film look
           .normalize();
@@ -457,7 +457,7 @@ export async function enhanceImage(
 
         pipeline = pipeline
           .modulate({ saturation: 1.12, brightness: 1.05 })
-          .tint({ r: 250, g: 225, b: 185 })  // Golden warmth
+          .recomb([[1.08, 0.04, 0], [0.02, 1.0, 0.01], [0, 0.01, 0.88]])  // Golden warmth
           .gamma(1.06)
           .linear(0.93, 10)  // Lifted shadows for soft feel
           .sharpen({ sigma: 0.5, m1: 0.5, m2: 0.2 });
@@ -474,7 +474,7 @@ export async function enhanceImage(
 
         pipeline = pipeline
           .modulate({ saturation: 0.88, brightness: 1.03 })
-          .tint({ r: 160, g: 192, b: 228 })  // Clean blue-teal shift
+          .recomb([[0.90, 0.02, 0.01], [0.01, 1.0, 0.04], [0.01, 0.04, 1.12]])  // Clean blue-teal shift
           .gamma(1.06)
           .normalize()
           .sharpen({ sigma: 0.6, m1: 0.6, m2: 0.25 });
@@ -497,7 +497,7 @@ export async function enhanceImage(
         const smoothLayer = await sharp(inputBuffer)
           .blur(smoothIntensity * 1.8)
           .modulate({ brightness: 1.02, saturation: 0.94 })
-          .tint({ r: 242, g: 234, b: 226 })  // Even, natural skin undertone
+          .recomb([[1.03, 0.02, 0], [0.01, 1.0, 0.01], [0, 0.01, 0.96]])  // Even, natural skin undertone
           .toBuffer();
 
         // Layer 2: Texture/Detail layer (high-frequency) — preserves pores and fine lines
