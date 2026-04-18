@@ -41,6 +41,12 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -58,7 +64,6 @@ type AdminSection =
   | "payments"
   | "plans"
   | "providers"
-  | "apikeys"
   | "analytics"
   | "aiinsights";
 
@@ -996,6 +1001,7 @@ function ApiKeysSection() {
   if (isLoading) return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>;
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="space-y-6">
       <SectionHeader title="API Key Management" description="View, add, and manage provider API keys with health monitoring"
         action={
@@ -1055,6 +1061,34 @@ function ApiKeysSection() {
         </div>
       )}
 
+      {/* Degraded keys diagnostic banner */}
+      {keys.filter((k: any) => k.status === "degraded").length > 0 && (
+        <Card className="bg-amber-500/5 border-amber-500/20">
+          <CardContent className="py-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-amber-300 mb-1">
+                  {keys.filter((k: any) => k.status === "degraded").length} key{keys.filter((k: any) => k.status === "degraded").length > 1 ? "s" : ""} degraded
+                </p>
+                <div className="space-y-1">
+                  {keys.filter((k: any) => k.status === "degraded").slice(0, 5).map((k: any) => (
+                    <p key={k.id} className="text-xs text-zinc-400">
+                      <span className="font-mono text-amber-400/70">{k.keyPrefix}</span>
+                      <span className="text-zinc-600 mx-1.5">→</span>
+                      <span>{k.lastError ?? "Unknown error"}</span>
+                    </p>
+                  ))}
+                </div>
+                <p className="text-[10px] text-zinc-600 mt-2">
+                  Degraded keys are rate-limited or have consecutive errors. Use "Validate All" to re-check or toggle them off.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Keys table */}
       <Card className="bg-zinc-900 border-zinc-800">
         <CardHeader>
@@ -1087,7 +1121,21 @@ function ApiKeysSection() {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs ${statusColor(k.status)}`}>{k.status}</Badge>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Badge variant="outline" className={`text-xs cursor-default ${statusColor(k.status)}`}>
+                            {k.status}
+                          </Badge>
+                        </span>
+                      </TooltipTrigger>
+                      {(k.status === "degraded" || k.status === "inactive") && k.lastError && (
+                        <TooltipContent side="top" className="max-w-xs text-xs bg-zinc-900 border-zinc-700">
+                          <p className="font-medium text-amber-400 mb-1">Reason:</p>
+                          <p className="text-zinc-400">{k.lastError}</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
                   </TableCell>
                   <TableCell className="text-sm">{k.totalCalls}</TableCell>
                   <TableCell className={`text-sm ${k.totalErrors > 0 ? "text-rose-400" : ""}`}>{k.totalErrors}</TableCell>
@@ -1152,6 +1200,32 @@ function ApiKeysSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+    </TooltipProvider>
+  );
+}
+
+// ─── UNIFIED PROVIDERS & KEYS ────────────────────────────────────────────────
+function UnifiedProvidersSection() {
+  const [tab, setTab] = useState<"providers" | "keys">("providers");
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="AI Providers & Key Management" description="Configure providers, manage API keys, and monitor health" />
+
+      <Tabs value={tab} onValueChange={v => setTab(v as typeof tab)}>
+        <TabsList className="bg-zinc-800 border-zinc-700">
+          <TabsTrigger value="providers">
+            <Cpu className="w-3.5 h-3.5 mr-1.5" />Providers
+          </TabsTrigger>
+          <TabsTrigger value="keys">
+            <Key className="w-3.5 h-3.5 mr-1.5" />API Keys & Health
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {tab === "providers" && <ProvidersSection />}
+      {tab === "keys" && <ApiKeysSection />}
     </div>
   );
 }
@@ -1584,8 +1658,7 @@ const navItems: { id: AdminSection; label: string; icon: React.ElementType; badg
   { id: "jobs", label: "Jobs", icon: Layers },
   { id: "payments", label: "Payments", icon: CreditCard },
   { id: "plans", label: "Plans", icon: BadgeDollarSign },
-  { id: "providers", label: "AI Providers", icon: Cpu },
-  { id: "apikeys", label: "API Keys", icon: Key },
+  { id: "providers", label: "AI Providers & Keys", icon: Cpu },
   { id: "analytics", label: "Analytics", icon: BarChart3 },
   { id: "aiinsights", label: "AI Insights", icon: BrainCircuit },
 ];
@@ -1630,8 +1703,8 @@ export default function Admin() {
         </nav>
 
         <div className="p-3 border-t border-zinc-800 space-y-1">
-          <button onClick={() => navigate("/")} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors">
-            <LayoutDashboard className="w-4 h-4" /> Back to App
+          <button onClick={() => navigate("/dashboard")} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors">
+            <LayoutDashboard className="w-4 h-4" /> Back to Dashboard
           </button>
           <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-rose-400 hover:bg-rose-500/10 transition-colors">
             <LogOut className="w-4 h-4" /> Sign Out
@@ -1660,8 +1733,7 @@ export default function Admin() {
             {section === "jobs" && <JobsSection />}
             {section === "payments" && <PaymentsSection />}
             {section === "plans" && <PlansSection />}
-            {section === "providers" && <ProvidersSection />}
-            {section === "apikeys" && <ApiKeysSection />}
+            {section === "providers" && <UnifiedProvidersSection />}
             {section === "analytics" && <AnalyticsSection />}
             {section === "aiinsights" && <AiInsightsSection />}
           </div>

@@ -458,6 +458,9 @@ export default function Editor() {
   // Filter gallery scroll
   const [showAllFilters, setShowAllFilters] = useState(false);
 
+  // AI Power-Up panel (below image)
+  const [showPowerUp, setShowPowerUp] = useState(false);
+
   const { toast } = useToast();
 
   // Push current state to undo stack before making changes
@@ -1414,6 +1417,109 @@ export default function Editor() {
                     )}
                     {showCompare && <><span>&#8226;</span><span className="text-amber-400">Showing original</span></>}
                   </div>
+
+                  {/* AI Power-Up panel */}
+                  <AnimatePresence>
+                    {showPowerUp && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="w-full max-w-lg overflow-hidden"
+                      >
+                        <div className="rounded-xl border border-purple-500/20 bg-zinc-950/80 backdrop-blur p-4 space-y-3">
+                          {isAnalyzing ? (
+                            <div className="flex items-center gap-3 justify-center py-3">
+                              <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
+                              <span className="text-sm text-purple-300">Scanning image with AI...</span>
+                            </div>
+                          ) : aiSuggestion ? (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <ScanEye className="w-4 h-4 text-purple-400" />
+                                  <span className="text-sm font-semibold text-purple-200">AI Recommends</span>
+                                  <Badge variant="outline" className="text-[9px] border-purple-500/40 text-purple-300 px-1.5 py-0 h-4 capitalize">
+                                    {inferImageType(aiSuggestion.detectedSubjects)}
+                                  </Badge>
+                                </div>
+                                <span className="text-[10px] text-zinc-600">{Math.round(aiSuggestion.confidence * 100)}% confident</span>
+                              </div>
+                              <p className="text-xs text-zinc-400 leading-relaxed">{aiSuggestion.description}</p>
+                              <div className="flex flex-wrap gap-1">
+                                {aiSuggestion.detectedSubjects.slice(0, 5).map(s => (
+                                  <Badge key={s} variant="outline" className="text-[9px] border-purple-500/30 text-purple-300 px-1.5 py-0 h-4">{s}</Badge>
+                                ))}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button size="sm" className="flex-1 h-8 text-xs bg-purple-600 hover:bg-purple-700 text-white" onClick={applyAiSuggestion}>
+                                  <Sparkles className="w-3 h-3 mr-1" />
+                                  Apply: {aiSuggestion.suggestedEnhancement}
+                                </Button>
+                                <button
+                                  onClick={() => setShowPowerUp(false)}
+                                  className="text-xs text-zinc-600 hover:text-zinc-400 px-2"
+                                >
+                                  Dismiss
+                                </button>
+                              </div>
+                              {/* Alternatives */}
+                              {(() => {
+                                const alts = getAlternatives(inferImageType(aiSuggestion.detectedSubjects), aiSuggestion.suggestedEnhancement);
+                                if (alts.length === 0) return null;
+                                return (
+                                  <div className="pt-2 border-t border-white/5">
+                                    <p className="text-[10px] text-zinc-600 mb-1.5">Other options:</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {alts.map(a => (
+                                        <button
+                                          key={a.type}
+                                          onClick={() => { applyAlternative(a.type); setShowPowerUp(false); }}
+                                          className="text-[10px] px-2.5 py-1 rounded-full border border-zinc-700 text-zinc-400 hover:border-purple-500 hover:text-purple-300 transition-colors"
+                                        >
+                                          {a.label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                            </>
+                          ) : (
+                            <div className="text-center py-3">
+                              <p className="text-xs text-zinc-500">AI analysis not available yet</p>
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                  {/* AI Power-Up toggle button */}
+                  {!isProcessing && !isCompleted && (
+                    <motion.button
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.3 }}
+                      onClick={() => {
+                        setShowPowerUp(v => !v);
+                        // If no suggestion yet and not analyzing, trigger analysis from uploaded job
+                        if (!aiSuggestion && !isAnalyzing && uploadedJobIdRef.current) {
+                          runAnalysis(uploadedJobIdRef.current);
+                        }
+                      }}
+                      className={cn(
+                        "flex items-center gap-2 px-4 py-2 rounded-full border transition-all text-xs font-medium",
+                        showPowerUp
+                          ? "border-purple-500/40 bg-purple-500/10 text-purple-300"
+                          : "border-zinc-700 bg-zinc-900/80 text-zinc-400 hover:border-purple-500/30 hover:text-purple-300 hover:bg-purple-500/5",
+                      )}
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      AI Power-Up
+                      {isAnalyzing && <Loader2 className="w-3 h-3 animate-spin" />}
+                      {aiSuggestion && !showPowerUp && <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />}
+                    </motion.button>
+                  )}
                 </div>
               )}
             </div>

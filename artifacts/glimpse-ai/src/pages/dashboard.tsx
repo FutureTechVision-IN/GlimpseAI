@@ -5,7 +5,7 @@ import { Link } from "wouter";
 import Layout from "../components/layout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Wand2, Image as ImageIcon, Video, Clock, ArrowRight, Zap, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Wand2, Image as ImageIcon, Video, Clock, ArrowRight, Zap, CheckCircle2, XCircle, Loader2, Shield } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
 export default function Dashboard() {
@@ -31,6 +31,14 @@ export default function Dashboard() {
             <p className="text-zinc-400 mt-1">Here's an overview of your creative workspace.</p>
           </div>
           <div className="flex items-center gap-3">
+            {user?.role === "admin" && (
+              <Link href="/admin">
+                <Button variant="outline" className="border-zinc-700 text-zinc-300 hover:bg-zinc-800">
+                  <Shield className="w-4 h-4 mr-2" />
+                  Admin Panel
+                </Button>
+              </Link>
+            )}
             <Link href="/editor">
               <Button className="bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20">
                 <Wand2 className="w-4 h-4 mr-2" />
