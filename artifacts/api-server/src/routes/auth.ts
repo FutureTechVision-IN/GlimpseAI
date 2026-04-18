@@ -59,25 +59,21 @@ router.post("/auth/login", async (req, res): Promise<void> => {
 
   const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email));
   if (!user) {
-    req.log.warn({ email }, "Login failed: email not found");
     res.status(401).json({ error: "Invalid credentials" });
     return;
   }
 
   if (user.isSuspended) {
-    req.log.warn({ email, userId: user.id }, "Login failed: account suspended");
     res.status(403).json({ error: "Account suspended" });
     return;
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
-    req.log.warn({ email, userId: user.id }, "Login failed: wrong password");
     res.status(401).json({ error: "Invalid credentials" });
     return;
   }
 
-  req.log.info({ email, userId: user.id, role: user.role }, "Login successful");
   const token = generateToken(user.id, user.role);
   res.json({
     user: {

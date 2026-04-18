@@ -6,35 +6,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE=""
 BUILD=0
 
-# ── Load .env file ──────────────────────────────────────────────────────────
-load_dotenv() {
-  local envfile="${ROOT_DIR}/.env"
-  if [ -f "${envfile}" ]; then
-    log "Loading environment from .env"
-    # Export each KEY=VALUE, skipping comments and blank lines
-    set -a
-    # shellcheck disable=SC1090
-    source "${envfile}"
-    set +a
-  else
-    log "No .env file found — using built-in defaults"
-    log "  Hint: copy .env.example to .env and fill in your values"
-  fi
-}
-
-# ── Defaults (applied AFTER .env so .env takes precedence) ──────────────────
-apply_defaults() {
-  WEB_PORT="${WEB_PORT:-5173}"
-  API_PORT="${API_PORT:-3001}"
-  DB_PORT="${DB_PORT:-5432}"
-  BASE_PATH="${BASE_PATH:-/}"
-  POSTGRES_DB="${POSTGRES_DB:-glimpseai}"
-  POSTGRES_USER="${POSTGRES_USER:-glimpseai}"
-  POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-glimpseai}"
-  SESSION_SECRET="${SESSION_SECRET:-glimpse-ai-local-dev-secret}"
-  RAZORPAY_KEY_ID="${RAZORPAY_KEY_ID:-rzp_test_placeholder}"
-  RAZORPAY_KEY_SECRET="${RAZORPAY_KEY_SECRET:-placeholder_secret}"
-}
+WEB_PORT="${WEB_PORT:-5173}"
+API_PORT="${API_PORT:-3001}"
+DB_PORT="${DB_PORT:-5432}"
+BASE_PATH="${BASE_PATH:-/}"
+POSTGRES_DB="${POSTGRES_DB:-glimpseai}"
+POSTGRES_USER="${POSTGRES_USER:-glimpseai}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-glimpseai}"
+SESSION_SECRET="${SESSION_SECRET:-glimpse-ai-local-dev-secret}"
+RAZORPAY_KEY_ID="${RAZORPAY_KEY_ID:-rzp_test_placeholder}"
+RAZORPAY_KEY_SECRET="${RAZORPAY_KEY_SECRET:-placeholder_secret}"
 
 usage() {
   cat <<EOF
@@ -145,12 +126,10 @@ select_hybrid_db_port() {
 }
 
 run_db_push() {
-  log "Applying database schema (drizzle-kit push)"
+  log "Applying database schema"
   (
-    cd "${ROOT_DIR}"
-    DATABASE_URL="${DATABASE_URL}" pnpm --filter @workspace/db exec drizzle-kit push --config ./drizzle.config.ts 2>&1 || {
-      log "WARNING: drizzle-kit push failed — schema may be out of date"
-    }
+    cd "${ROOT_DIR}/lib/db"
+    DATABASE_URL="${DATABASE_URL}" ./node_modules/.bin/drizzle-kit push --config ./drizzle.config.ts
   )
 }
 
@@ -210,23 +189,8 @@ start_hybrid() {
 start_native() {
   ensure_native_deps
 
-  # Build DATABASE_URL from components if not explicitly set
   if [ -z "${DATABASE_URL:-}" ]; then
-    DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${DB_PORT}/${POSTGRES_DB}"
-    export DATABASE_URL
-    log "Built DATABASE_URL from component vars: ${DATABASE_URL%%@*}@..."
-  fi
-
-  # Verify PostgreSQL is actually reachable
-  if ! (echo >"/dev/tcp/127.0.0.1/${DB_PORT}") >/dev/null 2>&1; then
-    log ""
-    log "WARNING: PostgreSQL is not reachable on port ${DB_PORT}."
-    log "  Options:"
-    log "    1. Start PostgreSQL locally"
-    log "    2. Use --hybrid mode (starts Docker DB automatically)"
-    log "    3. Set DATABASE_URL to point to a running instance"
-    log ""
-    die "Cannot connect to PostgreSQL. Use --hybrid to auto-start a Docker DB."
+    die "Native mode requires DATABASE_URL to be set. Use --hybrid to start a local Docker PostgreSQL."
   fi
 
   run_native_stack 0
@@ -295,16 +259,7 @@ parse_args() {
 
 main() {
   parse_args "$@"
-  load_dotenv
-  apply_defaults
   auto_detect_mode
-
-  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  log "  GlimpseAI — Starting in ${MODE} mode"
-  log "  API:  http://127.0.0.1:${API_PORT}"
-  log "  Web:  http://127.0.0.1:${WEB_PORT}"
-  log "  DB:   port ${DB_PORT}"
-  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   case "${MODE}" in
     docker)
