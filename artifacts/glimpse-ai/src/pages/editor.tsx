@@ -413,6 +413,7 @@ export default function Editor() {
   }, []);
 
   const enhanceMedia = useEnhanceMedia();
+  const uploadMedia = useUploadMedia();
   const analyzeMedia = useAnalyzeMedia();
   const { data: presets } = useListPresets({ type: mediaType });
   const { data: currentJob } = useGetMediaJob(currentJobId as number, {
@@ -1000,7 +1001,7 @@ export default function Editor() {
                                 "relative rounded-lg border transition-all overflow-hidden h-12",
                                 selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
                               )}
-                              onClick={() => { setFilters(p.f); setSelectedFilter(p.key === "original" ? null : p.key); }}>
+                              onClick={() => { pushUndo(); setFilters(p.f); setSelectedFilter(p.key === "original" ? null : p.key); }}>
                               <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
                               <div className="absolute inset-0 flex items-end p-1">
                                 <span className="text-[8px] font-medium text-white drop-shadow-lg">{p.name}</span>
