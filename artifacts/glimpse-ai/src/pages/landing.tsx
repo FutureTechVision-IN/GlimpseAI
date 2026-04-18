@@ -152,115 +152,94 @@ function TestimonialCarousel() {
   );
 }
 
-// --- Before/After Slider — uses actual before/after images for real comparison ---
-function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string; afterSrc: string }) {
-  const [sliderPosition, setSliderPosition] = useState(50);
-  const [isDragging, setIsDragging] = useState(false);
-  const [hasInteracted, setHasInteracted] = useState(false);
+// --- Before/After Auto-Slider ---
+// Uses a single image. Left half shows desaturated "Before", right shows vivid "After".
+// Slider automatically sweeps back and forth. Manual drag pauses for 3s then resumes.
+function BeforeAfterSlider({ src }: { src: string }) {
+  const [split, setSplit] = useState(50);
   const containerRef = useRef<HTMLDivElement>(null);
-  const autoRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const splitRef = useRef(50);
+  const isDraggingRef = useRef(false);
+  const pausedUntilRef = useRef(0);
+  const rafRef = useRef<number>(0);
+  const startTimeRef = useRef<number | null>(null);
 
-  // Auto-animate the slider on mount to hint at interactivity
   useEffect(() => {
-    if (hasInteracted) return;
-    let frame = 0;
-    autoRef.current = setInterval(() => {
-      frame++;
-      const pos = 50 + Math.sin(frame * 0.04) * 25;
-      setSliderPosition(pos);
-    }, 30);
-    return () => clearInterval(autoRef.current);
-  }, [hasInteracted]);
-
-  const handleMove = useCallback((clientX: number) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
-    setSliderPosition((x / rect.width) * 100);
+    function tick(ts: number) {
+      rafRef.current = requestAnimationFrame(tick);
+      if (isDraggingRef.current || ts < pausedUntilRef.current) return;
+      if (startTimeRef.current === null) startTimeRef.current = ts;
+      // Sine wave: full cycle every 5 s, range 8%–92%
+      const t = ((ts - startTimeRef.current) / 5000) * Math.PI * 2;
+      const pos = 50 + Math.sin(t) * 42;
+      splitRef.current = pos;
+      setSplit(pos);
+    }
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
-  // Use native event listeners for touch to enable { passive: false }
+  const applyDrag = useCallback((clientX: number) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const pos = Math.max(5, Math.min(((clientX - rect.left) / rect.width) * 100, 95));
+    splitRef.current = pos;
+    setSplit(pos);
+  }, []);
+
+  const startDrag = useCallback(() => { isDraggingRef.current = true; }, []);
+  const endDrag = useCallback(() => {
+    isDraggingRef.current = false;
+    pausedUntilRef.current = performance.now() + 3000;
+    startTimeRef.current = null; // restart sine from current position after resume
+  }, []);
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-
-    let dragging = false;
-
-    const onTouchStart = (e: globalThis.TouchEvent) => {
-      dragging = true;
-      if (!hasInteracted) {
-        setHasInteracted(true);
-        clearInterval(autoRef.current);
-      }
-      handleMove(e.touches[0].clientX);
-    };
-    const onTouchMove = (e: globalThis.TouchEvent) => {
-      if (!dragging) return;
-      e.preventDefault(); // prevent scroll while dragging slider
-      handleMove(e.touches[0].clientX);
-    };
-    const onTouchEnd = () => { dragging = false; };
-
+    const onTouchStart = (e: globalThis.TouchEvent) => { startDrag(); applyDrag(e.touches[0].clientX); };
+    const onTouchMove = (e: globalThis.TouchEvent) => { e.preventDefault(); applyDrag(e.touches[0].clientX); };
+    const onTouchEnd = () => endDrag();
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
-
     return () => {
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
     };
-  }, [hasInteracted, handleMove]);
-
-  const onMouseMove = (e: MouseEvent) => {
-    if (!isDragging) return;
-    handleMove(e.clientX);
-  };
-
-  const startDrag = () => {
-    setIsDragging(true);
-    if (!hasInteracted) {
-      setHasInteracted(true);
-      clearInterval(autoRef.current);
-    }
-  };
+  }, [startDrag, endDrag, applyDrag]);
 
   return (
     <div
       ref={containerRef}
       className="relative w-full aspect-[16/9] rounded-2xl overflow-hidden cursor-ew-resize select-none border border-white/10 shadow-2xl shadow-teal-500/10"
-      onMouseMove={onMouseMove}
+      onMouseMove={(e) => { if (isDraggingRef.current) applyDrag(e.clientX); }}
       onMouseDown={startDrag}
-      onMouseUp={() => setIsDragging(false)}
-      onMouseLeave={() => setIsDragging(false)}
+      onMouseUp={endDrag}
+      onMouseLeave={endDrag}
     >
-      {/* "Before" — actual unprocessed image */}
-      <img
-        src={beforeSrc}
-        alt="Before"
-        draggable={false}
-        className="absolute inset-0 w-full h-full object-cover"
-      />
+      {/* After layer — vivid image always fills full frame */}
+      <img src={src} alt="After" draggable={false} className="absolute inset-0 w-full h-full object-cover" />
 
-      {/* "After (AI Enhanced)" — actual enhanced image revealed via clipPath */}
-      <div
-        className="absolute inset-0 w-full h-full overflow-hidden"
-        style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
-      >
+      {/* Before layer — clipped to left of split, desaturated */}
+      <div className="absolute inset-0 overflow-hidden" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}>
         <img
-          src={afterSrc}
-          alt="AI Enhanced"
+          src={src}
+          alt="Before"
           draggable={false}
           className="absolute inset-0 w-full h-full object-cover"
+          style={{ filter: "grayscale(90%) brightness(0.70) contrast(0.88)" }}
         />
+        <div className="absolute inset-0" style={{ background: "rgba(0,0,0,0.18)" }} />
       </div>
 
-      {/* Slider handle */}
+      {/* Divider */}
       <div
-        className="absolute top-0 bottom-0 w-0.5 bg-white/90 cursor-ew-resize"
-        style={{ left: `calc(${sliderPosition}% - 1px)`, boxShadow: "0 0 12px rgba(255,255,255,0.25)" }}
+        className="absolute top-0 bottom-0 w-0.5 bg-white/90 pointer-events-none"
+        style={{ left: `calc(${split}% - 1px)`, boxShadow: "0 0 12px rgba(255,255,255,0.3)" }}
       >
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg border border-zinc-200">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg border border-zinc-200 pointer-events-auto">
           <div className="flex gap-0.5">
             <div className="w-0.5 h-3 bg-zinc-400 rounded-full" />
             <div className="w-0.5 h-3 bg-zinc-400 rounded-full" />
@@ -269,19 +248,12 @@ function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string; afterSr
       </div>
 
       {/* Labels */}
-      <div className="absolute top-3 left-3 px-2.5 py-1 bg-black/50 backdrop-blur-md rounded-full text-[11px] font-medium text-white/70 border border-white/10">
+      <div className="absolute top-3 left-3 px-2.5 py-1 bg-black/55 backdrop-blur-md rounded-full text-[11px] font-medium text-white/70 border border-white/10 pointer-events-none">
         Before
       </div>
-      <div className="absolute top-3 right-3 px-2.5 py-1 bg-teal-500/50 backdrop-blur-md rounded-full text-[11px] font-medium text-white border border-teal-500/20">
-        AI Enhanced
+      <div className="absolute top-3 right-3 px-2.5 py-1 bg-teal-500/50 backdrop-blur-md rounded-full text-[11px] font-medium text-white border border-teal-500/20 pointer-events-none">
+        After
       </div>
-
-      {/* Drag hint — fades after interaction */}
-      {!hasInteracted && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/50 backdrop-blur rounded-full text-[10px] text-white/50 border border-white/10 animate-pulse">
-          ← Drag to compare →
-        </div>
-      )}
     </div>
   );
 }
@@ -416,7 +388,7 @@ export default function Landing() {
               transition={{ duration: 1, delay: 0.55, ease }}
               className="mt-16 max-w-5xl mx-auto"
             >
-              <BeforeAfterSlider beforeSrc="/hero-before.png" afterSrc="/hero-after.png" />
+              <BeforeAfterSlider src="/hero-after.png" />
             </motion.div>
           </div>
         </section>
