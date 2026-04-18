@@ -1116,7 +1116,7 @@ function ApiKeysSection() {
                   <TableCell className="capitalize text-sm">{k.provider}</TableCell>
                   <TableCell className="text-xs text-zinc-400">{k.model.split("/").pop()}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs ${k.tier === "premium" ? "border-purple-500/30 text-purple-400" : "border-zinc-600 text-zinc-400"}`}>
+                    <Badge variant="outline" className={`text-xs ${k.tier === "premium" ? "border-teal-500/30 text-teal-400" : "border-zinc-600 text-zinc-400"}`}>
                       {k.tier}
                     </Badge>
                   </TableCell>
@@ -1451,7 +1451,7 @@ function AnalyticsSection() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline" className={`text-xs ${u.user?.planId ? "border-purple-500/30 text-purple-400" : "border-zinc-600 text-zinc-400"}`}>
+                      <Badge variant="outline" className={`text-xs ${u.user?.planId ? "border-teal-500/30 text-teal-400" : "border-zinc-600 text-zinc-400"}`}>
                         {u.user?.planId ? "Paid" : "Free"}
                       </Badge>
                     </TableCell>
@@ -1596,7 +1596,7 @@ function AiInsightsSection() {
       />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard title="Total Suggestions" value={total} icon={BrainCircuit} color="purple" />
+        <StatCard title="Total Suggestions" value={total} icon={BrainCircuit} color="teal" />
         <StatCard title="Applied" value={applied.length} sub={total > 0 ? `${Math.round((applied.length / total) * 100)}%` : "—"} icon={Sparkles} color="teal" />
         <StatCard title="Dismissed" value={dismissed.length} sub={total > 0 ? `${Math.round((dismissed.length / total) * 100)}%` : "—"} icon={XCircle} color="red" />
         <StatCard title="Avg Confidence" value={`${Math.round(avgConf * 100)}%`} icon={Activity} />

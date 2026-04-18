@@ -357,7 +357,7 @@ interface WalkthroughStep {
 
 const WALKTHROUGH_STEPS: WalkthroughStep[] = [
   { title: "Upload Your Media",  description: "Drag & drop or click to upload photos and videos up to 100 MB. We support all major formats.", icon: <UploadCloud className="w-8 h-8 text-teal-400" /> },
-  { title: "Pick a Style",       description: "Choose from 15+ filter presets or use AI-powered enhancements. In Simple mode, just tap a preset for instant results.", icon: <Palette className="w-8 h-8 text-purple-400" /> },
+  { title: "Pick a Style",       description: "Choose from 15+ filter presets or use AI-powered enhancements. In Simple mode, just tap a preset for instant results.", icon: <Palette className="w-8 h-8 text-teal-400" /> },
   { title: "Enhance with AI",    description: "Hit Enhance and our AI processes your media server-side using professional-grade algorithms.", icon: <Sparkles className="w-8 h-8 text-amber-400" /> },
   { title: "Export Your Result",  description: "Download your enhanced media instantly. Switch to Advanced mode anytime for granular controls.", icon: <Download className="w-8 h-8 text-blue-400" /> },
 ];
@@ -461,6 +461,10 @@ export default function Editor() {
   // AI Power-Up panel (below image)
   const [showPowerUp, setShowPowerUp] = useState(false);
 
+  // Combo enhancement: upscale after primary enhancement
+  const [upscaleAfter, setUpscaleAfter] = useState<"upscale" | "upscale_4x" | null>(null);
+  const upscaleChainRef = useRef(false); // tracks whether we're in chained upscale step
+
   const { toast } = useToast();
 
   // Push current state to undo stack before making changes
@@ -509,10 +513,52 @@ export default function Editor() {
   useEffect(() => {
     if (!currentJob) return;
     if (currentJob.status === "completed" && processStage !== "completed") {
+      // Check if we need to chain an upscale step
+      if (upscaleAfter && !upscaleChainRef.current) {
+        upscaleChainRef.current = true;
+        setProcessStage("processing");
+        toast({ title: "Step 2: Upscaling...", description: `Applying ${upscaleAfter === "upscale_4x" ? "4x" : "2x"} upscale to enhanced image.` });
+        // Extract processed base64 (strip data URI prefix)
+        const processedUri = currentJob.processedUrl ?? "";
+        const rawB64 = processedUri.replace(/^data:[^;]+;base64,/, "");
+        if (!rawB64) {
+          setProcessStage("completed");
+          upscaleChainRef.current = false;
+          return;
+        }
+        // Re-upload the processed image, then enhance with upscale
+        const fname = `upscale-${file?.name ?? "image.jpg"}`;
+        uploadMedia.mutate(
+          { data: { filename: fname, mimeType: file?.type ?? "image/jpeg", size: rawB64.length, mediaType: "photo", base64Data: rawB64 } },
+          {
+            onSuccess: (newJob) => {
+              setCurrentJobId(newJob.id);
+              enhanceMedia.mutate(
+                { data: { jobId: newJob.id, enhancementType: upscaleAfter } },
+                {
+                  onError: () => {
+                    setProcessStage("failed");
+                    upscaleChainRef.current = false;
+                    toast({ title: "Upscale failed", description: "The chained upscale step failed.", variant: "destructive" });
+                  },
+                },
+              );
+            },
+            onError: () => {
+              setProcessStage("failed");
+              upscaleChainRef.current = false;
+              toast({ title: "Upscale failed", description: "Failed to upload for upscale chain.", variant: "destructive" });
+            },
+          },
+        );
+        return;
+      }
       setProcessStage("completed");
-      toast({ title: "Enhancement complete!", description: "Your media has been successfully enhanced." });
+      upscaleChainRef.current = false;
+      toast({ title: "Enhancement complete!", description: upscaleAfter ? "Enhancement + upscale applied!" : "Your media has been successfully enhanced." });
     } else if (currentJob.status === "failed" && processStage !== "failed") {
       setProcessStage("failed");
+      upscaleChainRef.current = false;
       toast({ title: "Processing failed", description: currentJob.errorMessage ?? "Enhancement failed.", variant: "destructive" });
     } else if (currentJob.status === "processing" && processStage === "uploading") {
       setProcessStage("processing");
@@ -723,6 +769,7 @@ export default function Editor() {
     setSelectedFilter(null); setAiSuggestion(null);
     setSkinSmoothing(50); uploadedJobIdRef.current = null;
     setUndoStack([]); setChatMessages([]); setShowAiChat(false);
+    setUpscaleAfter(null); upscaleChainRef.current = false;
   };
 
   const isProcessing = processStage === "uploading" || processStage === "processing";
@@ -795,35 +842,35 @@ export default function Editor() {
                       className="mb-4 overflow-hidden"
                     >
                       {isAnalyzing ? (
-                        <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-3 flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center shrink-0">
-                            <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
+                        <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-3 flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-teal-500/10 flex items-center justify-center shrink-0">
+                            <Loader2 className="w-4 h-4 text-teal-400 animate-spin" />
                           </div>
                           <div>
-                            <p className="text-xs font-medium text-purple-300">AI is analyzing your image...</p>
-                            <p className="text-[10px] text-purple-400/60">Finding the best enhancement</p>
+                            <p className="text-xs font-medium text-teal-300">AI is analyzing your image...</p>
+                            <p className="text-[10px] text-teal-400/60">Finding the best enhancement</p>
                           </div>
                         </div>
                       ) : aiSuggestion && (
-                        <div className="rounded-xl border border-purple-500/30 bg-gradient-to-r from-purple-500/10 to-fuchsia-500/10 p-3">
+                        <div className="rounded-xl border border-teal-500/30 bg-gradient-to-r from-teal-500/10 to-cyan-500/10 p-3">
                           <div className="flex items-start gap-3">
-                            <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                              <ScanEye className="w-4 h-4 text-purple-400" />
+                            <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                              <ScanEye className="w-4 h-4 text-teal-400" />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1">
-                                <p className="text-xs font-medium text-purple-200">AI Recommendation</p>
-                                <Badge variant="outline" className="text-[8px] border-purple-500/40 text-purple-300 px-1.5 py-0 h-3.5 capitalize">
+                                <p className="text-xs font-medium text-teal-200">AI Recommendation</p>
+                                <Badge variant="outline" className="text-[8px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-3.5 capitalize">
                                   {inferImageType(aiSuggestion.detectedSubjects)}
                                 </Badge>
                               </div>
                               <p className="text-[11px] text-zinc-400 leading-relaxed mb-2 line-clamp-2">{aiSuggestion.description}</p>
                               <div className="flex flex-wrap gap-1 mb-2">
                                 {aiSuggestion.detectedSubjects.slice(0, 4).map((s) => (
-                                  <Badge key={s} variant="outline" className="text-[9px] border-purple-500/30 text-purple-300 px-1.5 py-0 h-4">{s}</Badge>
+                                  <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
                                 ))}
                               </div>
-                              <Button size="sm" className="h-7 text-xs bg-purple-600 hover:bg-purple-700 text-white w-full" onClick={applyAiSuggestion}>
+                              <Button size="sm" className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white w-full" onClick={applyAiSuggestion}>
                                 <Sparkles className="w-3 h-3 mr-1" />
                                 Apply Best: {aiSuggestion.suggestedEnhancement}
                                 {aiSuggestion.suggestedFilter && ` + ${aiSuggestion.suggestedFilter}`}
@@ -922,6 +969,48 @@ export default function Editor() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Combo: Also Upscale toggle — visible when a non-upscale preset is selected */}
+                    {enhancementType !== "upscale" && enhancementType !== "upscale_4x" && file && (
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <ZoomIn className="w-3.5 h-3.5 text-teal-400" />
+                            <Label className="text-xs font-medium text-zinc-300">Also Upscale</Label>
+                          </div>
+                          <Switch
+                            checked={upscaleAfter !== null}
+                            onCheckedChange={(checked) => setUpscaleAfter(checked ? "upscale" : null)}
+                          />
+                        </div>
+                        {upscaleAfter && (
+                          <div className="flex gap-2">
+                            <button
+                              className={cn(
+                                "flex-1 text-[11px] py-1.5 rounded-lg border transition-all font-medium",
+                                upscaleAfter === "upscale"
+                                  ? "border-teal-500 bg-teal-500/10 text-teal-300"
+                                  : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                              )}
+                              onClick={() => setUpscaleAfter("upscale")}
+                            >
+                              2x Scale
+                            </button>
+                            <button
+                              className={cn(
+                                "flex-1 text-[11px] py-1.5 rounded-lg border transition-all font-medium",
+                                upscaleAfter === "upscale_4x"
+                                  ? "border-teal-500 bg-teal-500/10 text-teal-300"
+                                  : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                              )}
+                              onClick={() => setUpscaleAfter("upscale_4x")}
+                            >
+                              4x Scale
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <Separator className="bg-white/5" />
 
@@ -1231,8 +1320,8 @@ export default function Editor() {
                     {processStage === "completed" && <CheckCircle2 className="w-4 h-4" />}
                     {processStage === "failed"    && <AlertCircle  className="w-4 h-4" />}
                     <span>{stageInfo.label}</span>
-                    {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">step 1/2</span>}
-                    {processStage === "processing" && <span className="text-xs text-zinc-500 ml-auto">step 2/2</span>}
+                    {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">{upscaleAfter ? "step 1/3" : "step 1/2"}</span>}
+                    {processStage === "processing" && <span className="text-xs text-zinc-500 ml-auto">{upscaleChainRef.current ? (upscaleAfter ? "step 3/3 — upscaling" : "step 2/2") : (upscaleAfter ? "step 2/3 — enhancing" : "step 2/2")}</span>}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1242,8 +1331,8 @@ export default function Editor() {
                 disabled={!file || isProcessing}
               >
                 {isProcessing
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Processing...</>
-                  : <><Wand2   className="w-4 h-4 mr-2" />{isCompleted ? "Enhance Again" : "Enhance Media"}</>
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />{upscaleChainRef.current ? "Upscaling..." : "Processing..."}</>
+                  : <><Wand2   className="w-4 h-4 mr-2" />{isCompleted ? "Enhance Again" : (upscaleAfter ? `Enhance + ${upscaleAfter === "upscale_4x" ? "4x" : "2x"} Upscale` : "Enhance Media")}</>
                 }
               </Button>
             </div>
@@ -1261,7 +1350,7 @@ export default function Editor() {
                       <motion.div
                         animate={{ y: [0, -6, 0] }}
                         transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
-                        className="w-20 h-20 bg-gradient-to-br from-teal-500/20 to-purple-500/20 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform"
+                        className="w-20 h-20 bg-gradient-to-br from-teal-500/20 to-cyan-500/20 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform"
                       >
                         <UploadCloud className="w-10 h-10 text-teal-400" />
                       </motion.div>
@@ -1294,20 +1383,10 @@ export default function Editor() {
                         </TooltipTrigger>
                         <TooltipContent>Undo ({undoStack.length} steps)</TooltipContent>
                       </Tooltip>
-                      {(chatMessages.length > 0 || isAnalyzing) && (
-                        <Button variant="outline" size="sm"
-                          onClick={() => setShowAiChat(v => !v)}
-                          className={cn(
-                            "bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8 gap-1.5",
-                            showAiChat && "border-purple-500 text-purple-300"
-                          )}>
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          AI{isAnalyzing && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-                        </Button>
-                      )}
+                      {/* AI chat toggle moved to floating button */}
                       {isCompleted && (
                         <Button variant="outline" size="sm"
-                          className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", showCompare && "border-purple-500 text-purple-300")}
+                          className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", showCompare && "border-teal-500 text-teal-300")}
                           onMouseDown={() => setShowCompare(true)}
                           onMouseUp={() => setShowCompare(false)}
                           onMouseLeave={() => setShowCompare(false)}
@@ -1343,11 +1422,11 @@ export default function Editor() {
                           >
                             <Sparkles className="w-12 h-12 text-teal-500 mb-4" />
                           </motion.div>
-                          <p className="text-lg font-semibold">{processStage === "uploading" ? "Uploading..." : "Applying AI Magic..."}</p>
+                          <p className="text-lg font-semibold">{processStage === "uploading" ? "Uploading..." : (upscaleChainRef.current ? "Upscaling Image..." : "Applying AI Magic...")}</p>
                           <p className="text-sm text-zinc-400 mt-1">This may take a few moments</p>
                           <div className="mt-4 w-48 h-1 bg-zinc-800 rounded-full overflow-hidden">
                             <motion.div
-                              className="h-full bg-gradient-to-r from-teal-500 to-purple-500 rounded-full"
+                              className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 rounded-full"
                               animate={{ x: ["-100%", "100%"] }}
                               transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
                               style={{ width: "60%" }}
@@ -1363,20 +1442,20 @@ export default function Editor() {
                         >
                           {/* Scan line */}
                           <motion.div
-                            className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-purple-400 to-transparent shadow-[0_0_12px_4px_rgba(168,85,247,0.4)]"
+                            className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent shadow-[0_0_12px_4px_rgba(20,184,166,0.4)]"
                             animate={{ top: ["0%", "100%", "0%"] }}
                             transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
                           />
                           {/* Corner brackets */}
-                          <div className="absolute top-2 left-2 w-5 h-5 border-t-2 border-l-2 border-purple-400/60 rounded-tl" />
-                          <div className="absolute top-2 right-2 w-5 h-5 border-t-2 border-r-2 border-purple-400/60 rounded-tr" />
-                          <div className="absolute bottom-2 left-2 w-5 h-5 border-b-2 border-l-2 border-purple-400/60 rounded-bl" />
-                          <div className="absolute bottom-2 right-2 w-5 h-5 border-b-2 border-r-2 border-purple-400/60 rounded-br" />
+                          <div className="absolute top-2 left-2 w-5 h-5 border-t-2 border-l-2 border-teal-400/60 rounded-tl" />
+                          <div className="absolute top-2 right-2 w-5 h-5 border-t-2 border-r-2 border-teal-400/60 rounded-tr" />
+                          <div className="absolute bottom-2 left-2 w-5 h-5 border-b-2 border-l-2 border-teal-400/60 rounded-bl" />
+                          <div className="absolute bottom-2 right-2 w-5 h-5 border-b-2 border-r-2 border-teal-400/60 rounded-br" />
                           {/* Label */}
                           <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-black/70 backdrop-blur px-3 py-1 rounded-full">
-                            <ScanEye className="w-3 h-3 text-purple-400" />
-                            <span className="text-[10px] font-medium text-purple-300">AI Scanning</span>
-                            <Loader2 className="w-2.5 h-2.5 text-purple-400 animate-spin" />
+                            <ScanEye className="w-3 h-3 text-teal-400" />
+                            <span className="text-[10px] font-medium text-teal-300">AI Scanning</span>
+                            <Loader2 className="w-2.5 h-2.5 text-teal-400 animate-spin" />
                           </div>
                         </motion.div>
                       )}
@@ -1408,7 +1487,7 @@ export default function Editor() {
                       {editorMode === "simple" ? "Simple" : "Advanced"}
                     </Badge>
                     {hasEdits && <><span>&#8226;</span><span className="text-teal-400">Edits staged</span></>}
-                    {selectedFilter && <><span>&#8226;</span><span className="text-purple-400">Filter: {selectedFilter}</span></>}
+                    {selectedFilter && <><span>&#8226;</span><span className="text-teal-400">Filter: {selectedFilter}</span></>}
                     {isCompleted && (
                       <><span>&#8226;</span>
                       <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-teal-400 flex items-center gap-1">
@@ -1427,19 +1506,19 @@ export default function Editor() {
                         exit={{ opacity: 0, height: 0 }}
                         className="w-full max-w-lg overflow-hidden"
                       >
-                        <div className="rounded-xl border border-purple-500/20 bg-zinc-950/80 backdrop-blur p-4 space-y-3">
+                        <div className="rounded-xl border border-teal-500/20 bg-zinc-950/80 backdrop-blur p-4 space-y-3">
                           {isAnalyzing ? (
                             <div className="flex items-center gap-3 justify-center py-3">
-                              <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
-                              <span className="text-sm text-purple-300">Scanning image with AI...</span>
+                              <Loader2 className="w-5 h-5 text-teal-400 animate-spin" />
+                              <span className="text-sm text-teal-300">Scanning image with AI...</span>
                             </div>
                           ) : aiSuggestion ? (
                             <>
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                  <ScanEye className="w-4 h-4 text-purple-400" />
-                                  <span className="text-sm font-semibold text-purple-200">AI Recommends</span>
-                                  <Badge variant="outline" className="text-[9px] border-purple-500/40 text-purple-300 px-1.5 py-0 h-4 capitalize">
+                                  <ScanEye className="w-4 h-4 text-teal-400" />
+                                  <span className="text-sm font-semibold text-teal-200">AI Recommends</span>
+                                  <Badge variant="outline" className="text-[9px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-4 capitalize">
                                     {inferImageType(aiSuggestion.detectedSubjects)}
                                   </Badge>
                                 </div>
@@ -1448,11 +1527,11 @@ export default function Editor() {
                               <p className="text-xs text-zinc-400 leading-relaxed">{aiSuggestion.description}</p>
                               <div className="flex flex-wrap gap-1">
                                 {aiSuggestion.detectedSubjects.slice(0, 5).map(s => (
-                                  <Badge key={s} variant="outline" className="text-[9px] border-purple-500/30 text-purple-300 px-1.5 py-0 h-4">{s}</Badge>
+                                  <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
                                 ))}
                               </div>
                               <div className="flex items-center gap-2">
-                                <Button size="sm" className="flex-1 h-8 text-xs bg-purple-600 hover:bg-purple-700 text-white" onClick={applyAiSuggestion}>
+                                <Button size="sm" className="flex-1 h-8 text-xs bg-teal-600 hover:bg-teal-700 text-white" onClick={applyAiSuggestion}>
                                   <Sparkles className="w-3 h-3 mr-1" />
                                   Apply: {aiSuggestion.suggestedEnhancement}
                                 </Button>
@@ -1475,7 +1554,7 @@ export default function Editor() {
                                         <button
                                           key={a.type}
                                           onClick={() => { applyAlternative(a.type); setShowPowerUp(false); }}
-                                          className="text-[10px] px-2.5 py-1 rounded-full border border-zinc-700 text-zinc-400 hover:border-purple-500 hover:text-purple-300 transition-colors"
+                                          className="text-[10px] px-2.5 py-1 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors"
                                         >
                                           {a.label}
                                         </button>
@@ -1510,155 +1589,223 @@ export default function Editor() {
                       className={cn(
                         "flex items-center gap-2 px-4 py-2 rounded-full border transition-all text-xs font-medium",
                         showPowerUp
-                          ? "border-purple-500/40 bg-purple-500/10 text-purple-300"
-                          : "border-zinc-700 bg-zinc-900/80 text-zinc-400 hover:border-purple-500/30 hover:text-purple-300 hover:bg-purple-500/5",
+                          ? "border-teal-500/40 bg-teal-500/10 text-teal-300"
+                          : "border-zinc-700 bg-zinc-900/80 text-zinc-400 hover:border-teal-500/30 hover:text-teal-300 hover:bg-teal-500/5",
                       )}
                     >
                       <Zap className="w-3.5 h-3.5" />
                       AI Power-Up
                       {isAnalyzing && <Loader2 className="w-3 h-3 animate-spin" />}
-                      {aiSuggestion && !showPowerUp && <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />}
+                      {aiSuggestion && !showPowerUp && <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />}
                     </motion.button>
                   )}
                 </div>
               )}
             </div>
-            {/* AI Chat Panel */}
-            <AnimatePresence>
-              {showAiChat && (
-                <motion.div
-                  initial={{ opacity: 0, x: 320 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 320 }}
-                  transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                  className="absolute right-0 top-0 bottom-0 w-80 bg-zinc-950/95 backdrop-blur border-l border-white/10 flex flex-col z-30 shadow-2xl"
-                >
-                  {/* Chat header */}
-                  <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
-                    <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-full bg-purple-500/20 flex items-center justify-center">
-                        <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold">AI Assistant</p>
-                        <p className="text-[10px] text-zinc-500">Powered by GlimpseAI</p>
-                      </div>
-                    </div>
-                    <button onClick={() => setShowAiChat(false)} className="text-zinc-600 hover:text-zinc-300 transition-colors">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {/* Messages */}
-                  <ScrollArea className="flex-1 p-4">
-                    <div className="space-y-3">
-                      {isAnalyzing && chatMessages.length === 0 && (
-                        <div className="flex items-start gap-2">
-                          <div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                            <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
-                          </div>
-                          <div className="bg-zinc-900 border border-zinc-800 rounded-xl rounded-tl-none px-3 py-2 text-xs text-zinc-400">
-                            Analyzing your image...
-                          </div>
-                        </div>
-                      )}
-                      {chatMessages.map((msg) => (
-                        <div key={msg.id} className={cn("flex items-start gap-2", msg.role === "user" && "flex-row-reverse")}>
-                          <div className={cn(
-                            "w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-bold",
-                            msg.role === "ai" ? "bg-purple-500/20 text-purple-400" : "bg-teal-500/20 text-teal-400"
-                          )}>
-                            {msg.role === "ai" ? <Sparkles className="w-3 h-3" /> : "U"}
-                          </div>
-                          <div className={cn(
-                            "max-w-[220px] rounded-xl px-3 py-2 text-xs leading-relaxed",
-                            msg.role === "ai"
-                              ? "bg-zinc-900 border border-zinc-800 rounded-tl-none text-zinc-300"
-                              : "bg-teal-600/20 border border-teal-500/20 rounded-tr-none text-teal-100"
-                          )}>
-                            <p>{msg.text}</p>
-                            {msg.action && !msg.applied && msg.role === "ai" && (
-                              <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5">
-                                <p className="text-[10px] text-zinc-500">
-                                  Suggested: <span className="text-purple-300 capitalize">{msg.action.type}</span>
-                                  {msg.action.filter && <> · <span className="text-amber-300 capitalize">{msg.action.filter}</span></>}
-                                </p>
-                                <Button
-                                  size="sm"
-                                  className="w-full h-6 text-[10px] bg-purple-600 hover:bg-purple-700 text-white"
-                                  onClick={() => {
-                                    applyAiSuggestion();
-                                  }}
-                                >
-                                  <Sparkles className="w-2.5 h-2.5 mr-1" />Apply
-                                </Button>
-                              </div>
-                            )}
-                            {msg.applied && msg.role === "ai" && (
-                              <div className="mt-1.5 flex items-center gap-1 text-[9px] text-emerald-400">
-                                <CheckCircle2 className="w-2.5 h-2.5" />Applied
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                      {chatMessages.length === 0 && !isAnalyzing && (
-                        <div className="text-center py-8 text-zinc-600 text-xs">
-                          Upload a photo to get AI recommendations
-                        </div>
-                      )}
-                    </div>
-                  </ScrollArea>
-
-                  {/* Chat input */}
-                  <div className="p-3 border-t border-white/10 shrink-0">
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const txt = chatInput.trim();
-                        if (!txt) return;
-                        const userId = ++chatIdRef.current;
-                        setChatMessages(prev => [...prev, { id: userId, role: "user", text: txt }]);
-                        setChatInput("");
-                        // Auto-reply with current suggestion if any
-                        setTimeout(() => {
-                          const replyId = ++chatIdRef.current;
-                          if (aiSuggestion) {
-                            setChatMessages(prev => [...prev, {
-                              id: replyId,
-                              role: "ai",
-                              text: `I recommend ${aiSuggestion.suggestedEnhancement} for your image. ${aiSuggestion.description}`,
-                              action: {
-                                type: aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType,
-                                filter: aiSuggestion.suggestedFilter ?? undefined,
-                              },
-                            }]);
-                          } else {
-                            setChatMessages(prev => [...prev, {
-                              id: replyId,
-                              role: "ai",
-                              text: "Upload an image first so I can analyze and suggest the best enhancement for you.",
-                            }]);
-                          }
-                        }, 600);
-                      }}
-                      className="flex items-center gap-2"
-                    >
-                      <Input
-                        value={chatInput}
-                        onChange={e => setChatInput(e.target.value)}
-                        placeholder="Ask me anything..."
-                        className="flex-1 h-8 text-xs bg-zinc-900 border-zinc-700 focus-visible:ring-purple-500"
-                      />
-                      <Button type="submit" size="sm" className="h-8 w-8 p-0 bg-purple-600 hover:bg-purple-700 shrink-0">
-                        <Send className="w-3.5 h-3.5" />
-                      </Button>
-                    </form>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </main>
+
+          {/* Floating AI Chat — bottom-right */}
+          <AnimatePresence>
+            {showAiChat && (
+              <motion.div
+                initial={{ opacity: 0, y: 24, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 24, scale: 0.95 }}
+                transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                className="fixed bottom-20 right-4 w-80 h-[480px] bg-zinc-950/95 backdrop-blur-lg border border-white/10 rounded-2xl flex flex-col z-50 shadow-2xl shadow-black/60"
+              >
+                {/* Chat header */}
+                <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0 rounded-t-2xl">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-full bg-teal-500/20 flex items-center justify-center">
+                      <Sparkles className="w-3.5 h-3.5 text-teal-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">AI Assistant</p>
+                      <p className="text-[10px] text-zinc-500">Powered by GlimpseAI</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowAiChat(false)} className="text-zinc-600 hover:text-zinc-300 transition-colors">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Messages */}
+                <ScrollArea className="flex-1 p-4">
+                  <div className="space-y-3">
+                    {isAnalyzing && chatMessages.length === 0 && (
+                      <div className="flex items-start gap-2">
+                        <div className="w-6 h-6 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                          <Loader2 className="w-3 h-3 text-teal-400 animate-spin" />
+                        </div>
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl rounded-tl-none px-3 py-2 text-xs text-zinc-400">
+                          Analyzing your image...
+                        </div>
+                      </div>
+                    )}
+                    {chatMessages.map((msg) => (
+                      <div key={msg.id} className={cn("flex items-start gap-2", msg.role === "user" && "flex-row-reverse")}>
+                        <div className={cn(
+                          "w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-bold",
+                          msg.role === "ai" ? "bg-teal-500/20 text-teal-400" : "bg-cyan-500/20 text-cyan-400"
+                        )}>
+                          {msg.role === "ai" ? <Sparkles className="w-3 h-3" /> : "U"}
+                        </div>
+                        <div className={cn(
+                          "max-w-[220px] rounded-xl px-3 py-2 text-xs leading-relaxed",
+                          msg.role === "ai"
+                            ? "bg-zinc-900 border border-zinc-800 rounded-tl-none text-zinc-300"
+                            : "bg-teal-600/20 border border-teal-500/20 rounded-tr-none text-teal-100"
+                        )}>
+                          <p>{msg.text}</p>
+                          {msg.action && !msg.applied && msg.role === "ai" && (
+                            <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5">
+                              <p className="text-[10px] text-zinc-500">
+                                Suggested: <span className="text-teal-300 capitalize">{msg.action.type}</span>
+                                {msg.action.filter && <> · <span className="text-amber-300 capitalize">{msg.action.filter}</span></>}
+                              </p>
+                              <Button
+                                size="sm"
+                                className="w-full h-6 text-[10px] bg-teal-600 hover:bg-teal-700 text-white"
+                                onClick={() => {
+                                  applyAiSuggestion();
+                                }}
+                              >
+                                <Sparkles className="w-2.5 h-2.5 mr-1" />Apply
+                              </Button>
+                            </div>
+                          )}
+                          {msg.applied && msg.role === "ai" && (
+                            <div className="mt-1.5 flex items-center gap-1 text-[9px] text-emerald-400">
+                              <CheckCircle2 className="w-2.5 h-2.5" />Applied
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {chatMessages.length === 0 && !isAnalyzing && (
+                      <div className="text-center py-8 space-y-2">
+                        <Sparkles className="w-8 h-8 text-teal-500/40 mx-auto" />
+                        <p className="text-zinc-500 text-xs">Hi! I'm your AI editing assistant.</p>
+                        <p className="text-zinc-600 text-[10px]">Upload a photo to get personalized recommendations, or ask me anything.</p>
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+
+                {/* Chat input */}
+                <div className="p-3 border-t border-white/10 shrink-0 rounded-b-2xl">
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const txt = chatInput.trim();
+                      if (!txt) return;
+                      const userId = ++chatIdRef.current;
+                      setChatMessages(prev => [...prev, { id: userId, role: "user", text: txt }]);
+                      setChatInput("");
+                      const lower = txt.toLowerCase();
+                      // Context-aware auto-reply
+                      setTimeout(() => {
+                        const replyId = ++chatIdRef.current;
+                        // Greetings
+                        if (/^(hi|hello|hey|howdy|sup|what'?s up|how are you)/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: `Hey there! 👋 I'm your GlimpseAI assistant. ${file ? "I can see you've uploaded an image — want me to suggest the best enhancement?" : "Upload a photo and I'll recommend the perfect enhancement for it!"}`,
+                          }]);
+                        } else if (/^(help|what can you|how do|guide|tutorial)/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: "I can help you with:\n• Auto-analyzing your image for the best enhancement\n• Suggesting filters and color grades\n• Upscaling to 2x or 4x resolution\n• Portrait retouching and skin smoothing\n\nJust upload a photo to get started!",
+                          }]);
+                        } else if (/upscale|scale|resolution|enlarge|bigger/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: file ? "I can upscale your image! Choose 2x for double resolution or 4x for maximum detail. You can even combine upscaling with other enhancements." : "Upload an image first, then I can help you upscale it!",
+                            ...(file ? { action: { type: "upscale" as EnhanceMediaBodyEnhancementType } } : {}),
+                          }]);
+                        } else if (/portrait|face|skin|retouch|smooth/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: file ? "For portraits, I recommend Portrait Polish — it smooths skin and warms tones naturally. Want me to apply it?" : "Upload a portrait and I'll optimize it for you!",
+                            ...(file ? { action: { type: "portrait" as EnhanceMediaBodyEnhancementType } } : {}),
+                          }]);
+                        } else if (/cinematic|movie|film|color grade/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: file ? "Great choice! Cinematic Grade gives your image a film-grade color treatment. Shall I apply it?" : "Upload an image and I'll give it that cinematic look!",
+                            ...(file ? { action: { type: "color_grade_cinematic" as EnhanceMediaBodyEnhancementType } } : {}),
+                          }]);
+                        } else if (aiSuggestion) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: `Based on my analysis, I recommend "${aiSuggestion.suggestedEnhancement}" for your image. ${aiSuggestion.description}`,
+                            action: {
+                              type: aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType,
+                              filter: aiSuggestion.suggestedFilter ?? undefined,
+                            },
+                          }]);
+                        } else if (file) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: "I'm still analyzing your image. Try asking about specific enhancements like upscaling, portrait retouching, or cinematic color grading!",
+                          }]);
+                        } else {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: "Upload an image first so I can analyze it and suggest the perfect enhancement for you!",
+                          }]);
+                        }
+                      }, 500);
+                    }}
+                    className="flex items-center gap-2"
+                  >
+                    <Input
+                      value={chatInput}
+                      onChange={e => setChatInput(e.target.value)}
+                      placeholder="Ask me anything..."
+                      className="flex-1 h-8 text-xs bg-zinc-900 border-zinc-700 focus-visible:ring-teal-500"
+                    />
+                    <Button type="submit" size="sm" className="h-8 w-8 p-0 bg-teal-600 hover:bg-teal-700 shrink-0">
+                      <Send className="w-3.5 h-3.5" />
+                    </Button>
+                  </form>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Floating AI Chat Toggle Button */}
+          <motion.button
+            onClick={() => setShowAiChat(v => !v)}
+            className={cn(
+              "fixed bottom-4 right-4 z-50 w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-all",
+              showAiChat
+                ? "bg-zinc-800 border border-white/10 text-zinc-400 hover:text-white"
+                : "bg-teal-600 hover:bg-teal-500 text-white shadow-[0_0_20px_rgba(20,184,166,0.4)]"
+            )}
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.95 }}
+          >
+            {showAiChat ? (
+              <X className="w-5 h-5" />
+            ) : (
+              <>
+                <MessageSquare className="w-5 h-5" />
+                {(aiSuggestion || isAnalyzing) && !showAiChat && (
+                  <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-teal-400 animate-pulse border-2 border-zinc-950" />
+                )}
+              </>
+            )}
+          </motion.button>
         </div>
       </TooltipProvider>
     </Layout>
