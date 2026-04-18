@@ -197,6 +197,78 @@ const STAGE_INFO: Record<ProcessStage, { label: string; colorClass: string }> = 
 };
 
 // ---------------------------------------------------------------------------
+// AI Analytics helpers — persist suggestion outcomes to localStorage
+// ---------------------------------------------------------------------------
+
+const AI_ANALYTICS_KEY = "glimpse_ai_analytics";
+
+interface AiAnalyticsEvent {
+  ts: number;
+  action: "applied" | "dismissed" | "ignored";
+  enhancement: string;
+  filter?: string;
+  imageType: string; // inferred from detectedSubjects
+  confidence: number;
+}
+
+function trackAiEvent(evt: AiAnalyticsEvent) {
+  try {
+    const raw = localStorage.getItem(AI_ANALYTICS_KEY);
+    const log: AiAnalyticsEvent[] = raw ? JSON.parse(raw) : [];
+    log.push(evt);
+    // Keep last 500 events
+    if (log.length > 500) log.splice(0, log.length - 500);
+    localStorage.setItem(AI_ANALYTICS_KEY, JSON.stringify(log));
+  } catch { /* quota exceeded — silently skip */ }
+}
+
+function inferImageType(subjects: string[]): string {
+  const lower = subjects.map(s => s.toLowerCase());
+  if (lower.some(s => s.includes("person") || s.includes("face") || s.includes("portrait"))) return "portrait";
+  if (lower.some(s => s.includes("landscape") || s.includes("mountain") || s.includes("sky") || s.includes("nature"))) return "landscape";
+  if (lower.some(s => s.includes("food") || s.includes("dish") || s.includes("meal"))) return "food";
+  if (lower.some(s => s.includes("animal") || s.includes("pet") || s.includes("dog") || s.includes("cat"))) return "animal";
+  if (lower.some(s => s.includes("architecture") || s.includes("building") || s.includes("city"))) return "architecture";
+  if (lower.some(s => s.includes("product") || s.includes("object") || s.includes("item"))) return "product";
+  return "general";
+}
+
+/** Derive alternative enhancement suggestions based on image type */
+function getAlternatives(imageType: string, primary: string): { type: EnhanceMediaBodyEnhancementType; label: string }[] {
+  const pool: Record<string, { type: EnhanceMediaBodyEnhancementType; label: string }[]> = {
+    portrait: [
+      { type: "portrait", label: "Portrait Polish" },
+      { type: "beauty", label: "Beauty" },
+      { type: "skin_retouch", label: "Skin Retouch" },
+      { type: "blur_background", label: "Background Blur" },
+      { type: "lighting_enhance", label: "Fix Lighting" },
+    ],
+    landscape: [
+      { type: "auto", label: "Auto Enhance" },
+      { type: "color_grade_cinematic", label: "Cinematic" },
+      { type: "lighting_enhance", label: "Fix Lighting" },
+      { type: "upscale", label: "2x Upscale" },
+      { type: "color", label: "Color Pop" },
+    ],
+    food: [
+      { type: "auto", label: "Auto Enhance" },
+      { type: "color_grade_warm", label: "Warm Tones" },
+      { type: "lighting_enhance", label: "Fix Lighting" },
+      { type: "color", label: "Color Pop" },
+    ],
+    general: [
+      { type: "auto", label: "Auto Enhance" },
+      { type: "upscale", label: "2x Upscale" },
+      { type: "lighting_enhance", label: "Fix Lighting" },
+      { type: "color_grade_cinematic", label: "Cinematic" },
+      { type: "color", label: "Color Pop" },
+    ],
+  };
+  const list = pool[imageType] ?? pool.general;
+  return list.filter(a => a.type !== primary).slice(0, 3);
+}
+
+// ---------------------------------------------------------------------------
 // Canvas helpers
 // ---------------------------------------------------------------------------
 
@@ -534,7 +606,29 @@ export default function Editor() {
     }
     // Mark last AI message as applied
     setChatMessages(prev => prev.map(m => m.role === "ai" ? { ...m, applied: true } : m));
+    // Track
+    trackAiEvent({
+      ts: Date.now(), action: "applied",
+      enhancement: et, filter: aiSuggestion.suggestedFilter ?? undefined,
+      imageType: inferImageType(aiSuggestion.detectedSubjects),
+      confidence: aiSuggestion.confidence,
+    });
     toast({ title: "AI suggestion applied", description: `Using ${et} enhancement` });
+  }, [aiSuggestion, pushUndo, toast]);
+
+  // Apply a specific alternative enhancement
+  const applyAlternative = useCallback((et: EnhanceMediaBodyEnhancementType) => {
+    pushUndo();
+    setEnhancementType(et);
+    if (aiSuggestion) {
+      trackAiEvent({
+        ts: Date.now(), action: "applied",
+        enhancement: et,
+        imageType: inferImageType(aiSuggestion.detectedSubjects),
+        confidence: aiSuggestion.confidence,
+      });
+    }
+    toast({ title: "Enhancement selected", description: `Switched to ${et}` });
   }, [aiSuggestion, pushUndo, toast]);
 
   const handleProcess = useCallback(async () => {
@@ -714,7 +808,12 @@ export default function Editor() {
                               <ScanEye className="w-4 h-4 text-purple-400" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium text-purple-200 mb-1">AI Recommendation</p>
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="text-xs font-medium text-purple-200">AI Recommendation</p>
+                                <Badge variant="outline" className="text-[8px] border-purple-500/40 text-purple-300 px-1.5 py-0 h-3.5 capitalize">
+                                  {inferImageType(aiSuggestion.detectedSubjects)}
+                                </Badge>
+                              </div>
                               <p className="text-[11px] text-zinc-400 leading-relaxed mb-2 line-clamp-2">{aiSuggestion.description}</p>
                               <div className="flex flex-wrap gap-1 mb-2">
                                 {aiSuggestion.detectedSubjects.slice(0, 4).map((s) => (
@@ -723,14 +822,52 @@ export default function Editor() {
                               </div>
                               <Button size="sm" className="h-7 text-xs bg-purple-600 hover:bg-purple-700 text-white w-full" onClick={applyAiSuggestion}>
                                 <Sparkles className="w-3 h-3 mr-1" />
-                                Apply: {aiSuggestion.suggestedEnhancement}
+                                Apply Best: {aiSuggestion.suggestedEnhancement}
                                 {aiSuggestion.suggestedFilter && ` + ${aiSuggestion.suggestedFilter}`}
                               </Button>
+                              {/* Alternative suggestions based on image type */}
+                              {(() => {
+                                const alts = getAlternatives(
+                                  inferImageType(aiSuggestion.detectedSubjects),
+                                  aiSuggestion.suggestedEnhancement,
+                                );
+                                if (alts.length === 0) return null;
+                                return (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <p className="text-[9px] text-zinc-600 mb-1.5">Or try:</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {alts.map(a => (
+                                        <button
+                                          key={a.type}
+                                          onClick={() => applyAlternative(a.type)}
+                                          className="text-[9px] px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors"
+                                        >
+                                          {a.label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </div>
                           <div className="mt-2 flex items-center justify-between">
                             <span className="text-[9px] text-zinc-600">Confidence: {Math.round(aiSuggestion.confidence * 100)}%</span>
-                            <button onClick={() => setAiSuggestion(null)} className="text-[9px] text-zinc-600 hover:text-zinc-400">Dismiss</button>
+                            <button
+                              onClick={() => {
+                                trackAiEvent({
+                                  ts: Date.now(), action: "dismissed",
+                                  enhancement: aiSuggestion.suggestedEnhancement,
+                                  filter: aiSuggestion.suggestedFilter ?? undefined,
+                                  imageType: inferImageType(aiSuggestion.detectedSubjects),
+                                  confidence: aiSuggestion.confidence,
+                                });
+                                setAiSuggestion(null);
+                              }}
+                              className="text-[9px] text-zinc-600 hover:text-zinc-400"
+                            >
+                              Dismiss
+                            </button>
                           </div>
                         </div>
                       )}
@@ -1212,6 +1349,31 @@ export default function Editor() {
                               transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
                               style={{ width: "60%" }}
                             />
+                          </div>
+                        </motion.div>
+                      )}
+                      {/* AI scan overlay — animated line sweeps over image during analysis */}
+                      {isAnalyzing && !isProcessing && (
+                        <motion.div
+                          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                          className="absolute inset-0 z-20 pointer-events-none rounded-xl"
+                        >
+                          {/* Scan line */}
+                          <motion.div
+                            className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-purple-400 to-transparent shadow-[0_0_12px_4px_rgba(168,85,247,0.4)]"
+                            animate={{ top: ["0%", "100%", "0%"] }}
+                            transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
+                          />
+                          {/* Corner brackets */}
+                          <div className="absolute top-2 left-2 w-5 h-5 border-t-2 border-l-2 border-purple-400/60 rounded-tl" />
+                          <div className="absolute top-2 right-2 w-5 h-5 border-t-2 border-r-2 border-purple-400/60 rounded-tr" />
+                          <div className="absolute bottom-2 left-2 w-5 h-5 border-b-2 border-l-2 border-purple-400/60 rounded-bl" />
+                          <div className="absolute bottom-2 right-2 w-5 h-5 border-b-2 border-r-2 border-purple-400/60 rounded-br" />
+                          {/* Label */}
+                          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-black/70 backdrop-blur px-3 py-1 rounded-full">
+                            <ScanEye className="w-3 h-3 text-purple-400" />
+                            <span className="text-[10px] font-medium text-purple-300">AI Scanning</span>
+                            <Loader2 className="w-2.5 h-2.5 text-purple-400 animate-spin" />
                           </div>
                         </motion.div>
                       )}

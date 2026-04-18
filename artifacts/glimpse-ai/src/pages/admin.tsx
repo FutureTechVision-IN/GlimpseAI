@@ -27,7 +27,7 @@ import {
   Plus, Pencil, Trash2, Eye, EyeOff, LogOut, Shield, TrendingUp,
   Activity, BarChart3, ArrowUpRight, ArrowDownRight, Search, Filter,
   Loader2, MoreHorizontal, Ban, BadgeDollarSign, Key, ToggleLeft, ToggleRight,
-  FileWarning, Layers
+  FileWarning, Layers, BrainCircuit, Sparkles
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,7 +59,8 @@ type AdminSection =
   | "plans"
   | "providers"
   | "apikeys"
-  | "analytics";
+  | "analytics"
+  | "aiinsights";
 
 function StatCard({
   title, value, sub, icon: Icon, trend, color = "teal"
@@ -1433,6 +1434,149 @@ function AnalyticsSection() {
   );
 }
 
+// ─── AI INSIGHTS (localStorage analytics from editor) ──────────────────────
+interface AiEvt {
+  ts: number;
+  action: "applied" | "dismissed" | "ignored";
+  enhancement: string;
+  filter?: string;
+  imageType: string;
+  confidence: number;
+}
+
+function AiInsightsSection() {
+  const [events, setEvents] = useState<AiEvt[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("glimpse_ai_analytics");
+      if (raw) setEvents(JSON.parse(raw));
+    } catch {}
+  }, []);
+
+  const total = events.length;
+  const applied = events.filter(e => e.action === "applied");
+  const dismissed = events.filter(e => e.action === "dismissed");
+  const ignored = events.filter(e => e.action === "ignored");
+  const avgConf = total > 0 ? (events.reduce((s, e) => s + e.confidence, 0) / total) : 0;
+
+  // Top enhancements
+  const enhMap = new Map<string, number>();
+  applied.forEach(e => enhMap.set(e.enhancement, (enhMap.get(e.enhancement) ?? 0) + 1));
+  const topEnhancements = [...enhMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+    .map(([name, count]) => ({ name, count }));
+
+  // By image type
+  const typeMap = new Map<string, { applied: number; dismissed: number; total: number }>();
+  events.forEach(e => {
+    const cur = typeMap.get(e.imageType) ?? { applied: 0, dismissed: 0, total: 0 };
+    cur.total++;
+    if (e.action === "applied") cur.applied++;
+    if (e.action === "dismissed") cur.dismissed++;
+    typeMap.set(e.imageType, cur);
+  });
+  const byType = [...typeMap.entries()].sort((a, b) => b[1].total - a[1].total)
+    .map(([type, d]) => ({ type, ...d, rate: d.total > 0 ? Math.round((d.applied / d.total) * 100) : 0 }));
+
+  // Pie data
+  const PIE = [
+    { name: "Applied", value: applied.length },
+    { name: "Dismissed", value: dismissed.length },
+    { name: "Ignored", value: ignored.length },
+  ].filter(d => d.value > 0);
+  const PIE_COLORS = ["#10b981", "#ef4444", "#6b7280"];
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="AI Insights" description="Analytics from AI suggestion interactions in the editor" />
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <StatCard title="Total Suggestions" value={total} icon={BrainCircuit} color="purple" />
+        <StatCard title="Applied" value={applied.length} sub={total > 0 ? `${Math.round((applied.length / total) * 100)}%` : "—"} icon={Sparkles} color="teal" />
+        <StatCard title="Dismissed" value={dismissed.length} sub={total > 0 ? `${Math.round((dismissed.length / total) * 100)}%` : "—"} icon={XCircle} color="red" />
+        <StatCard title="Avg Confidence" value={`${Math.round(avgConf * 100)}%`} icon={Activity} />
+      </div>
+
+      {total === 0 ? (
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardContent className="py-12 text-center">
+            <BrainCircuit className="w-10 h-10 text-zinc-600 mx-auto mb-3" />
+            <p className="text-sm text-zinc-500">No AI suggestion events recorded yet.</p>
+            <p className="text-xs text-zinc-600 mt-1">Events are tracked when users interact with AI suggestions in the editor.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Action distribution */}
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader><CardTitle className="text-base">Action Distribution</CardTitle></CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart>
+                  <Pie data={PIE} dataKey="value" cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={4}>
+                    {PIE.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Top applied enhancements */}
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader><CardTitle className="text-base">Top Applied Enhancements</CardTitle></CardHeader>
+            <CardContent>
+              {topEnhancements.length > 0 ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={topEnhancements} layout="vertical" margin={{ left: 10 }}>
+                    <XAxis type="number" stroke="#52525b" />
+                    <YAxis type="category" dataKey="name" stroke="#71717a" width={110} tick={{ fontSize: 11 }} />
+                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }} />
+                    <Bar dataKey="count" fill="#a855f7" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : <p className="text-xs text-zinc-600 text-center py-6">No applied enhancements yet</p>}
+            </CardContent>
+          </Card>
+
+          {/* By image type */}
+          <Card className="bg-zinc-900 border-zinc-800 lg:col-span-2">
+            <CardHeader><CardTitle className="text-base">Acceptance by Image Type</CardTitle></CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-zinc-800">
+                    <TableHead className="text-zinc-500">Image Type</TableHead>
+                    <TableHead className="text-zinc-500 text-right">Total</TableHead>
+                    <TableHead className="text-zinc-500 text-right">Applied</TableHead>
+                    <TableHead className="text-zinc-500 text-right">Dismissed</TableHead>
+                    <TableHead className="text-zinc-500 text-right">Acceptance</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {byType.map(r => (
+                    <TableRow key={r.type} className="border-zinc-800">
+                      <TableCell className="capitalize font-medium text-zinc-300">{r.type}</TableCell>
+                      <TableCell className="text-right text-zinc-400">{r.total}</TableCell>
+                      <TableCell className="text-right text-teal-400">{r.applied}</TableCell>
+                      <TableCell className="text-right text-red-400">{r.dismissed}</TableCell>
+                      <TableCell className="text-right">
+                        <Badge variant="outline" className={r.rate >= 60 ? "border-teal-500/40 text-teal-400" : r.rate >= 30 ? "border-amber-500/40 text-amber-400" : "border-red-500/40 text-red-400"}>
+                          {r.rate}%
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ADMIN SHELL ─────────────────────────────────────────────────────────────
 const navItems: { id: AdminSection; label: string; icon: React.ElementType; badge?: string }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -1443,6 +1587,7 @@ const navItems: { id: AdminSection; label: string; icon: React.ElementType; badg
   { id: "providers", label: "AI Providers", icon: Cpu },
   { id: "apikeys", label: "API Keys", icon: Key },
   { id: "analytics", label: "Analytics", icon: BarChart3 },
+  { id: "aiinsights", label: "AI Insights", icon: BrainCircuit },
 ];
 
 export default function Admin() {
@@ -1518,6 +1663,7 @@ export default function Admin() {
             {section === "providers" && <ProvidersSection />}
             {section === "apikeys" && <ApiKeysSection />}
             {section === "analytics" && <AnalyticsSection />}
+            {section === "aiinsights" && <AiInsightsSection />}
           </div>
         </ScrollArea>
       </div>
