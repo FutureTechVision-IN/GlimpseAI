@@ -950,17 +950,17 @@ export default function Editor() {
 
                 {/* SIMPLE MODE */}
                 {editorMode === "simple" && (
-                  <div className="space-y-5">
-                    <div className="space-y-2">
-                      <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
-                      <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
+                      <div className="grid grid-cols-5 gap-1">
                         {SIMPLE_PRESETS.map((p) => (
                           <Tooltip key={p.type + (p.filterName ?? "")}>
                             <TooltipTrigger asChild>
                               <motion.button
                                 whileTap={{ scale: 0.97 }}
                                 className={cn(
-                                  "flex flex-col items-center gap-1.5 p-3 rounded-xl border transition-all text-center",
+                                  "flex flex-col items-center gap-0.5 p-1.5 rounded-lg border transition-all text-center",
                                   enhancementType === p.type && !selectedFilter
                                     ? "border-teal-500 bg-teal-500/10 shadow-lg shadow-teal-500/10"
                                     : "border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-zinc-700",
@@ -969,7 +969,6 @@ export default function Editor() {
                                   pushUndo();
                                   setEnhancementType(p.type);
                                   setSelectedFilter(null);
-                                  // Instant CSS preview for certain types
                                   if (p.type === "color_grade_warm") setFilters({ ...DEFAULT_FILTERS, warmth: 20, saturation: 110 });
                                   else if (p.type === "color_grade_cool") setFilters({ ...DEFAULT_FILTERS, warmth: -20, saturation: 95 });
                                   else if (p.type === "color_grade_cinematic") setFilters({ ...DEFAULT_FILTERS, brightness: 96, contrast: 105, saturation: 85 });
@@ -979,12 +978,12 @@ export default function Editor() {
                                 }}
                               >
                                 <div className={cn(
-                                  "w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-colors",
+                                  "w-7 h-7 rounded-md flex items-center justify-center shrink-0 transition-colors",
                                   enhancementType === p.type && !selectedFilter ? "bg-teal-500/20 text-teal-400" : "bg-zinc-800 text-zinc-400",
                                 )}>
-                                  {p.icon}
+                                  {React.cloneElement(p.icon as React.ReactElement, { className: "w-3.5 h-3.5" })}
                                 </div>
-                                <p className="text-[11px] font-medium leading-tight">{p.label}</p>
+                                <p className="text-[9px] font-medium leading-tight truncate w-full">{p.label}</p>
                               </motion.button>
                             </TooltipTrigger>
                             <TooltipContent side="right" className="text-xs">{p.desc}</TooltipContent>
@@ -993,65 +992,59 @@ export default function Editor() {
                       </div>
                     </div>
 
-                    {/* Combo: Also Upscale toggle — visible when a non-upscale preset is selected */}
+                    {/* Combo: Also Upscale toggle */}
                     {enhancementType !== "upscale" && enhancementType !== "upscale_4x" && file && (
-                      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <ZoomIn className="w-3.5 h-3.5 text-teal-400" />
-                            <Label className="text-xs font-medium text-zinc-300">Also Upscale</Label>
-                          </div>
-                          <Switch
-                            checked={upscaleAfter !== null}
-                            onCheckedChange={(checked) => setUpscaleAfter(checked ? "upscale" : null)}
-                          />
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <ZoomIn className="w-3 h-3 text-teal-400" />
+                          <Label className="text-[10px] font-medium text-zinc-300">Also Upscale</Label>
+                          {upscaleAfter && (
+                            <div className="flex gap-1 ml-1">
+                              <button
+                                className={cn(
+                                  "text-[9px] py-0.5 px-1.5 rounded border transition-all font-medium",
+                                  upscaleAfter === "upscale"
+                                    ? "border-teal-500 bg-teal-500/10 text-teal-300"
+                                    : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                                )}
+                                onClick={() => setUpscaleAfter("upscale")}
+                              >2x</button>
+                              <button
+                                className={cn(
+                                  "text-[9px] py-0.5 px-1.5 rounded border transition-all font-medium",
+                                  upscaleAfter === "upscale_4x"
+                                    ? "border-teal-500 bg-teal-500/10 text-teal-300"
+                                    : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                                )}
+                                onClick={() => setUpscaleAfter("upscale_4x")}
+                              >4x</button>
+                            </div>
+                          )}
                         </div>
-                        {upscaleAfter && (
-                          <div className="flex gap-2">
-                            <button
-                              className={cn(
-                                "flex-1 text-[11px] py-1.5 rounded-lg border transition-all font-medium",
-                                upscaleAfter === "upscale"
-                                  ? "border-teal-500 bg-teal-500/10 text-teal-300"
-                                  : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
-                              )}
-                              onClick={() => setUpscaleAfter("upscale")}
-                            >
-                              2x Scale
-                            </button>
-                            <button
-                              className={cn(
-                                "flex-1 text-[11px] py-1.5 rounded-lg border transition-all font-medium",
-                                upscaleAfter === "upscale_4x"
-                                  ? "border-teal-500 bg-teal-500/10 text-teal-300"
-                                  : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
-                              )}
-                              onClick={() => setUpscaleAfter("upscale_4x")}
-                            >
-                              4x Scale
-                            </button>
-                          </div>
-                        )}
+                        <Switch
+                          checked={upscaleAfter !== null}
+                          onCheckedChange={(checked) => setUpscaleAfter(checked ? "upscale" : null)}
+                        />
                       </div>
                     )}
 
                     <Separator className="bg-white/5" />
 
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
+                        <Label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
                         <button onClick={() => setShowAllFilters(!showAllFilters)} className="text-[10px] text-teal-500 hover:text-teal-400">
-                          {showAllFilters ? "Show less" : `All ${FILTER_PRESETS.length}`}
+                          {showAllFilters ? "Less" : `All ${FILTER_PRESETS.length}`}
                         </button>
                       </div>
-                      <div className="grid grid-cols-4 gap-1.5">
+                      <div className="grid grid-cols-6 gap-1">
                         {visibleFilters.map((p) => (
                           <Tooltip key={p.key}>
                             <TooltipTrigger asChild>
                               <motion.button
                                 whileTap={{ scale: 0.95 }}
                                 className={cn(
-                                  "relative rounded-lg border transition-all overflow-hidden h-14 group",
+                                  "relative rounded-md border transition-all overflow-hidden h-10 group",
                                   selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
                                 )}
                                 onClick={() => {
@@ -1062,17 +1055,17 @@ export default function Editor() {
                                 }}
                               >
                                 <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
-                                <div className="absolute inset-0 flex items-end p-1">
-                                  <span className="text-[9px] font-medium text-white drop-shadow-lg leading-tight">{p.name}</span>
+                                <div className="absolute inset-0 flex items-end p-0.5">
+                                  <span className="text-[7px] font-medium text-white drop-shadow-lg leading-tight truncate">{p.name}</span>
                                 </div>
                                 {p.premium && (
                                   <div className="absolute top-0.5 right-0.5">
-                                    <div className="w-2 h-2 rounded-full bg-amber-400" />
+                                    <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                                   </div>
                                 )}
                                 {selectedFilter === p.key && (
                                   <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="absolute top-0.5 left-0.5">
-                                    <CheckCircle2 className="w-3 h-3 text-teal-400" />
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-teal-400" />
                                   </motion.div>
                                 )}
                               </motion.button>
