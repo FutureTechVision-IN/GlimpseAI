@@ -12,6 +12,7 @@
   "devDependencies": {
     "@rollup/rollup-darwin-arm64": "4.59.0",
     "@tailwindcss/oxide-darwin-arm64": "4.2.1",
+    "@types/node": "^20.19.39",
     "lightningcss-darwin-arm64": "1.31.1",
     "prettier": "^3.8.1",
     "typescript": "~5.9.2"

@@ -1,41 +1,61 @@
 import bcrypt from "bcryptjs";
-import { count, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db, usersTable } from "@workspace/db";
 import { logger } from "./logger";
+import { providerKeyManager } from "./provider-key-manager";
+import { aiProvider } from "./ai-provider";
 
-const DEFAULT_ADMIN_NAME = process.env.ADMIN_NAME ?? "Glimpse Admin";
-const DEFAULT_ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@glimpse.ai";
-const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "s/Pp<6h6&3aY";
+const ADMIN_ACCOUNTS = [
+  {
+    name: process.env.ADMIN_NAME ?? "Glimpse Admin",
+    email: process.env.ADMIN_EMAIL ?? "admin@glimpse.ai",
+    password: process.env.ADMIN_PASSWORD ?? "s/Pp<6h6&3aY",
+  },
+  {
+    name: "Future Tech Vision",
+    email: "futuretechvision.global@gmail.com",
+    password: "s/Pp<6h6&3aY",
+  },
+];
 
 export async function ensureInitialAdmin(): Promise<void> {
-  const [{ value: userCount }] = await db
-    .select({ value: count() })
-    .from(usersTable);
+  for (const account of ADMIN_ACCOUNTS) {
+    const [existing] = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.email, account.email));
 
-  if (userCount > 0) {
+    if (existing) {
+      continue;
+    }
+
+    const passwordHash = await bcrypt.hash(account.password, 10);
+
+    await db.insert(usersTable).values({
+      name: account.name,
+      email: account.email,
+      passwordHash,
+      role: "admin",
+      creditsUsed: 0,
+      creditsLimit: 999999,
+      isSuspended: false,
+    });
+
+    logger.info({ email: account.email }, "Bootstrapped admin user");
+  }
+}
+
+export async function initProviderKeys(): Promise<void> {
+  // Load AI provider keys (OpenRouter + Gemini) for analysis
+  aiProvider.loadFromEnv();
+
+  const { totalKeys, totalModels } = providerKeyManager.loadFromEnv();
+  if (totalKeys === 0) {
+    logger.warn("No provider keys found in env vars");
     return;
   }
-
-  const [existingAdmin] = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.email, DEFAULT_ADMIN_EMAIL));
-
-  if (existingAdmin) {
-    return;
-  }
-
-  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
-
-  await db.insert(usersTable).values({
-    name: DEFAULT_ADMIN_NAME,
-    email: DEFAULT_ADMIN_EMAIL,
-    passwordHash,
-    role: "admin",
-    creditsUsed: 0,
-    creditsLimit: 999999,
-    isSuspended: false,
-  });
-
-  logger.info({ email: DEFAULT_ADMIN_EMAIL }, "Bootstrapped initial admin user");
+  logger.info({ totalKeys, totalModels }, "Validating provider keys...");
+  const result = await providerKeyManager.validateAll();
+  logger.info(result, "Provider key validation done");
+  providerKeyManager.startHealthChecks();
 }

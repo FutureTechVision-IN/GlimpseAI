@@ -25,3 +25,6 @@ Thumbs.db
 
 # Misc
 *.local
+
+# Key validation logs (may contain secrets)
+.key-validation-logs/

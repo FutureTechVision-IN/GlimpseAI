@@ -9,34 +9,44 @@ import {
   ListMediaJobsQueryParams,
   ListPresetsQueryParams,
 } from "@workspace/api-zod";
+import { enhanceImage } from "../lib/image-enhancer";
+import { aiProvider } from "../lib/ai-provider";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
-const ENHANCEMENT_DURATION_MAP: Record<string, number> = {
-  auto: 2000,
-  portrait: 3000,
-  skin: 2500,
-  lighting: 2000,
-  color: 1500,
-  background: 4000,
-  beauty: 3000,
-  upscale: 5000,
-  filter: 1000,
-  trim: 3000,
-  stabilize: 6000,
-  custom: 3000,
-};
-
+/**
+ * Convert a job row into a safe API response.
+ * processedUrl and thumbnailUrl are stored as raw base64 in DB.
+ * We prefix them with the data URI header so <img src=> works directly.
+ */
 function jobToResponse(j: typeof mediaJobsTable.$inferSelect) {
+  // Detect mime type from base64 header or default to jpeg
+  const guessMime = (b64: string | null): string => {
+    if (!b64) return "image/jpeg";
+    if (b64.startsWith("data:")) return "image/jpeg"; // already prefixed (shouldn't happen)
+    if (b64.startsWith("/9j/")) return "image/jpeg";
+    if (b64.startsWith("iVBOR")) return "image/png";
+    if (b64.startsWith("R0lGO")) return "image/gif";
+    if (b64.startsWith("UklGR")) return "image/webp";
+    return "image/jpeg";
+  };
+
+  const toDataUri = (b64: string | null): string | null => {
+    if (!b64) return null;
+    if (b64.startsWith("data:")) return b64; // already a data URI
+    return `data:${guessMime(b64)};base64,${b64}`;
+  };
+
   return {
     id: j.id,
     userId: j.userId,
     mediaType: j.mediaType,
     status: j.status,
     filename: j.filename,
-    originalUrl: j.originalUrl,
-    processedUrl: j.processedUrl,
-    thumbnailUrl: j.thumbnailUrl,
+    originalUrl: toDataUri(j.base64Data) ?? j.originalUrl,
+    processedUrl: toDataUri(j.processedUrl),
+    thumbnailUrl: toDataUri(j.thumbnailUrl),
     enhancementType: j.enhancementType,
     presetId: j.presetId,
     errorMessage: j.errorMessage,
@@ -47,6 +57,7 @@ function jobToResponse(j: typeof mediaJobsTable.$inferSelect) {
   };
 }
 
+// ─── Upload ───────────────────────────────────────────────────
 router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const parsed = UploadMediaBody.safeParse(req.body);
   if (!parsed.success) {
@@ -78,6 +89,7 @@ router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise
   res.status(201).json(jobToResponse(job));
 });
 
+// ─── Enhance (REAL processing with sharp) ─────────────────────
 router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const parsed = EnhanceMediaBody.safeParse(req.body);
   if (!parsed.success) {
@@ -85,7 +97,7 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     return;
   }
 
-  const { jobId, enhancementType, presetId } = parsed.data;
+  const { jobId, enhancementType, presetId, settings } = parsed.data;
 
   const [job] = await db.select().from(mediaJobsTable)
     .where(and(eq(mediaJobsTable.id, jobId), eq(mediaJobsTable.userId, req.userId!)));
@@ -95,33 +107,61 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     return;
   }
 
+  if (!job.base64Data) {
+    res.status(400).json({ error: "No image data available for this job" });
+    return;
+  }
+
   const startTime = Date.now();
 
+  // Mark processing
   await db.update(mediaJobsTable)
     .set({ status: "processing", enhancementType, presetId: presetId ?? null })
     .where(eq(mediaJobsTable.id, jobId));
 
+  // Debit credit
   await db.update(usersTable)
     .set({ creditsUsed: sql`${usersTable.creditsUsed} + 1` })
     .where(eq(usersTable.id, req.userId!));
 
-  const processingTime = ENHANCEMENT_DURATION_MAP[enhancementType] ?? 2000;
-  const userId = req.userId!;
-  setTimeout(async () => {
-    const processedUrl = job.base64Data ?? null;
+  // Respond immediately with "processing" status
+  const [processing] = await db.select().from(mediaJobsTable).where(eq(mediaJobsTable.id, jobId));
+  res.json(jobToResponse(processing));
+
+  // ── Background: real image enhancement ──
+  try {
+    // Detect mime type for sharp
+    const rawB64 = job.base64Data;
+    let mimeType = "image/jpeg";
+    if (rawB64.startsWith("iVBOR")) mimeType = "image/png";
+    else if (rawB64.startsWith("UklGR")) mimeType = "image/webp";
+
+    const result = await enhanceImage(rawB64, mimeType, {
+      enhancementType,
+      settings: settings as Record<string, unknown> | undefined,
+    });
+
+    // Store raw base64 in DB (no prefix — jobToResponse adds it)
     await db.update(mediaJobsTable).set({
       status: "completed",
-      processedUrl,
-      thumbnailUrl: processedUrl,
+      processedUrl: result.base64,
+      thumbnailUrl: result.base64,
       processingTimeMs: Date.now() - startTime,
       completedAt: new Date(),
     }).where(eq(mediaJobsTable.id, jobId));
-  }, processingTime);
 
-  const [updated] = await db.select().from(mediaJobsTable).where(eq(mediaJobsTable.id, jobId));
-  res.json(jobToResponse(updated));
+    logger.info({ jobId, type: enhancementType, ms: Date.now() - startTime }, "Enhancement completed");
+  } catch (err) {
+    logger.error({ jobId, err }, "Enhancement failed");
+    await db.update(mediaJobsTable).set({
+      status: "failed",
+      errorMessage: err instanceof Error ? err.message : "Enhancement failed",
+      processingTimeMs: Date.now() - startTime,
+    }).where(eq(mediaJobsTable.id, jobId));
+  }
 });
 
+// ─── List jobs ────────────────────────────────────────────────
 router.get("/media/jobs", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const params = ListMediaJobsQueryParams.safeParse(req.query);
   const status = params.success ? params.data.status : undefined;
@@ -140,6 +180,7 @@ router.get("/media/jobs", requireAuth, async (req: AuthRequest, res): Promise<vo
   res.json(jobs.map(jobToResponse));
 });
 
+// ─── Get single job ───────────────────────────────────────────
 router.get("/media/jobs/:id", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
@@ -159,6 +200,7 @@ router.get("/media/jobs/:id", requireAuth, async (req: AuthRequest, res): Promis
   res.json(jobToResponse(job));
 });
 
+// ─── Presets ──────────────────────────────────────────────────
 router.get("/media/presets", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const params = ListPresetsQueryParams.safeParse(req.query);
   const type = params.success ? params.data.type : undefined;
@@ -180,6 +222,7 @@ router.get("/media/presets", requireAuth, async (req: AuthRequest, res): Promise
   })));
 });
 
+// ─── Stats ────────────────────────────────────────────────────
 router.get("/media/stats", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const allJobs = await db.select().from(mediaJobsTable)
     .where(eq(mediaJobsTable.userId, req.userId!))
