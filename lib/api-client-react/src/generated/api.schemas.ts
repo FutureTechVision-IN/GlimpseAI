@@ -213,6 +213,26 @@ export interface MediaStats {
   recentActivity: MediaJob[];
 }
 
+export interface AnalyzeMediaBody {
+  /** Raw base64 encoded image data */
+  base64Data: string;
+  /** MIME type of the image */
+  mimeType?: string;
+}
+
+export type AnalysisResultSuggestedSettings = { [key: string]: unknown };
+
+export interface AnalysisResult {
+  description: string;
+  suggestedEnhancement: string;
+  /** @nullable */
+  suggestedFilter?: string | null;
+  detectedSubjects?: string[];
+  issues?: string[];
+  suggestedSettings?: AnalysisResultSuggestedSettings;
+  confidence: number;
+}
+
 export interface Plan {
   id: number;
   name: string;

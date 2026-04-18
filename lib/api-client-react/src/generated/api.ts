@@ -22,6 +22,8 @@ import type {
   AdminPaymentsResponse,
   AdminStats,
   AdminUsersResponse,
+  AnalysisResult,
+  AnalyzeMediaBody,
   AuthResponse,
   CreateOrderBody,
   CreatePlanBody,
@@ -1487,6 +1489,92 @@ export function useGetMediaStats<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary AI-powered image analysis and enhancement suggestions
+ */
+export const getAnalyzeMediaUrl = () => {
+  return `/api/media/analyze`;
+};
+
+export const analyzeMedia = async (
+  analyzeMediaBody: AnalyzeMediaBody,
+  options?: RequestInit,
+): Promise<AnalysisResult> => {
+  return customFetch<AnalysisResult>(getAnalyzeMediaUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(analyzeMediaBody),
+  });
+};
+
+export const getAnalyzeMediaMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof analyzeMedia>>,
+    TError,
+    { data: BodyType<AnalyzeMediaBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof analyzeMedia>>,
+  TError,
+  { data: BodyType<AnalyzeMediaBody> },
+  TContext
+> => {
+  const mutationKey = ["analyzeMedia"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof analyzeMedia>>,
+    { data: BodyType<AnalyzeMediaBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return analyzeMedia(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AnalyzeMediaMutationResult = NonNullable<
+  Awaited<ReturnType<typeof analyzeMedia>>
+>;
+export type AnalyzeMediaMutationBody = BodyType<AnalyzeMediaBody>;
+export type AnalyzeMediaMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary AI-powered image analysis and enhancement suggestions
+ */
+export const useAnalyzeMedia = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof analyzeMedia>>,
+    TError,
+    { data: BodyType<AnalyzeMediaBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof analyzeMedia>>,
+  TError,
+  { data: BodyType<AnalyzeMediaBody> },
+  TContext
+> => {
+  return useMutation(getAnalyzeMediaMutationOptions(options));
+};
 
 /**
  * @summary List available subscription plans

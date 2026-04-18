@@ -333,6 +333,24 @@ export const GetMediaStatsResponse = zod.object({
 });
 
 /**
+ * @summary AI-powered image analysis and enhancement suggestions
+ */
+export const AnalyzeMediaBody = zod.object({
+  base64Data: zod.string().describe("Raw base64 encoded image data"),
+  mimeType: zod.string().optional().describe("MIME type of the image"),
+});
+
+export const AnalyzeMediaResponse = zod.object({
+  description: zod.string(),
+  suggestedEnhancement: zod.string(),
+  suggestedFilter: zod.string().nullish(),
+  detectedSubjects: zod.array(zod.string()).optional(),
+  issues: zod.array(zod.string()).optional(),
+  suggestedSettings: zod.record(zod.string(), zod.unknown()).optional(),
+  confidence: zod.number(),
+});
+
+/**
  * @summary List available subscription plans
  */
 export const ListPlansResponseItem = zod.object({
