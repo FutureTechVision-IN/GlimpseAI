@@ -22,13 +22,6 @@ const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
   fresh: (p) => p.modulate({ saturation: 1.15, brightness: 1.08 }).gamma(0.95).normalize().sharpen({ sigma: 0.5 }),
   retro: (p) => p.modulate({ saturation: 0.65, brightness: 0.98 }).tint({ r: 200, g: 180, b: 150 }).gamma(1.18).sharpen({ sigma: 0.4 }),
   dramatic: (p) => p.normalize().sharpen({ sigma: 2.0, m1: 2.5, m2: 1.2 }).modulate({ saturation: 1.1, brightness: 0.95 }).gamma(1.15),
-  warmtone: (p) => p.modulate({ saturation: 1.1, brightness: 1.03 }).tint({ r: 245, g: 215, b: 185 }).gamma(1.04).sharpen({ sigma: 0.4 }),
-  cooltone: (p) => p.modulate({ saturation: 0.95, brightness: 1.02 }).tint({ r: 170, g: 190, b: 220 }).gamma(1.06).sharpen({ sigma: 0.5 }),
-  pastel: (p) => p.modulate({ saturation: 0.6, brightness: 1.12 }).gamma(0.88).sharpen({ sigma: 0.3 }),
-  noir: (p) => p.grayscale().normalize().gamma(1.4).sharpen({ sigma: 1.5, m1: 2.0, m2: 1.0 }).modulate({ brightness: 0.92 }),
-  sunset: (p) => p.modulate({ saturation: 1.2, brightness: 1.05 }).tint({ r: 255, g: 180, b: 130 }).gamma(1.06).sharpen({ sigma: 0.5 }),
-  arctic: (p) => p.modulate({ saturation: 0.85, brightness: 1.08 }).tint({ r: 200, g: 220, b: 250 }).gamma(1.02).sharpen({ sigma: 0.6 }),
-  emerald: (p) => p.modulate({ saturation: 1.15, brightness: 1.02 }).tint({ r: 180, g: 230, b: 190 }).gamma(1.04).sharpen({ sigma: 0.5 }),
 };
 
 /**
@@ -68,74 +61,6 @@ export async function enhanceImage(
         const w = meta.width ?? 800;
         const h = meta.height ?? 600;
         pipeline = pipeline.resize(w * 2, h * 2, { kernel: sharp.kernel.lanczos3, fit: "fill" }).sharpen({ sigma: 1.0, m1: 1.5, m2: 0.7 });
-        break;
-      }
-      case "upscale_4x": {
-        const w4 = meta.width ?? 800;
-        const h4 = meta.height ?? 600;
-        // Two-pass upscale: 2x → sharpen → 2x → sharpen for higher quality 4x
-        const intermediate = await sharp(inputBuffer)
-          .resize(w4 * 2, h4 * 2, { kernel: sharp.kernel.lanczos3, fit: "fill" })
-          .sharpen({ sigma: 0.8, m1: 1.0, m2: 0.5 })
-          .toBuffer();
-        pipeline = sharp(intermediate)
-          .resize(w4 * 4, h4 * 4, { kernel: sharp.kernel.lanczos3, fit: "fill" })
-          .sharpen({ sigma: 1.2, m1: 1.8, m2: 0.8 })
-          .modulate({ brightness: 1.01 });
-        break;
-      }
-      case "blur_background": {
-        // Portrait background blur: create heavily blurred version, then composite
-        // with the sharper center region to simulate depth-of-field
-        const w_bb = meta.width ?? 800;
-        const h_bb = meta.height ?? 600;
-        const blurIntensity = typeof s.blurIntensity === "number" ? s.blurIntensity : 12;
-        const blurredBg = await sharp(inputBuffer)
-          .blur(blurIntensity)
-          .toBuffer();
-        // Create elliptical center-focus mask
-        const cx = Math.round(w_bb / 2);
-        const cy = Math.round(h_bb * 0.42); // slightly above center for portrait framing
-        const rx = Math.round(w_bb * 0.32);
-        const ry = Math.round(h_bb * 0.48);
-        const maskSvg = Buffer.from(
-          `<svg width="${w_bb}" height="${h_bb}"><defs>` +
-          `<radialGradient id="g" cx="50%" cy="42%" rx="${(rx / w_bb) * 100}%" ry="${(ry / h_bb) * 100}%">` +
-          `<stop offset="0%" stop-color="white"/>` +
-          `<stop offset="60%" stop-color="white"/>` +
-          `<stop offset="100%" stop-color="black"/>` +
-          `</radialGradient></defs>` +
-          `<rect width="${w_bb}" height="${h_bb}" fill="url(#g)"/></svg>`
-        );
-        const mask = await sharp(maskSvg).resize(w_bb, h_bb).grayscale().toBuffer();
-        // Composite: sharp original where mask is white, blurred where black
-        pipeline = sharp(inputBuffer)
-          .sharpen({ sigma: 0.8, m1: 0.6, m2: 0.3 })
-          .modulate({ brightness: 1.02, saturation: 1.05 })
-          .composite([
-            { input: blurredBg, blend: "over" },
-            { input: mask, blend: "dest-in" },
-          ]);
-        // Simplified: since sharp composite is limited, use a simulated approach
-        // Apply strong vignette + slight subject sharpening
-        pipeline = sharp(inputBuffer)
-          .sharpen({ sigma: 1.2, m1: 1.5, m2: 0.6 })
-          .modulate({ brightness: 1.03, saturation: 1.05 })
-          .gamma(1.04);
-        break;
-      }
-      case "posture": {
-        // Posture/pose adjustment: apply subtle perspective correction + enhancement
-        // Since true pose transfer requires ML models, we simulate it with:
-        // - Perspective/geometry correction (normalize tilt)
-        // - Sharpening for detail clarity
-        // - Subtle warm tone for flattering look
-        pipeline = pipeline
-          .normalize()
-          .sharpen({ sigma: 1.0, m1: 1.2, m2: 0.5 })
-          .modulate({ brightness: 1.03, saturation: 1.05 })
-          .gamma(1.06)
-          .tint({ r: 240, g: 225, b: 215 });
         break;
       }
       case "color": {
