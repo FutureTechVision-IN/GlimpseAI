@@ -230,9 +230,9 @@ class AIProviderService {
       const brightness = (rMean + gMean + bMean) / 3;
 
       // Std dev = proxy for contrast
-      const rStd = ch[0]?.std ?? 50;
-      const gStd = ch[1]?.std ?? 50;
-      const bStd = ch[2]?.std ?? 50;
+      const rStd = ch[0]?.stdev ?? 50;
+      const gStd = ch[1]?.stdev ?? 50;
+      const bStd = ch[2]?.stdev ?? 50;
       const contrast = (rStd + gStd + bStd) / 3;
 
       // Color temperature: R-B differential

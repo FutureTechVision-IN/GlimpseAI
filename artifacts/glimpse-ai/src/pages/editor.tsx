@@ -220,6 +220,18 @@ function trackAiEvent(evt: AiAnalyticsEvent) {
     if (log.length > 500) log.splice(0, log.length - 500);
     localStorage.setItem(AI_ANALYTICS_KEY, JSON.stringify(log));
   } catch { /* quota exceeded — silently skip */ }
+
+  // Also POST to server-side self-learning feedback loop (fire-and-forget)
+  if (evt.action === "applied" || evt.action === "dismissed") {
+    const token = localStorage.getItem("glimpse_token");
+    if (token) {
+      fetch("/api/media/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ enhancement: evt.enhancement, action: evt.action }),
+      }).catch(() => { /* non-critical, ignore network errors */ });
+    }
+  }
 }
 
 function inferImageType(subjects: string[]): string {
