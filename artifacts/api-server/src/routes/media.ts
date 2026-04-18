@@ -9,7 +9,7 @@ import {
   ListMediaJobsQueryParams,
   ListPresetsQueryParams,
 } from "@workspace/api-zod";
-import { enhanceImage } from "../lib/image-enhancer";
+import { enhanceImage, createThumbnail } from "../lib/image-enhancer";
 import { aiProvider } from "../lib/ai-provider";
 import { logger } from "../lib/logger";
 
@@ -220,6 +220,39 @@ router.get("/media/presets", requireAuth, async (req: AuthRequest, res): Promise
     thumbnailUrl: p.thumbnailUrl,
     settings: p.settings,
   })));
+});
+
+// ─── AI Analyze ───────────────────────────────────────────────
+router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const { base64Data, mimeType } = req.body;
+  if (!base64Data || typeof base64Data !== "string") {
+    res.status(400).json({ error: "base64Data is required" });
+    return;
+  }
+
+  try {
+    // Create a small thumbnail for efficient AI analysis
+    const thumb = await createThumbnail(base64Data);
+    const result = await aiProvider.analyzeImage(thumb.base64, thumb.mimeType);
+
+    if (result) {
+      res.json(result);
+    } else {
+      // Fallback when AI providers are unavailable
+      res.json({
+        description: "Image uploaded successfully. AI analysis is temporarily unavailable.",
+        suggestedEnhancement: "auto",
+        suggestedFilter: null,
+        detectedSubjects: [],
+        issues: [],
+        suggestedSettings: {},
+        confidence: 0.3,
+      });
+    }
+  } catch (err) {
+    logger.error({ err }, "AI analysis endpoint error");
+    res.status(500).json({ error: "Analysis failed" });
+  }
 });
 
 // ─── Stats ────────────────────────────────────────────────────

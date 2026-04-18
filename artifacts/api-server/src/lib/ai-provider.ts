@@ -16,7 +16,10 @@ interface ProviderKey {
 interface AnalysisResult {
   description: string;
   suggestedEnhancement: string;
+  suggestedFilter: string | null;
   detectedSubjects: string[];
+  issues: string[];
+  suggestedSettings: Record<string, number>;
   confidence: number;
 }
 
@@ -120,15 +123,15 @@ class AIProviderService {
     pk.lastUsed = Date.now();
   }
 
-  /** Analyze an image using vision-capable model */
-  async analyzeImage(base64Data: string, mimeType: string): Promise<AnalysisResult | null> {
+  /** Analyze an image using vision-capable model. Expects a pre-resized thumbnail base64. */
+  async analyzeImage(thumbnailBase64: string, mimeType: string): Promise<AnalysisResult | null> {
     // Try OpenRouter first (primary), then Gemini (fallback)
     logger.info("AI analysis: trying OpenRouter first (priority provider)");
-    const result = await this.tryOpenRouterAnalysis(base64Data, mimeType);
+    const result = await this.tryOpenRouterAnalysis(thumbnailBase64, mimeType);
     if (result) return result;
 
     logger.info("AI analysis: OpenRouter unavailable, falling back to Gemini");
-    const geminiResult = await this.tryGeminiAnalysis(base64Data, mimeType);
+    const geminiResult = await this.tryGeminiAnalysis(thumbnailBase64, mimeType);
     if (geminiResult) return geminiResult;
 
     logger.warn("All AI providers failed for analysis, using defaults");
@@ -160,19 +163,30 @@ class AIProviderService {
               content: [
                 {
                   type: "image_url",
-                  image_url: { url: `data:${mimeType};base64,${base64Data.substring(0, 500)}` },
+                  image_url: { url: `data:${mimeType};base64,${base64Data}` },
                 },
                 {
                   type: "text",
-                  text: "Analyze this image briefly. Return JSON only: {\n\"description\": \"brief description\",\n\"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin\",\n\"detectedSubjects\": [\"face\", \"landscape\", etc],\n\"confidence\": 0.0-1.0\n}",
+                  text: `You are GlimpseAI, a professional photo editor AI. Analyze this image and suggest the best enhancement.
+Return ONLY valid JSON (no markdown fences):
+{
+  "description": "2-sentence description of the image content and quality",
+  "suggestedEnhancement": "auto|portrait|color|lighting|upscale|beauty|background|skin",
+  "suggestedFilter": "cinematic|vivid|portrait|bw|film|hdr|vintage|vibrant|filmnoir|goldenhour|moody|fresh|retro|dramatic|warmth|coolbreeze|null",
+  "detectedSubjects": ["face", "landscape", "animal", "architecture", "food", "text", "night", "macro"],
+  "issues": ["dark", "blurry", "low-res", "oversaturated", "underexposed", "noisy", "none"],
+  "suggestedSettings": { "brightness": 0, "contrast": 0, "saturation": 0, "sharpness": 0, "temperature": 0 },
+  "confidence": 0.0-1.0
+}
+Choose suggestedSettings values from -50 to +50 (0 = no change). Pick the single best enhancement type and filter.`,
                 },
               ],
             },
           ],
-          max_tokens: 200,
+          max_tokens: 400,
           temperature: 0.1,
         }),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {
@@ -191,7 +205,10 @@ class AIProviderService {
         return {
           description: parsed.description || "Image uploaded",
           suggestedEnhancement: parsed.suggestedEnhancement || "auto",
+          suggestedFilter: parsed.suggestedFilter || null,
           detectedSubjects: parsed.detectedSubjects || [],
+          issues: parsed.issues || [],
+          suggestedSettings: parsed.suggestedSettings || {},
           confidence: parsed.confidence || 0.5,
         };
       }
@@ -214,13 +231,13 @@ class AIProviderService {
         body: JSON.stringify({
           contents: [{
             parts: [
-              { inlineData: { mimeType, data: base64Data.substring(0, 500) } },
-              { text: "Analyze this image briefly. Return JSON only: {\"description\": \"brief\", \"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin\", \"detectedSubjects\": [], \"confidence\": 0.0-1.0}" },
+              { inlineData: { mimeType, data: base64Data } },
+              { text: 'You are GlimpseAI, a professional photo editor AI. Analyze this image and suggest the best enhancement. Return ONLY valid JSON: {"description": "2-sentence description", "suggestedEnhancement": "auto|portrait|color|lighting|upscale|beauty|background|skin", "suggestedFilter": "cinematic|vivid|portrait|bw|film|hdr|vintage|vibrant|filmnoir|goldenhour|moody|fresh|retro|dramatic|warmth|coolbreeze|null", "detectedSubjects": [], "issues": ["dark","blurry","low-res","oversaturated","underexposed","noisy","none"], "suggestedSettings": {"brightness": 0, "contrast": 0, "saturation": 0, "sharpness": 0, "temperature": 0}, "confidence": 0.0-1.0}' },
             ],
           }],
-          generationConfig: { maxOutputTokens: 200, temperature: 0.1 },
+          generationConfig: { maxOutputTokens: 400, temperature: 0.1 },
         }),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(15000),
       });
 
       if (!response.ok) {
@@ -238,7 +255,10 @@ class AIProviderService {
         return {
           description: parsed.description || "Image uploaded",
           suggestedEnhancement: parsed.suggestedEnhancement || "auto",
+          suggestedFilter: parsed.suggestedFilter || null,
           detectedSubjects: parsed.detectedSubjects || [],
+          issues: parsed.issues || [],
+          suggestedSettings: parsed.suggestedSettings || {},
           confidence: parsed.confidence || 0.5,
         };
       }
