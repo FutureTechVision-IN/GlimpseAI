@@ -115,7 +115,7 @@ async function toneMap(
     pipeline = pipeline.gamma(g);
   }
 
-  return pipeline.toBuffer();
+  return Buffer.from(await pipeline.toBuffer());
 }
 
 // Named filter presets (server-side sharp equivalents)
@@ -189,7 +189,7 @@ export async function enhanceImage(
         }, "Auto-enhance: image analysis");
 
         // Step 1: Tone mapping — recover dynamic range
-        let toneMapped = inputBuffer;
+        let toneMapped: Buffer = inputBuffer;
         if (stats.isDark) {
           toneMapped = await toneMap(inputBuffer, 28, 0);  // Heavy shadow lift
         } else if (stats.isBright) {
@@ -392,7 +392,7 @@ export async function enhanceImage(
         const lightStats = await analyzeImageStats(inputBuffer);
 
         // Multi-pass tone mapping
-        let lightBuf = inputBuffer;
+        let lightBuf: Buffer = inputBuffer;
         if (lightStats.isDark) {
           lightBuf = await toneMap(inputBuffer, 35, 0);
         } else if (lightStats.isBright) {

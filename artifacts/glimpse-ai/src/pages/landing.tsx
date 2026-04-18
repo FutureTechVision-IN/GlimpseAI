@@ -152,8 +152,8 @@ function TestimonialCarousel() {
   );
 }
 
-// --- Before/After Slider — uses a single source image with CSS transforms ---
-function BeforeAfterSlider({ src }: { src: string }) {
+// --- Before/After Slider — uses actual before/after images for real comparison ---
+function BeforeAfterSlider({ beforeSrc, afterSrc }: { beforeSrc: string; afterSrc: string }) {
   const [sliderPosition, setSliderPosition] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
@@ -234,26 +234,24 @@ function BeforeAfterSlider({ src }: { src: string }) {
       onMouseUp={() => setIsDragging(false)}
       onMouseLeave={() => setIsDragging(false)}
     >
-      {/* "Before" — same image degraded with CSS filters */}
+      {/* "Before" — actual unprocessed image */}
       <img
-        src={src}
+        src={beforeSrc}
         alt="Before"
         draggable={false}
         className="absolute inset-0 w-full h-full object-cover"
-        style={{ filter: "grayscale(0.4) contrast(0.8) brightness(0.72) saturate(0.55)" }}
       />
 
-      {/* "After (AI Enhanced)" — original vibrant image revealed via clipPath */}
+      {/* "After (AI Enhanced)" — actual enhanced image revealed via clipPath */}
       <div
         className="absolute inset-0 w-full h-full overflow-hidden"
         style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
       >
         <img
-          src={src}
+          src={afterSrc}
           alt="AI Enhanced"
           draggable={false}
           className="absolute inset-0 w-full h-full object-cover"
-          style={{ filter: "contrast(1.08) saturate(1.18) brightness(1.06)" }}
         />
       </div>
 
@@ -418,7 +416,7 @@ export default function Landing() {
               transition={{ duration: 1, delay: 0.55, ease }}
               className="mt-16 max-w-5xl mx-auto"
             >
-              <BeforeAfterSlider src="/hero-after.png" />
+              <BeforeAfterSlider beforeSrc="/hero-before.png" afterSrc="/hero-after.png" />
             </motion.div>
           </div>
         </section>

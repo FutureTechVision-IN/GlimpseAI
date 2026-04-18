@@ -809,11 +809,11 @@ export default function Editor() {
         <div className="flex flex-col lg:flex-row h-full min-h-[calc(100vh-4rem)]">
 
           {/* Sidebar */}
-          <aside className="w-full lg:w-80 xl:w-96 border-r border-white/10 bg-zinc-950 flex flex-col">
-            <div className="p-4 border-b border-white/10">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="font-semibold text-lg flex items-center gap-2">
-                  <Settings2 className="w-5 h-5 text-teal-500" />
+          <aside className="w-full lg:w-72 xl:w-80 border-r border-white/10 bg-zinc-950 flex flex-col">
+            <div className="p-3 border-b border-white/10">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="font-semibold text-base flex items-center gap-2">
+                  <Settings2 className="w-4 h-4 text-teal-500" />
                   Editor
                 </h2>
                 <button onClick={() => setShowOnboarding(true)} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors" title="Show walkthrough">?</button>
@@ -830,7 +830,7 @@ export default function Editor() {
             </div>
 
             <ScrollArea className="flex-1">
-              <div className="p-4">
+              <div className="p-3">
 
                 {/* AI Suggestion Banner */}
                 <AnimatePresence>
@@ -978,10 +978,10 @@ export default function Editor() {
                                 }}
                               >
                                 <div className={cn(
-                                  "w-7 h-7 rounded-md flex items-center justify-center shrink-0 transition-colors",
+                                  "w-7 h-7 rounded-md flex items-center justify-center shrink-0 transition-colors [&_svg]:w-3.5 [&_svg]:h-3.5",
                                   enhancementType === p.type && !selectedFilter ? "bg-teal-500/20 text-teal-400" : "bg-zinc-800 text-zinc-400",
                                 )}>
-                                  {React.cloneElement(p.icon as React.ReactElement, { className: "w-3.5 h-3.5" })}
+                                  {p.icon}
                                 </div>
                                 <p className="text-[9px] font-medium leading-tight truncate w-full">{p.label}</p>
                               </motion.button>
@@ -1327,15 +1327,15 @@ export default function Editor() {
             </ScrollArea>
 
             {/* Process button */}
-            <div className="p-4 border-t border-white/10 space-y-3">
+            <div className="p-3 border-t border-white/10 space-y-2">
               <AnimatePresence>
                 {processStage !== "idle" && (
                   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-                    className={cn("flex items-center gap-2 text-sm", stageInfo.colorClass)}>
-                    {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-4 h-4 animate-spin" />}
-                    {processStage === "completed" && <CheckCircle2 className="w-4 h-4" />}
-                    {processStage === "failed"    && <AlertCircle  className="w-4 h-4" />}
-                    <span>{stageInfo.label}</span>
+                    className={cn("flex items-center gap-2 text-xs", stageInfo.colorClass)}>
+                    {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    {processStage === "completed" && <CheckCircle2 className="w-3.5 h-3.5" />}
+                    {processStage === "failed"    && <AlertCircle  className="w-3.5 h-3.5" />}
+                    <span className="text-xs">{stageInfo.label}</span>
                     {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">{upscaleAfter ? "step 1/3" : "step 1/2"}</span>}
                     {processStage === "processing" && <span className="text-xs text-zinc-500 ml-auto">{upscaleChainRef.current ? (upscaleAfter ? "step 3/3 — upscaling" : "step 2/2") : (upscaleAfter ? "step 2/3 — enhancing" : "step 2/2")}</span>}
                   </motion.div>
@@ -1356,7 +1356,7 @@ export default function Editor() {
 
           {/* Main Preview */}
           <main className="flex-1 bg-zinc-900 relative flex flex-col">
-            <div className="flex-1 flex items-center justify-center p-8 overflow-hidden">
+            <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
               {!file ? (
                 <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full">
                   <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-all cursor-pointer relative overflow-hidden group">
@@ -1508,15 +1508,15 @@ export default function Editor() {
                     {isCompleted && currentJob?.processedUrl && !showCompare ? (
                       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                         {mediaType === "video"
-                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[80vh] object-contain" />
-                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[80vh] object-contain" />
+                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[68vh] object-contain" />
+                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[68vh] object-contain" />
                         }
                       </motion.div>
                     ) : (
                       mediaType === "video"
-                        ? <video src={previewUrl} controls className="max-w-full max-h-[80vh] object-contain" />
+                        ? <video src={previewUrl} controls className="max-w-full max-h-[68vh] object-contain" />
                         : <img src={previewUrl} alt="Original"
-                            className="max-w-full max-h-[80vh] object-contain transition-all duration-200"
+                            className="max-w-full max-h-[68vh] object-contain transition-all duration-200"
                             style={isProcessing ? { opacity: 0.5 } : previewStyle} />
                     )}
                   </div>
