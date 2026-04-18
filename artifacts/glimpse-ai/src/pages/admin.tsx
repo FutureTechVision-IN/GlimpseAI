@@ -54,7 +54,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+  XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend
 } from "recharts";
 
 type AdminSection =
@@ -198,7 +198,7 @@ function Overview() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#71717a" }} tickFormatter={d => d.slice(5)} />
                   <YAxis tick={{ fontSize: 10, fill: "#71717a" }} allowDecimals={false} />
-                  <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} labelStyle={{ color: "#a1a1aa" }} itemStyle={{ color: "#e4e4e7" }} />
+                  <RechartsTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} labelStyle={{ color: "#a1a1aa" }} itemStyle={{ color: "#e4e4e7" }} />
                   <Legend wrapperStyle={{ fontSize: 12, color: "#a1a1aa" }} />
                   <Area type="monotone" dataKey="jobs" name="Jobs" stroke="#a855f7" fill="url(#gJobs)" strokeWidth={2} dot={false} />
                   <Area type="monotone" dataKey="signups" name="Signups" stroke="#3b82f6" fill="url(#gSignups)" strokeWidth={2} dot={false} />
@@ -222,7 +222,7 @@ function Overview() {
                     <Pie data={pieData} dataKey="value" innerRadius={40} outerRadius={60} paddingAngle={3} strokeWidth={0}>
                       {pieData.map((d, i) => <Cell key={i} fill={d.color} />)}
                     </Pie>
-                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
+                    <RechartsTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="space-y-2">
@@ -254,7 +254,7 @@ function Overview() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#71717a" }} tickFormatter={d => d.slice(5)} />
                   <YAxis tick={{ fontSize: 10, fill: "#71717a" }} allowDecimals={false} />
-                  <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} labelStyle={{ color: "#a1a1aa" }} itemStyle={{ color: "#e4e4e7" }} />
+                  <RechartsTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} labelStyle={{ color: "#a1a1aa" }} itemStyle={{ color: "#e4e4e7" }} />
                   <Bar dataKey="photos" name="Photos" fill="#3b82f6" radius={[2, 2, 0, 0]} />
                   <Bar dataKey="videos" name="Videos" fill="#8b5cf6" radius={[2, 2, 0, 0]} />
                 </BarChart>
@@ -1307,7 +1307,7 @@ function AnalyticsSection() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                     <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#71717a" }} tickFormatter={d => d.slice(5)} />
                     <YAxis tick={{ fontSize: 10, fill: "#71717a" }} allowDecimals={false} />
-                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
+                    <RechartsTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
                     <Legend wrapperStyle={{ fontSize: 12, color: "#a1a1aa" }} />
                     <Area type="monotone" dataKey="totalEnhancements" name="Enhancements" stroke="#a855f7" fill="url(#gEnhance)" strokeWidth={2} dot={false} />
                     <Area type="monotone" dataKey="uniqueUsers" name="Active Users" stroke="#3b82f6" fill="url(#gUsers)" strokeWidth={2} dot={false} />
@@ -1328,7 +1328,7 @@ function AnalyticsSection() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                     <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#71717a" }} tickFormatter={d => d.slice(5)} />
                     <YAxis tick={{ fontSize: 10, fill: "#71717a" }} />
-                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
+                    <RechartsTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
                     <Bar dataKey="avgProcessingMs" name="Avg ms" fill="#14b8a6" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -1390,7 +1390,7 @@ function AnalyticsSection() {
                         <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
+                    <RechartsTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
@@ -1520,6 +1520,7 @@ interface AiEvt {
 
 function AiInsightsSection() {
   const [events, setEvents] = useState<AiEvt[]>([]);
+  const { toast } = useToast();
   useEffect(() => {
     try {
       const raw = localStorage.getItem("glimpse_ai_analytics");
@@ -1551,6 +1552,24 @@ function AiInsightsSection() {
   const byType = [...typeMap.entries()].sort((a, b) => b[1].total - a[1].total)
     .map(([type, d]) => ({ type, ...d, rate: d.total > 0 ? Math.round((d.applied / d.total) * 100) : 0 }));
 
+  // Enhancement classification: critical (high acceptance), optional (medium), skipped (low)
+  const enhBreakdown = new Map<string, { applied: number; dismissed: number; ignored: number; total: number }>();
+  events.forEach(e => {
+    const cur = enhBreakdown.get(e.enhancement) ?? { applied: 0, dismissed: 0, ignored: 0, total: 0 };
+    cur.total++;
+    if (e.action === "applied") cur.applied++;
+    if (e.action === "dismissed") cur.dismissed++;
+    if (e.action === "ignored") cur.ignored++;
+    enhBreakdown.set(e.enhancement, cur);
+  });
+  const classifiedEnhancements = [...enhBreakdown.entries()]
+    .map(([name, d]) => {
+      const rate = d.total > 0 ? Math.round((d.applied / d.total) * 100) : 0;
+      const tier = rate >= 60 ? "critical" as const : rate >= 30 ? "optional" as const : "skipped" as const;
+      return { name, ...d, rate, tier };
+    })
+    .sort((a, b) => b.total - a.total);
+
   // Pie data
   const PIE = [
     { name: "Applied", value: applied.length },
@@ -1559,9 +1578,22 @@ function AiInsightsSection() {
   ].filter(d => d.value > 0);
   const PIE_COLORS = ["#10b981", "#ef4444", "#6b7280"];
 
+  const handleClearData = () => {
+    if (!confirm("Clear all AI analytics data? This cannot be undone.")) return;
+    localStorage.removeItem("glimpse_ai_analytics");
+    setEvents([]);
+    toast({ title: "AI analytics data cleared" });
+  };
+
   return (
     <div className="space-y-6">
-      <SectionHeader title="AI Insights" description="Analytics from AI suggestion interactions in the editor" />
+      <SectionHeader title="AI Insights" description="Analytics from AI suggestion interactions — refine future recommendations based on real user patterns"
+        action={total > 0 ? (
+          <Button size="sm" variant="outline" className="border-zinc-700 text-zinc-400" onClick={handleClearData}>
+            <Trash2 className="w-3.5 h-3.5 mr-1.5" />Clear Data
+          </Button>
+        ) : undefined}
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard title="Total Suggestions" value={total} icon={BrainCircuit} color="purple" />
@@ -1589,7 +1621,7 @@ function AiInsightsSection() {
                   <Pie data={PIE} dataKey="value" cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={4}>
                     {PIE.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                   </Pie>
-                  <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }} />
+                  <RechartsTooltip contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }} />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>
@@ -1605,11 +1637,55 @@ function AiInsightsSection() {
                   <BarChart data={topEnhancements} layout="vertical" margin={{ left: 10 }}>
                     <XAxis type="number" stroke="#52525b" />
                     <YAxis type="category" dataKey="name" stroke="#71717a" width={110} tick={{ fontSize: 11 }} />
-                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }} />
+                    <RechartsTooltip contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }} />
                     <Bar dataKey="count" fill="#a855f7" radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               ) : <p className="text-xs text-zinc-600 text-center py-6">No applied enhancements yet</p>}
+            </CardContent>
+          </Card>
+
+          {/* Enhancement classification: Critical / Optional / Skipped */}
+          <Card className="bg-zinc-900 border-zinc-800 lg:col-span-2">
+            <CardHeader>
+              <CardTitle className="text-base">Enhancement Classification</CardTitle>
+              <CardDescription className="text-xs text-zinc-500">
+                Based on user acceptance rates. Use this to refine which enhancements to prioritize in AI suggestions.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {classifiedEnhancements.length > 0 ? (
+                <div className="space-y-4">
+                  {(["critical", "optional", "skipped"] as const).map(tier => {
+                    const items = classifiedEnhancements.filter(e => e.tier === tier);
+                    if (items.length === 0) return null;
+                    const tierConfig = {
+                      critical: { label: "Critical — Users love these", color: "text-teal-400", border: "border-teal-500/20", bg: "bg-teal-500/5", icon: <CheckCircle className="w-4 h-4 text-teal-400" /> },
+                      optional: { label: "Optional — Mixed reception", color: "text-amber-400", border: "border-amber-500/20", bg: "bg-amber-500/5", icon: <AlertCircle className="w-4 h-4 text-amber-400" /> },
+                      skipped: { label: "Often Skipped — Consider de-prioritizing", color: "text-red-400", border: "border-red-500/20", bg: "bg-red-500/5", icon: <XCircle className="w-4 h-4 text-red-400" /> },
+                    }[tier];
+                    return (
+                      <div key={tier} className={`rounded-lg border ${tierConfig.border} ${tierConfig.bg} p-3`}>
+                        <div className="flex items-center gap-2 mb-2">
+                          {tierConfig.icon}
+                          <span className={`text-xs font-medium ${tierConfig.color}`}>{tierConfig.label}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {items.map(e => (
+                            <div key={e.name} className="flex items-center gap-2 bg-zinc-900/80 rounded-lg px-3 py-1.5 border border-zinc-800">
+                              <span className="text-xs font-medium text-zinc-300 capitalize">{e.name.replace(/_/g, " ")}</span>
+                              <span className="text-[10px] text-zinc-500">{e.total} uses</span>
+                              <Badge variant="outline" className={`text-[9px] ${e.rate >= 60 ? "border-teal-500/40 text-teal-400" : e.rate >= 30 ? "border-amber-500/40 text-amber-400" : "border-red-500/40 text-red-400"}`}>
+                                {e.rate}% accepted
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <p className="text-xs text-zinc-600 text-center py-6">No enhancement data yet</p>}
             </CardContent>
           </Card>
 
