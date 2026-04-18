@@ -1129,6 +1129,7 @@ function ApiKeysSection() {
                 <TableHead className="text-zinc-500">Key</TableHead>
                 <TableHead className="text-zinc-500">Provider</TableHead>
                 <TableHead className="text-zinc-500">Model</TableHead>
+                <TableHead className="text-zinc-500">Group</TableHead>
                 <TableHead className="text-zinc-500">Tier</TableHead>
                 <TableHead className="text-zinc-500">Status</TableHead>
                 <TableHead className="text-zinc-500">Calls</TableHead>
@@ -1143,6 +1144,16 @@ function ApiKeysSection() {
                   <TableCell className="font-mono text-xs">{k.keyPrefix}</TableCell>
                   <TableCell className="capitalize text-sm">{k.provider}</TableCell>
                   <TableCell className="text-xs text-zinc-400">{k.model.split("/").pop()}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={`text-xs ${
+                      k.group === "primary" ? "border-violet-500/40 text-violet-400" :
+                      k.group === "germany" ? "border-amber-500/40 text-amber-400" :
+                      k.group === "gemini" ? "border-blue-500/40 text-blue-400" :
+                      "border-zinc-600 text-zinc-400"
+                    }`}>
+                      {k.group ?? "standard"}
+                    </Badge>
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={`text-xs ${k.tier === "premium" ? "border-teal-500/30 text-teal-400" : "border-zinc-600 text-zinc-400"}`}>
                       {k.tier}
@@ -1246,6 +1257,65 @@ function ApiKeysSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Usage Report Card */}
+      {usageReport && (
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-teal-400" />
+              Key Pool Usage Report
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Summary row */}
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+              {[
+                { label: "Total Keys", val: usageReport.summary.totalKeys },
+                { label: "Active", val: usageReport.summary.activeKeys, color: "text-emerald-400" },
+                { label: "Degraded", val: usageReport.summary.degradedKeys, color: "text-amber-400" },
+                { label: "Unused", val: usageReport.summary.unusedKeys, color: "text-zinc-400" },
+                { label: "Total Calls", val: usageReport.summary.totalCalls },
+                { label: "Errors", val: usageReport.summary.totalErrors, color: usageReport.summary.totalErrors > 0 ? "text-rose-400" : "" },
+              ].map(item => (
+                <div key={item.label} className="bg-zinc-800/60 rounded-md p-2 text-center">
+                  <p className={`text-lg font-bold ${item.color ?? ""}`}>{item.val}</p>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">{item.label}</p>
+                </div>
+              ))}
+            </div>
+            {/* By group */}
+            <div>
+              <p className="text-xs text-zinc-500 mb-2 font-medium uppercase tracking-wider">By Priority Group</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {usageReport.byGroup.map((g: any) => (
+                  <div key={g.group} className="bg-zinc-800/60 rounded-md p-2">
+                    <Badge variant="outline" className={`text-[10px] mb-1 ${
+                      g.group === "primary" ? "border-violet-500/40 text-violet-400" :
+                      g.group === "germany" ? "border-amber-500/40 text-amber-400" :
+                      g.group === "gemini" ? "border-blue-500/40 text-blue-400" :
+                      "border-zinc-600 text-zinc-400"
+                    }`}>{g.group}</Badge>
+                    <p className="text-xs text-zinc-300">{g.active}/{g.total} active</p>
+                    <p className="text-xs text-zinc-500">{g.totalCalls} calls</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Recommendations */}
+            {usageReport.recommendations?.length > 0 && (
+              <div>
+                <p className="text-xs text-zinc-500 mb-2 font-medium uppercase tracking-wider">Recommendations</p>
+                <ul className="space-y-1">
+                  {usageReport.recommendations.map((r: string, i: number) => (
+                    <li key={i} className="text-xs text-zinc-400">{r}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
     </TooltipProvider>
   );
