@@ -2,8 +2,15 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { logger } from "../lib/logger";
 
-const JWT_SECRET = process.env.SESSION_SECRET || "glimpse-ai-secret-key";
+// Single consistent default — must match what start.sh uses
+const DEFAULT_JWT_SECRET = "glimpse-ai-local-dev-secret";
+const JWT_SECRET = process.env.SESSION_SECRET || DEFAULT_JWT_SECRET;
+
+if (!process.env.SESSION_SECRET) {
+  logger.warn("SESSION_SECRET not set — using default. Set it in .env for production.");
+}
 
 export interface AuthRequest extends Request {
   userId?: number;
@@ -13,6 +20,7 @@ export interface AuthRequest extends Request {
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    logger.debug({ url: req.url }, "Auth rejected: no Bearer token");
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
@@ -22,14 +30,16 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
     req.userId = payload.userId;
     req.userRole = payload.role;
     next();
-  } catch {
-    res.status(401).json({ error: "Invalid token" });
+  } catch (err) {
+    logger.debug({ url: req.url, err: (err as Error).message }, "Auth rejected: invalid/expired token");
+    res.status(401).json({ error: "Invalid or expired token" });
   }
 }
 
 export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): void {
   if (req.userRole !== "admin") {
-    res.status(403).json({ error: "Forbidden" });
+    logger.warn({ userId: req.userId, role: req.userRole, url: req.url }, "Admin access denied");
+    res.status(403).json({ error: "Forbidden — admin access required" });
     return;
   }
   next();

@@ -26,12 +26,31 @@ export async function ensureInitialAdmin(): Promise<void> {
       .where(eq(usersTable.email, account.email));
 
     if (existing) {
+      // Always re-hash the expected password and update if it changed.
+      // This ensures admin login works even after password changes in .env
+      // or if the initial hash was corrupted.
+      const currentMatch = await bcrypt.compare(account.password, existing.passwordHash);
+      if (!currentMatch) {
+        const newHash = await bcrypt.hash(account.password, 10);
+        await db.update(usersTable)
+          .set({ passwordHash: newHash, isSuspended: false })
+          .where(eq(usersTable.id, existing.id));
+        logger.info({ email: account.email }, "Admin password re-synced from config");
+      }
+      // Ensure role is admin (in case it was accidentally changed)
+      if (existing.role !== "admin") {
+        await db.update(usersTable)
+          .set({ role: "admin" })
+          .where(eq(usersTable.id, existing.id));
+        logger.info({ email: account.email }, "Admin role restored");
+      }
+      logger.info({ email: account.email, id: existing.id }, "Admin account verified");
       continue;
     }
 
     const passwordHash = await bcrypt.hash(account.password, 10);
 
-    await db.insert(usersTable).values({
+    const [user] = await db.insert(usersTable).values({
       name: account.name,
       email: account.email,
       passwordHash,
@@ -39,9 +58,9 @@ export async function ensureInitialAdmin(): Promise<void> {
       creditsUsed: 0,
       creditsLimit: 999999,
       isSuspended: false,
-    });
+    }).returning();
 
-    logger.info({ email: account.email }, "Bootstrapped admin user");
+    logger.info({ email: account.email, id: user.id }, "Bootstrapped new admin user");
   }
 }
 
