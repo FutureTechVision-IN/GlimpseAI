@@ -852,25 +852,25 @@ export default function Editor() {
                           </div>
                         </div>
                       ) : aiSuggestion && (
-                        <div className="rounded-xl border border-teal-500/30 bg-gradient-to-r from-teal-500/10 to-cyan-500/10 p-4">
+                        <div className="rounded-xl border border-teal-500/30 bg-gradient-to-r from-teal-500/10 to-cyan-500/10 p-3">
                           <div className="flex items-start gap-3">
-                            <div className="w-10 h-10 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                              <ScanEye className="w-5 h-5 text-teal-400" />
+                            <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                              <ScanEye className="w-4 h-4 text-teal-400" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1.5">
-                                <p className="text-sm font-semibold text-teal-200">AI Recommendation</p>
-                                <Badge variant="outline" className="text-[10px] border-teal-500/40 text-teal-300 px-2 py-0.5 h-5 capitalize">
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="text-xs font-semibold text-teal-200 tracking-wide">AI Recommendation</p>
+                                <Badge variant="outline" className="text-[9px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-4 capitalize">
                                   {inferImageType(aiSuggestion.detectedSubjects)}
                                 </Badge>
                               </div>
-                              <p className="text-sm text-zinc-300 leading-relaxed mb-3">{aiSuggestion.description}</p>
-                              <div className="flex flex-wrap gap-1.5 mb-3">
+                              <p className="text-xs text-zinc-300 leading-relaxed mb-2">{aiSuggestion.description}</p>
+                              <div className="flex flex-wrap gap-1 mb-2">
                                 {aiSuggestion.detectedSubjects.slice(0, 4).map((s) => (
-                                  <Badge key={s} variant="outline" className="text-[10px] border-teal-500/30 text-teal-300 px-2 py-0.5 h-5">{s}</Badge>
+                                  <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
                                 ))}
                               </div>
-                              <Button size="sm" className="h-9 text-sm bg-teal-600 hover:bg-teal-700 text-white w-full font-medium shadow-lg shadow-teal-500/20" onClick={applyAiSuggestion}>
+                              <Button size="sm" className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white w-full font-medium" onClick={applyAiSuggestion}>
                                 <Sparkles className="w-4 h-4 mr-1.5" />
                                 Apply: {aiSuggestion.suggestedEnhancement}
                                 {aiSuggestion.suggestedFilter && ` + ${aiSuggestion.suggestedFilter}`}
@@ -883,14 +883,14 @@ export default function Editor() {
                                 );
                                 if (alts.length === 0) return null;
                                 return (
-                                  <div className="mt-3 pt-3 border-t border-white/5">
-                                    <p className="text-xs text-zinc-500 mb-2">Or try:</p>
-                                    <div className="flex flex-wrap gap-1.5">
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <p className="text-[10px] text-zinc-500 mb-1.5">Or try:</p>
+                                    <div className="flex flex-wrap gap-1">
                                       {alts.map(a => (
                                         <button
                                           key={a.type}
                                           onClick={() => applyAlternative(a.type)}
-                                          className="text-xs px-3 py-1.5 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors min-h-[32px]"
+                                          className="text-[10px] px-2.5 py-1 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors"
                                         >
                                           {a.label}
                                         </button>
@@ -937,9 +937,9 @@ export default function Editor() {
                                 });
                                 setAiSuggestion(null);
                               }}
-                              className="min-w-[44px] min-h-[44px] flex items-center justify-center text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
+                              className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1"
                             >
-                              <X className="w-4 h-4 mr-1" />Dismiss
+                              Dismiss
                             </button>
                           </div>
                         </div>
@@ -1338,14 +1338,9 @@ export default function Editor() {
               <AnimatePresence>
                 {processStage !== "idle" && (
                   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-                    className={cn("flex items-center gap-2 text-sm relative", stageInfo.colorClass)}>
+                    className={cn("flex items-center gap-2 text-sm", stageInfo.colorClass)}>
                     {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-4 h-4 animate-spin" />}
-                    {processStage === "completed" && (
-                      <motion.div className="flex items-center gap-2" initial={{ scale: 0.5 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 400, damping: 15 }}>
-                        <CheckCircle2 className="w-4 h-4" />
-                        <motion.div className="absolute -inset-2 rounded-lg bg-teal-500/20" initial={{ opacity: 0.8, scale: 0.8 }} animate={{ opacity: 0, scale: 1.5 }} transition={{ duration: 0.6 }} />
-                      </motion.div>
-                    )}
+                    {processStage === "completed" && <CheckCircle2 className="w-4 h-4" />}
                     {processStage === "failed"    && <AlertCircle  className="w-4 h-4" />}
                     <span>{stageInfo.label}</span>
                     {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">{upscaleAfter ? "step 1/3" : "step 1/2"}</span>}
@@ -1354,10 +1349,7 @@ export default function Editor() {
                 )}
               </AnimatePresence>
               <Button
-                className={cn(
-                  "w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20 h-11 transition-all",
-                  file && !isProcessing && !isCompleted && "animate-pulse shadow-teal-500/40 shadow-xl"
-                )}
+                className="w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20 h-11"
                 onClick={handleProcess}
                 disabled={!file || isProcessing}
               >
@@ -1562,19 +1554,19 @@ export default function Editor() {
                         exit={{ opacity: 0, height: 0 }}
                         className="w-full max-w-lg overflow-hidden"
                       >
-                        <div className="rounded-xl border border-teal-500/20 bg-zinc-950/80 backdrop-blur p-5 space-y-4">
+                        <div className="rounded-xl border border-teal-500/20 bg-zinc-950/80 backdrop-blur p-4 space-y-3">
                           {isAnalyzing ? (
-                            <div className="flex items-center gap-3 justify-center py-4">
+                            <div className="flex items-center gap-3 justify-center py-3">
                               <Loader2 className="w-5 h-5 text-teal-400 animate-spin" />
-                              <span className="text-sm text-teal-300">Scanning image with AI...</span>
+                              <span className="text-xs text-teal-300">Scanning image with AI...</span>
                             </div>
                           ) : aiSuggestion ? (
                             <>
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                  <ScanEye className="w-5 h-5 text-teal-400" />
-                                  <span className="text-sm font-semibold text-teal-200">AI Recommends</span>
-                                  <Badge variant="outline" className="text-[10px] border-teal-500/40 text-teal-300 px-2 py-0.5 h-5 capitalize">
+                                  <ScanEye className="w-4 h-4 text-teal-400" />
+                                  <span className="text-xs font-semibold text-teal-200 tracking-wide">AI Recommends</span>
+                                  <Badge variant="outline" className="text-[9px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-4 capitalize">
                                     {inferImageType(aiSuggestion.detectedSubjects)}
                                   </Badge>
                                 </div>
@@ -1586,7 +1578,7 @@ export default function Editor() {
                                         aiSuggestion.confidence >= 0.85 ? "bg-emerald-400" : aiSuggestion.confidence >= 0.6 ? "bg-amber-400" : "bg-red-400"
                                       )} />
                                       <span className={cn(
-                                        "text-xs font-medium",
+                                        "text-[10px] font-medium",
                                         aiSuggestion.confidence >= 0.85 ? "text-emerald-400" : aiSuggestion.confidence >= 0.6 ? "text-amber-400" : "text-red-400"
                                       )}>
                                         {Math.round(aiSuggestion.confidence * 100)}%
@@ -1602,22 +1594,22 @@ export default function Editor() {
                                   </TooltipContent>
                                 </Tooltip>
                               </div>
-                              <p className="text-sm text-zinc-300 leading-relaxed">{aiSuggestion.description}</p>
-                              <div className="flex flex-wrap gap-1.5">
+                              <p className="text-xs text-zinc-300 leading-relaxed">{aiSuggestion.description}</p>
+                              <div className="flex flex-wrap gap-1">
                                 {aiSuggestion.detectedSubjects.slice(0, 5).map(s => (
-                                  <Badge key={s} variant="outline" className="text-[10px] border-teal-500/30 text-teal-300 px-2 py-0.5 h-5">{s}</Badge>
+                                  <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
                                 ))}
                               </div>
-                              <div className="flex items-center gap-3">
-                                <Button size="sm" className="flex-1 h-9 text-sm bg-teal-600 hover:bg-teal-700 text-white font-medium shadow-lg shadow-teal-500/20" onClick={applyAiSuggestion}>
-                                  <Sparkles className="w-4 h-4 mr-1.5" />
+                              <div className="flex items-center gap-2">
+                                <Button size="sm" className="flex-1 h-8 text-xs bg-teal-600 hover:bg-teal-700 text-white" onClick={applyAiSuggestion}>
+                                  <Sparkles className="w-3 h-3 mr-1" />
                                   Apply: {aiSuggestion.suggestedEnhancement}
                                 </Button>
                                 <button
                                   onClick={() => setShowPowerUp(false)}
-                                  className="min-w-[44px] min-h-[44px] flex items-center justify-center text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
+                                  className="text-[10px] text-zinc-500 hover:text-zinc-300 px-2 transition-colors"
                                 >
-                                  <X className="w-4 h-4" />
+                                  Dismiss
                                 </button>
                               </div>
                               {/* Alternatives */}
@@ -1625,14 +1617,14 @@ export default function Editor() {
                                 const alts = getAlternatives(inferImageType(aiSuggestion.detectedSubjects), aiSuggestion.suggestedEnhancement);
                                 if (alts.length === 0) return null;
                                 return (
-                                  <div className="pt-3 border-t border-white/5">
-                                    <p className="text-xs text-zinc-500 mb-2">Other options:</p>
-                                    <div className="flex flex-wrap gap-2">
+                                  <div className="pt-2 border-t border-white/5">
+                                    <p className="text-[10px] text-zinc-500 mb-1.5">Other options:</p>
+                                    <div className="flex flex-wrap gap-1">
                                       {alts.map(a => (
                                         <button
                                           key={a.type}
                                           onClick={() => { applyAlternative(a.type); setShowPowerUp(false); }}
-                                          className="text-xs px-3 py-1.5 min-h-[32px] rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 hover:bg-teal-500/5 transition-all"
+                                          className="text-[10px] px-2.5 py-1 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors"
                                         >
                                           {a.label}
                                         </button>
@@ -1716,7 +1708,7 @@ export default function Editor() {
                         <div className="w-6 h-6 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
                           <Loader2 className="w-3 h-3 text-teal-400 animate-spin" />
                         </div>
-                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl rounded-tl-none px-3 py-2 text-sm text-zinc-400">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl rounded-tl-none px-3 py-2 text-xs text-zinc-400">
                           Analyzing your image...
                         </div>
                       </div>
@@ -1730,7 +1722,7 @@ export default function Editor() {
                           {msg.role === "ai" ? <Sparkles className="w-3 h-3" /> : "U"}
                         </div>
                         <div className={cn(
-                          "max-w-[240px] rounded-xl px-3 py-2 text-sm leading-relaxed",
+                          "max-w-[220px] rounded-xl px-3 py-2 text-xs leading-relaxed",
                           msg.role === "ai"
                             ? "bg-zinc-900 border border-zinc-800 rounded-tl-none text-zinc-300"
                             : "bg-teal-600/20 border border-teal-500/20 rounded-tr-none text-teal-100"
@@ -1738,24 +1730,24 @@ export default function Editor() {
                           <p className="whitespace-pre-line">{msg.text}</p>
                           {msg.action && !msg.applied && msg.role === "ai" && (
                             <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5">
-                              <p className="text-xs text-zinc-500">
+                              <p className="text-[10px] text-zinc-500">
                                 Suggested: <span className="text-teal-300 capitalize">{msg.action.type}</span>
                                 {msg.action.filter && <> · <span className="text-amber-300 capitalize">{msg.action.filter}</span></>}
                               </p>
                               <Button
                                 size="sm"
-                                className="w-full h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white"
+                                className="w-full h-6 text-[10px] bg-teal-600 hover:bg-teal-700 text-white"
                                 onClick={() => {
                                   applyAiSuggestion();
                                 }}
                               >
-                                <Sparkles className="w-3 h-3 mr-1" />Apply
+                                <Sparkles className="w-2.5 h-2.5 mr-1" />Apply
                               </Button>
                             </div>
                           )}
                           {msg.applied && msg.role === "ai" && (
-                            <div className="mt-1.5 flex items-center gap-1 text-xs text-emerald-400">
-                              <CheckCircle2 className="w-3 h-3" />Applied
+                            <div className="mt-1.5 flex items-center gap-1 text-[9px] text-emerald-400">
+                              <CheckCircle2 className="w-2.5 h-2.5" />Applied
                             </div>
                           )}
                         </div>
