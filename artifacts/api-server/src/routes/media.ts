@@ -136,9 +136,21 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     if (rawB64.startsWith("iVBOR")) mimeType = "image/png";
     else if (rawB64.startsWith("UklGR")) mimeType = "image/webp";
 
+    // Get AI guidance from LLM vision models (non-blocking, with timeout fallback)
+    let aiGuidance = null;
+    try {
+      aiGuidance = await aiProvider.getEnhancementGuidance(rawB64, mimeType, enhancementType);
+      if (aiGuidance) {
+        logger.info({ source: aiGuidance.source, type: enhancementType }, "AI guidance acquired for enhancement");
+      }
+    } catch (guidanceErr) {
+      logger.warn({ err: guidanceErr }, "AI guidance failed — proceeding without");
+    }
+
     const result = await enhanceImage(rawB64, mimeType, {
       enhancementType,
       settings: settings as Record<string, unknown> | undefined,
+      aiGuidance,
     });
 
     // Store raw base64 in DB (no prefix — jobToResponse adds it)
