@@ -7,8 +7,6 @@
  */
 
 export interface AnalyzeMediaBody {
-  /** Raw base64 encoded image data */
   base64Data: string;
-  /** MIME type of the image */
-  mimeType?: string;
+  mimeType: string;
 }

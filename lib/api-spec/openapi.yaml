@@ -353,6 +353,31 @@ paths:
                 items:
                   $ref: "#/components/schemas/Preset"
 
+  /media/analyze:
+    post:
+      operationId: analyzeMedia
+      tags: [media]
+      summary: AI-powered image analysis with enhancement suggestions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeMediaBody"
+      responses:
+        "200":
+          description: AI analysis result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResult"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /media/stats:
     get:
       operationId: getMediaStats
@@ -928,7 +953,7 @@ components:
           type: ["integer", "null"]
         enhancementType:
           type: string
-          enum: [auto, portrait, skin, lighting, color, background, beauty, upscale, filter, trim, stabilize, custom]
+          enum: [auto, portrait, skin, lighting, color, background, beauty, upscale, upscale_4x, blur_background, posture, filter, trim, stabilize, custom]
         settings:
           type: object
           additionalProperties: true
@@ -1388,6 +1413,44 @@ components:
         - name
         - slug
         - apiKey
+
+    AnalyzeMediaBody:
+      type: object
+      properties:
+        base64Data:
+          type: string
+        mimeType:
+          type: string
+      required:
+        - base64Data
+        - mimeType
+
+    AnalysisResult:
+      type: object
+      properties:
+        description:
+          type: string
+        suggestedEnhancement:
+          type: string
+        suggestedFilter:
+          type: ["string", "null"]
+        detectedSubjects:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+        sceneType:
+          type: string
+        lightingCondition:
+          type: string
+      required:
+        - description
+        - suggestedEnhancement
+        - detectedSubjects
+        - confidence
+        - sceneType
+        - lightingCondition
 
     UpdateProviderBody:
       type: object

@@ -160,6 +160,9 @@ export const EnhanceMediaBodyEnhancementType = {
   background: "background",
   beauty: "beauty",
   upscale: "upscale",
+  upscale_4x: "upscale_4x",
+  blur_background: "blur_background",
+  posture: "posture",
   filter: "filter",
   trim: "trim",
   stabilize: "stabilize",
@@ -211,26 +214,6 @@ export interface MediaStats {
   avgProcessingTimeMs: number;
   topEnhancementTypes: MediaStatsTopEnhancementTypesItem[];
   recentActivity: MediaJob[];
-}
-
-export interface AnalyzeMediaBody {
-  /** Raw base64 encoded image data */
-  base64Data: string;
-  /** MIME type of the image */
-  mimeType?: string;
-}
-
-export type AnalysisResultSuggestedSettings = { [key: string]: unknown };
-
-export interface AnalysisResult {
-  description: string;
-  suggestedEnhancement: string;
-  /** @nullable */
-  suggestedFilter?: string | null;
-  detectedSubjects?: string[];
-  issues?: string[];
-  suggestedSettings?: AnalysisResultSuggestedSettings;
-  confidence: number;
 }
 
 export interface Plan {
@@ -394,6 +377,22 @@ export interface CreateProviderBody {
   slug: string;
   apiKey: string;
   priority?: number;
+}
+
+export interface AnalyzeMediaBody {
+  base64Data: string;
+  mimeType: string;
+}
+
+export interface AnalysisResult {
+  description: string;
+  suggestedEnhancement: string;
+  /** @nullable */
+  suggestedFilter?: string | null;
+  detectedSubjects: string[];
+  confidence: number;
+  sceneType: string;
+  lightingCondition: string;
 }
 
 export interface UpdateProviderBody {

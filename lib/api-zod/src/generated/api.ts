@@ -199,6 +199,9 @@ export const EnhanceMediaBody = zod.object({
     "background",
     "beauty",
     "upscale",
+    "upscale_4x",
+    "blur_background",
+    "posture",
     "filter",
     "trim",
     "stabilize",
@@ -298,6 +301,24 @@ export const ListPresetsResponseItem = zod.object({
 export const ListPresetsResponse = zod.array(ListPresetsResponseItem);
 
 /**
+ * @summary AI-powered image analysis with enhancement suggestions
+ */
+export const AnalyzeMediaBody = zod.object({
+  base64Data: zod.string(),
+  mimeType: zod.string(),
+});
+
+export const AnalyzeMediaResponse = zod.object({
+  description: zod.string(),
+  suggestedEnhancement: zod.string(),
+  suggestedFilter: zod.string().nullish(),
+  detectedSubjects: zod.array(zod.string()),
+  confidence: zod.number(),
+  sceneType: zod.string(),
+  lightingCondition: zod.string(),
+});
+
+/**
  * @summary Get media processing statistics (wow endpoint)
  */
 export const GetMediaStatsResponse = zod.object({
@@ -330,24 +351,6 @@ export const GetMediaStatsResponse = zod.object({
       completedAt: zod.coerce.date().nullish(),
     }),
   ),
-});
-
-/**
- * @summary AI-powered image analysis and enhancement suggestions
- */
-export const AnalyzeMediaBody = zod.object({
-  base64Data: zod.string().describe("Raw base64 encoded image data"),
-  mimeType: zod.string().optional().describe("MIME type of the image"),
-});
-
-export const AnalyzeMediaResponse = zod.object({
-  description: zod.string(),
-  suggestedEnhancement: zod.string(),
-  suggestedFilter: zod.string().nullish(),
-  detectedSubjects: zod.array(zod.string()).optional(),
-  issues: zod.array(zod.string()).optional(),
-  suggestedSettings: zod.record(zod.string(), zod.unknown()).optional(),
-  confidence: zod.number(),
 });
 
 /**

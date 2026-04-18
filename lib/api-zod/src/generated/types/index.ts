@@ -12,7 +12,6 @@ export * from "./adminPaymentsResponse";
 export * from "./adminStats";
 export * from "./adminUsersResponse";
 export * from "./analysisResult";
-export * from "./analysisResultSuggestedSettings";
 export * from "./analyzeMediaBody";
 export * from "./authResponse";
 export * from "./createOrderBody";

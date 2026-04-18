@@ -5,15 +5,14 @@
  * GlimpseAI API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { AnalysisResultSuggestedSettings } from "./analysisResultSuggestedSettings";
 
 export interface AnalysisResult {
   description: string;
   suggestedEnhancement: string;
   /** @nullable */
   suggestedFilter?: string | null;
-  detectedSubjects?: string[];
-  issues?: string[];
-  suggestedSettings?: AnalysisResultSuggestedSettings;
+  detectedSubjects: string[];
   confidence: number;
+  sceneType: string;
+  lightingCondition: string;
 }
