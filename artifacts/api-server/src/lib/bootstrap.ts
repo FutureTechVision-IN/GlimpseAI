@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
-import { db, usersTable } from "@workspace/db";
+import { db, usersTable, plansTable } from "@workspace/db";
 import { logger } from "./logger";
 import { providerKeyManager } from "./provider-key-manager";
 import { aiProvider } from "./ai-provider";
@@ -58,4 +58,70 @@ export async function initProviderKeys(): Promise<void> {
   const result = await providerKeyManager.validateAll();
   logger.info(result, "Provider key validation done");
   providerKeyManager.startHealthChecks();
+}
+
+const DEFAULT_PLANS = [
+  {
+    name: "Free",
+    slug: "free",
+    description: "Try GlimpseAI with 5 free enhancements",
+    priceMonthly: 0,
+    priceAnnual: 0,
+    creditsPerMonth: 5,
+    features: ["5 free enhancements", "Photo enhancement", "Basic AI filters", "Standard quality"],
+    isActive: true,
+    isPopular: false,
+  },
+  {
+    name: "Basic",
+    slug: "basic",
+    description: "For regular creators who need consistent quality",
+    priceMonthly: 461,      // ₹461 ≈ $4.99
+    priceAnnual: 4612,      // ₹4,612 ≈ $49.90 (save 2 months)
+    creditsPerMonth: 600,
+    features: [
+      "20 enhancements/day",
+      "600 enhancements/month",
+      "Photo & video enhancement",
+      "AI-powered filters",
+      "HD quality output",
+      "Email support",
+    ],
+    isActive: true,
+    isPopular: false,
+  },
+  {
+    name: "Premium",
+    slug: "premium",
+    description: "Unlock every feature for professional-grade results",
+    priceMonthly: 924,      // ₹924 ≈ $9.99
+    priceAnnual: 9240,      // ₹9,240 ≈ $99.90 (save 2 months)
+    creditsPerMonth: 600,
+    features: [
+      "20 enhancements/day",
+      "600 enhancements/month",
+      "Photo & video enhancement",
+      "4× upscaling",
+      "Posture adjustment",
+      "Fine-tuned edits",
+      "Priority processing",
+      "Priority support",
+    ],
+    isActive: true,
+    isPopular: true,
+  },
+];
+
+export async function ensureDefaultPlans(): Promise<void> {
+  for (const plan of DEFAULT_PLANS) {
+    const [existing] = await db
+      .select()
+      .from(plansTable)
+      .where(eq(plansTable.slug, plan.slug));
+
+    if (existing) continue;
+
+    await db.insert(plansTable).values(plan);
+    logger.info({ slug: plan.slug }, "Seeded plan");
+  }
 }

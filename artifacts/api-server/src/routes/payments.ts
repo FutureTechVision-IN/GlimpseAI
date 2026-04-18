@@ -1,5 +1,6 @@
 import { Router, IRouter } from "express";
 import crypto from "crypto";
+import Razorpay from "razorpay";
 import { db, paymentsTable, plansTable, usersTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 import { requireAuth, AuthRequest } from "../middlewares/auth";
@@ -10,6 +11,21 @@ const router: IRouter = Router();
 
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID ?? "rzp_test_placeholder";
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET ?? "placeholder_secret";
+
+let razorpay: Razorpay | null = null;
+try {
+  if (RAZORPAY_KEY_ID !== "rzp_test_placeholder") {
+    razorpay = new Razorpay({
+      key_id: RAZORPAY_KEY_ID,
+      key_secret: RAZORPAY_KEY_SECRET,
+    });
+    logger.info("Razorpay SDK initialized");
+  } else {
+    logger.warn("Razorpay running in test mode (no real key configured)");
+  }
+} catch (err) {
+  logger.warn({ err }, "Failed to initialize Razorpay SDK");
+}
 
 router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const parsed = CreatePaymentOrderBody.safeParse(req.body);
@@ -26,7 +42,32 @@ router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res)
   }
 
   const amount = billingPeriod === "annual" ? plan.priceAnnual : plan.priceMonthly;
-  const orderId = `order_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  let orderId: string;
+
+  if (razorpay) {
+    // Real Razorpay order creation
+    try {
+      const order = await razorpay.orders.create({
+        amount: amount * 100, // Razorpay expects paise (1 INR = 100 paise)
+        currency: "INR",
+        receipt: `glimpse_${req.userId}_${Date.now()}`,
+        notes: {
+          userId: String(req.userId),
+          planId: String(planId),
+          billingPeriod,
+        },
+      });
+      orderId = order.id;
+    } catch (err) {
+      logger.error({ err }, "Razorpay order creation failed");
+      res.status(500).json({ error: "Payment service unavailable. Please try again." });
+      return;
+    }
+  } else {
+    // Test mode fallback
+    orderId = `order_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  }
 
   await db.insert(paymentsTable).values({
     userId: req.userId!,
@@ -88,6 +129,8 @@ router.post("/payments/verify", requireAuth, async (req: AuthRequest, res): Prom
       planExpiresAt: expiresAt,
       creditsLimit: plan.creditsPerMonth,
       creditsUsed: 0,
+      dailyCreditsUsed: 0,
+      dailyLimit: 20, // paid users get 20 enhancements/day
     })
     .where(eq(usersTable.id, req.userId!));
 
