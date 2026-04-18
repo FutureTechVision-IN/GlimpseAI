@@ -57,7 +57,9 @@ type AdminSection =
   | "jobs"
   | "payments"
   | "plans"
-  | "providers";
+  | "providers"
+  | "apikeys"
+  | "analytics";
 
 function StatCard({
   title, value, sub, icon: Icon, trend, color = "teal"
@@ -906,6 +908,531 @@ function ProvidersSection() {
   );
 }
 
+// ─── API KEYS (In-Memory Key Manager) ────────────────────────────────────────
+function ApiKeysSection() {
+  const [keys, setKeys] = useState<any[]>([]);
+  const [status, setStatus] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkForm, setBulkForm] = useState({ keys: "", provider: "openrouter", model: "stepfun/step-3.5-flash:free", tier: "free" });
+  const [validating, setValidating] = useState(false);
+  const { toast } = useToast();
+
+  const token = localStorage.getItem("glimpse_token");
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+  const fetchKeys = async () => {
+    setIsLoading(true);
+    try {
+      const [keysRes, statusRes] = await Promise.all([
+        fetch("/api/admin/provider-keys", { headers }),
+        fetch("/api/admin/provider-keys/status", { headers }),
+      ]);
+      const keysData = await keysRes.json();
+      const statusData = await statusRes.json();
+      setKeys(keysData.keys ?? []);
+      setStatus(statusData);
+    } catch { /* ignore */ }
+    setIsLoading(false);
+  };
+
+  useEffect(() => { fetchKeys(); }, []);
+
+  const handleValidateAll = async () => {
+    setValidating(true);
+    try {
+      await fetch("/api/admin/provider-keys/validate-all", { method: "POST", headers });
+      toast({ title: "Validation complete" });
+      await fetchKeys();
+    } catch {}
+    setValidating(false);
+  };
+
+  const handleLoadEnv = async () => {
+    try {
+      await fetch("/api/admin/provider-keys/load-env", { method: "POST", headers });
+      toast({ title: "Keys reloaded from .env" });
+      await fetchKeys();
+    } catch {}
+  };
+
+  const handleToggleStatus = async (id: number, currentStatus: string) => {
+    const newStatus = currentStatus === "active" ? "inactive" : "active";
+    await fetch(`/api/admin/provider-keys/${id}/status`, {
+      method: "PATCH", headers, body: JSON.stringify({ status: newStatus }),
+    });
+    await fetchKeys();
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm("Remove this key?")) return;
+    await fetch(`/api/admin/provider-keys/${id}`, { method: "DELETE", headers });
+    toast({ title: "Key removed" });
+    await fetchKeys();
+  };
+
+  const handleBulkImport = async () => {
+    const keyList = bulkForm.keys.split("\n").map(k => k.trim()).filter(k => k.length > 0);
+    if (keyList.length === 0) return;
+    const res = await fetch("/api/admin/provider-keys/bulk-import", {
+      method: "POST", headers,
+      body: JSON.stringify({ keys: keyList, provider: bulkForm.provider, model: bulkForm.model, tier: bulkForm.tier }),
+    });
+    const data = await res.json();
+    toast({ title: `${data.added} keys imported` });
+    setBulkOpen(false);
+    setBulkForm({ keys: "", provider: "openrouter", model: "stepfun/step-3.5-flash:free", tier: "free" });
+    await fetchKeys();
+  };
+
+  const statusColor = (s: string) => {
+    if (s === "active") return "border-emerald-500/30 text-emerald-400 bg-emerald-500/5";
+    if (s === "degraded") return "border-amber-500/30 text-amber-400 bg-amber-500/5";
+    if (s === "validating") return "border-blue-500/30 text-blue-400 bg-blue-500/5";
+    return "border-zinc-700 text-zinc-500";
+  };
+
+  if (isLoading) return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>;
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="API Key Management" description="View, add, and manage provider API keys with health monitoring"
+        action={
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="border-zinc-700" onClick={handleLoadEnv}>
+              <RefreshCw className="w-4 h-4 mr-1" /> Reload .env
+            </Button>
+            <Button size="sm" variant="outline" className="border-zinc-700" onClick={handleValidateAll} disabled={validating}>
+              {validating ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Activity className="w-4 h-4 mr-1" />}
+              Validate All
+            </Button>
+            <Button size="sm" className="bg-teal-600 hover:bg-teal-500" onClick={() => setBulkOpen(true)}>
+              <Plus className="w-4 h-4 mr-1" /> Bulk Import
+            </Button>
+          </div>
+        }
+      />
+
+      {/* Status overview cards */}
+      {status && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard title="Total Keys" value={status.totalKeys} icon={Key} color="teal" />
+          <StatCard title="Active" value={status.active} icon={CheckCircle} color="emerald" />
+          <StatCard title="Degraded" value={status.degraded} icon={AlertCircle} color="amber" />
+          <StatCard title="Inactive" value={status.inactive} icon={XCircle} color="rose" />
+        </div>
+      )}
+
+      {/* Provider & Tier breakdown */}
+      {status && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader><CardTitle className="text-sm">By Provider</CardTitle></CardHeader>
+            <CardContent>
+              {status.byProvider?.map((p: any) => (
+                <div key={p.provider} className="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
+                  <span className="text-sm font-medium capitalize">{p.provider}</span>
+                  <div className="flex gap-3 text-xs text-zinc-400">
+                    <span>{p.active}/{p.total} active</span>
+                    <span>{p.totalCalls.toLocaleString()} calls</span>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader><CardTitle className="text-sm">By Tier</CardTitle></CardHeader>
+            <CardContent>
+              {status.byTier?.map((t: any) => (
+                <div key={t.tier} className="flex items-center justify-between py-2 border-b border-zinc-800 last:border-0">
+                  <span className="text-sm font-medium capitalize">{t.tier}</span>
+                  <span className="text-xs text-zinc-400">{t.active}/{t.total} active</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Keys table */}
+      <Card className="bg-zinc-900 border-zinc-800">
+        <CardHeader>
+          <CardTitle className="text-sm">All Keys ({keys.length})</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow className="border-zinc-800">
+                <TableHead className="text-zinc-500">Key</TableHead>
+                <TableHead className="text-zinc-500">Provider</TableHead>
+                <TableHead className="text-zinc-500">Model</TableHead>
+                <TableHead className="text-zinc-500">Tier</TableHead>
+                <TableHead className="text-zinc-500">Status</TableHead>
+                <TableHead className="text-zinc-500">Calls</TableHead>
+                <TableHead className="text-zinc-500">Errors</TableHead>
+                <TableHead className="text-zinc-500">Latency</TableHead>
+                <TableHead className="text-zinc-500">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {keys.map((k: any) => (
+                <TableRow key={k.id} className="border-zinc-800">
+                  <TableCell className="font-mono text-xs">{k.keyPrefix}</TableCell>
+                  <TableCell className="capitalize text-sm">{k.provider}</TableCell>
+                  <TableCell className="text-xs text-zinc-400">{k.model.split("/").pop()}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={`text-xs ${k.tier === "premium" ? "border-purple-500/30 text-purple-400" : "border-zinc-600 text-zinc-400"}`}>
+                      {k.tier}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={`text-xs ${statusColor(k.status)}`}>{k.status}</Badge>
+                  </TableCell>
+                  <TableCell className="text-sm">{k.totalCalls}</TableCell>
+                  <TableCell className={`text-sm ${k.totalErrors > 0 ? "text-rose-400" : ""}`}>{k.totalErrors}</TableCell>
+                  <TableCell className="text-sm text-zinc-400">{k.latencyMs != null ? `${k.latencyMs}ms` : "—"}</TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => handleToggleStatus(k.id, k.status)}>
+                        {k.status === "active" ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4 text-zinc-500" />}
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-rose-400 hover:bg-rose-500/10" onClick={() => handleDelete(k.id)}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Bulk Import Dialog */}
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Bulk Import API Keys</DialogTitle>
+            <DialogDescription className="text-zinc-400">Paste one key per line</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-zinc-400">Provider</Label>
+                <select value={bulkForm.provider} onChange={e => setBulkForm(f => ({ ...f, provider: e.target.value }))}
+                  className="w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm">
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="gemini">Gemini</option>
+                </select>
+              </div>
+              <div>
+                <Label className="text-xs text-zinc-400">Tier</Label>
+                <select value={bulkForm.tier} onChange={e => setBulkForm(f => ({ ...f, tier: e.target.value }))}
+                  className="w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm">
+                  <option value="free">Free</option>
+                  <option value="premium">Premium</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs text-zinc-400">Model</Label>
+              <Input value={bulkForm.model} onChange={e => setBulkForm(f => ({ ...f, model: e.target.value }))}
+                placeholder="e.g. stepfun/step-3.5-flash:free" className="bg-zinc-800 border-zinc-700 mt-1 font-mono text-xs" />
+            </div>
+            <div>
+              <Label className="text-xs text-zinc-400">Keys (one per line)</Label>
+              <Textarea value={bulkForm.keys} onChange={e => setBulkForm(f => ({ ...f, keys: e.target.value }))}
+                className="bg-zinc-800 border-zinc-700 mt-1 font-mono text-xs" rows={8} placeholder="sk-or-v1-abc123..." />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="border-zinc-700" onClick={() => setBulkOpen(false)}>Cancel</Button>
+            <Button className="bg-teal-600 hover:bg-teal-500" onClick={handleBulkImport}>Import Keys</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── ANALYTICS ──────────────────────────────────────────────────────────────
+function AnalyticsSection() {
+  const [dailySummary, setDailySummary] = useState<any[]>([]);
+  const [enhancementTypes, setEnhancementTypes] = useState<any[]>([]);
+  const [topUsers, setTopUsers] = useState<any[]>([]);
+  const [monthlySummary, setMonthlySummary] = useState<any[]>([]);
+  const [keyUsage, setKeyUsage] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [tab, setTab] = useState<"daily" | "monthly" | "types" | "users" | "keys">("daily");
+
+  const token = localStorage.getItem("glimpse_token");
+  const headers = { Authorization: `Bearer ${token}` };
+
+  useEffect(() => {
+    const load = async () => {
+      setIsLoading(true);
+      try {
+        const [dailyRes, typesRes, usersRes, monthlyRes, keyUsageRes] = await Promise.all([
+          fetch("/api/admin/analytics/daily-summary?days=30", { headers }),
+          fetch("/api/admin/analytics/enhancement-types", { headers }),
+          fetch("/api/admin/analytics/top-users?limit=15", { headers }),
+          fetch("/api/admin/analytics/monthly-summary", { headers }),
+          fetch("/api/admin/analytics/key-usage?days=30", { headers }),
+        ]);
+        const [daily, types, users, monthly, keys] = await Promise.all([
+          dailyRes.json(), typesRes.json(), usersRes.json(), monthlyRes.json(), keyUsageRes.json(),
+        ]);
+        setDailySummary(daily.daily ?? []);
+        setEnhancementTypes(types.types ?? []);
+        setTopUsers(users.users ?? []);
+        setMonthlySummary(monthly.months ?? []);
+        setKeyUsage(keys.usage ?? []);
+      } catch {}
+      setIsLoading(false);
+    };
+    load();
+  }, []);
+
+  const PIE_COLORS = ["#a855f7", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#6366f1", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"];
+
+  if (isLoading) return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>;
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader title="Usage Analytics" description="Detailed insights into API usage, enhancements, and customer activity" />
+
+      <Tabs value={tab} onValueChange={v => setTab(v as typeof tab)}>
+        <TabsList className="bg-zinc-800 border-zinc-700">
+          <TabsTrigger value="daily">Daily</TabsTrigger>
+          <TabsTrigger value="monthly">Monthly</TabsTrigger>
+          <TabsTrigger value="types">Enhancement Types</TabsTrigger>
+          <TabsTrigger value="users">Top Users</TabsTrigger>
+          <TabsTrigger value="keys">Key Usage</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {tab === "daily" && (
+        <div className="space-y-6">
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader><CardTitle className="text-base">Daily Enhancements (30 days)</CardTitle></CardHeader>
+            <CardContent>
+              {dailySummary.length > 0 ? (
+                <ResponsiveContainer width="100%" height={280}>
+                  <AreaChart data={dailySummary} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="gEnhance" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="gUsers" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#71717a" }} tickFormatter={d => d.slice(5)} />
+                    <YAxis tick={{ fontSize: 10, fill: "#71717a" }} allowDecimals={false} />
+                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
+                    <Legend wrapperStyle={{ fontSize: 12, color: "#a1a1aa" }} />
+                    <Area type="monotone" dataKey="totalEnhancements" name="Enhancements" stroke="#a855f7" fill="url(#gEnhance)" strokeWidth={2} dot={false} />
+                    <Area type="monotone" dataKey="uniqueUsers" name="Active Users" stroke="#3b82f6" fill="url(#gUsers)" strokeWidth={2} dot={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-[280px] flex items-center justify-center text-zinc-600 text-sm">No data yet</div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader><CardTitle className="text-base">Average Processing Time (ms)</CardTitle></CardHeader>
+            <CardContent>
+              {dailySummary.length > 0 ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={dailySummary} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#71717a" }} tickFormatter={d => d.slice(5)} />
+                    <YAxis tick={{ fontSize: 10, fill: "#71717a" }} />
+                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
+                    <Bar dataKey="avgProcessingMs" name="Avg ms" fill="#14b8a6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-[200px] flex items-center justify-center text-zinc-600 text-sm">No data yet</div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {tab === "monthly" && (
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardHeader><CardTitle className="text-base">Monthly Summary</CardTitle></CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow className="border-zinc-800">
+                  <TableHead className="text-zinc-500">Month</TableHead>
+                  <TableHead className="text-zinc-500">Total Jobs</TableHead>
+                  <TableHead className="text-zinc-500">Completed</TableHead>
+                  <TableHead className="text-zinc-500">Failed</TableHead>
+                  <TableHead className="text-zinc-500">Avg Time (ms)</TableHead>
+                  <TableHead className="text-zinc-500">Unique Users</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {monthlySummary.map((m: any) => (
+                  <TableRow key={m.month} className="border-zinc-800">
+                    <TableCell className="font-medium">{m.month}</TableCell>
+                    <TableCell>{m.totalJobs}</TableCell>
+                    <TableCell className="text-emerald-400">{m.completed}</TableCell>
+                    <TableCell className={m.failed > 0 ? "text-rose-400" : ""}>{m.failed}</TableCell>
+                    <TableCell className="text-zinc-400">{m.avgProcessingMs}</TableCell>
+                    <TableCell>{m.uniqueUsers}</TableCell>
+                  </TableRow>
+                ))}
+                {monthlySummary.length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="text-center text-zinc-600 py-8">No data yet</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "types" && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader><CardTitle className="text-base">Enhancement Type Distribution</CardTitle></CardHeader>
+            <CardContent>
+              {enhancementTypes.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie data={enhancementTypes.map(t => ({ name: t.type, value: t.total }))} cx="50%" cy="50%"
+                      outerRadius={100} label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                      labelLine={false} dataKey="value">
+                      {enhancementTypes.map((_, i) => (
+                        <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-[300px] flex items-center justify-center text-zinc-600 text-sm">No data yet</div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader><CardTitle className="text-base">Enhancement Counts</CardTitle></CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-zinc-800">
+                    <TableHead className="text-zinc-500">Type</TableHead>
+                    <TableHead className="text-zinc-500 text-right">Count</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {enhancementTypes.map((t: any) => (
+                    <TableRow key={t.type} className="border-zinc-800">
+                      <TableCell className="font-medium capitalize">{t.type}</TableCell>
+                      <TableCell className="text-right">{t.total}</TableCell>
+                    </TableRow>
+                  ))}
+                  {enhancementTypes.length === 0 && (
+                    <TableRow><TableCell colSpan={2} className="text-center text-zinc-600 py-8">No data yet</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {tab === "users" && (
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardHeader><CardTitle className="text-base">Most Active Users</CardTitle></CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow className="border-zinc-800">
+                  <TableHead className="text-zinc-500">User</TableHead>
+                  <TableHead className="text-zinc-500">Plan</TableHead>
+                  <TableHead className="text-zinc-500">Total Jobs</TableHead>
+                  <TableHead className="text-zinc-500">Completed</TableHead>
+                  <TableHead className="text-zinc-500">Credits</TableHead>
+                  <TableHead className="text-zinc-500">Avg Time (ms)</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {topUsers.map((u: any) => (
+                  <TableRow key={u.userId} className="border-zinc-800">
+                    <TableCell>
+                      <div>
+                        <span className="font-medium">{u.user?.name ?? "Unknown"}</span>
+                        <p className="text-xs text-zinc-500">{u.user?.email ?? `User #${u.userId}`}</p>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={`text-xs ${u.user?.planId ? "border-purple-500/30 text-purple-400" : "border-zinc-600 text-zinc-400"}`}>
+                        {u.user?.planId ? "Paid" : "Free"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{u.totalJobs}</TableCell>
+                    <TableCell className="text-emerald-400">{u.completedJobs}</TableCell>
+                    <TableCell className="text-xs text-zinc-400">{u.user?.creditsUsed ?? 0}/{u.user?.creditsLimit ?? 0}</TableCell>
+                    <TableCell className="text-zinc-400">{u.avgProcessingMs}</TableCell>
+                  </TableRow>
+                ))}
+                {topUsers.length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="text-center text-zinc-600 py-8">No data yet</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "keys" && (
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardHeader><CardTitle className="text-base">Per-Key Daily Usage (30 days)</CardTitle></CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow className="border-zinc-800">
+                  <TableHead className="text-zinc-500">Date</TableHead>
+                  <TableHead className="text-zinc-500">Key</TableHead>
+                  <TableHead className="text-zinc-500">Provider</TableHead>
+                  <TableHead className="text-zinc-500">Calls</TableHead>
+                  <TableHead className="text-zinc-500">Errors</TableHead>
+                  <TableHead className="text-zinc-500">Avg Latency</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {keyUsage.slice(0, 100).map((u: any, i: number) => (
+                  <TableRow key={i} className="border-zinc-800">
+                    <TableCell className="text-sm">{u.date}</TableCell>
+                    <TableCell className="font-mono text-xs">{u.key?.keyPrefix ?? `Key #${u.apiKeyId}`}</TableCell>
+                    <TableCell className="text-sm capitalize">{u.key?.provider ?? "—"}</TableCell>
+                    <TableCell>{u.callCount}</TableCell>
+                    <TableCell className={u.errorCount > 0 ? "text-rose-400" : ""}>{u.errorCount}</TableCell>
+                    <TableCell className="text-zinc-400">{u.avgLatencyMs != null ? `${u.avgLatencyMs}ms` : "—"}</TableCell>
+                  </TableRow>
+                ))}
+                {keyUsage.length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="text-center text-zinc-600 py-8">No usage data yet</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // ─── ADMIN SHELL ─────────────────────────────────────────────────────────────
 const navItems: { id: AdminSection; label: string; icon: React.ElementType; badge?: string }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -914,6 +1441,8 @@ const navItems: { id: AdminSection; label: string; icon: React.ElementType; badg
   { id: "payments", label: "Payments", icon: CreditCard },
   { id: "plans", label: "Plans", icon: BadgeDollarSign },
   { id: "providers", label: "AI Providers", icon: Cpu },
+  { id: "apikeys", label: "API Keys", icon: Key },
+  { id: "analytics", label: "Analytics", icon: BarChart3 },
 ];
 
 export default function Admin() {
@@ -987,6 +1516,8 @@ export default function Admin() {
             {section === "payments" && <PaymentsSection />}
             {section === "plans" && <PlansSection />}
             {section === "providers" && <ProvidersSection />}
+            {section === "apikeys" && <ApiKeysSection />}
+            {section === "analytics" && <AnalyticsSection />}
           </div>
         </ScrollArea>
       </div>

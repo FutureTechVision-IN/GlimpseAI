@@ -49,7 +49,7 @@ export async function initProviderKeys(): Promise<void> {
   // Load AI provider keys (OpenRouter + Gemini) for analysis
   aiProvider.loadFromEnv();
 
-  const { totalKeys, totalModels } = providerKeyManager.loadFromEnv();
+  const { totalKeys, totalModels } = await providerKeyManager.loadFromEnv();
   if (totalKeys === 0) {
     logger.warn("No provider keys found in env vars");
     return;
