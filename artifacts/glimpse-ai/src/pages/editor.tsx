@@ -680,6 +680,47 @@ export default function Editor() {
     toast({ title: "Enhancement selected", description: `Switched to ${et}` });
   }, [aiSuggestion, pushUndo, toast]);
 
+  // Export handler — extracted for reuse by button + keyboard shortcut
+  const handleExport = useCallback(() => {
+    if (processStage !== "completed" || !currentJob?.processedUrl) return;
+    try {
+      const dataUri = currentJob.processedUrl;
+      const byteString = atob(dataUri.split(",")[1] ?? dataUri);
+      const mimeMatch = dataUri.match(/^data:([^;]+);/);
+      const mime = mimeMatch?.[1] ?? "image/jpeg";
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+      const blob = new Blob([ab], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const ext = mime === "image/png" ? ".png" : mime === "image/webp" ? ".webp" : ".jpg";
+      const baseName = (file?.name ?? "image.jpg").replace(/\.[^.]+$/, "");
+      a.download = `enhanced-${baseName}${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast({ title: "Download started", description: "Your enhanced image is being saved." });
+    } catch {
+      window.open(currentJob.processedUrl!, "_blank");
+      toast({ title: "Download", description: "Image opened in a new tab. Right-click to save." });
+    }
+  }, [processStage, currentJob?.processedUrl, file?.name, toast]);
+
+  // Keyboard shortcut: Cmd+S / Ctrl+S to export
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        handleExport();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleExport]);
+
   const handleProcess = useCallback(async () => {
     if (!file || !base64Data) return;
 
@@ -952,15 +993,15 @@ export default function Editor() {
                 {editorMode === "simple" && (
                   <div className="space-y-3">
                     <div className="space-y-1.5">
-                      <Label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
-                      <div className="grid grid-cols-5 gap-1">
+                      <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
+                      <div className="grid grid-cols-5 gap-1.5">
                         {SIMPLE_PRESETS.map((p) => (
                           <Tooltip key={p.type + (p.filterName ?? "")}>
                             <TooltipTrigger asChild>
                               <motion.button
                                 whileTap={{ scale: 0.97 }}
                                 className={cn(
-                                  "flex flex-col items-center gap-0.5 p-1.5 rounded-lg border transition-all text-center",
+                                  "flex flex-col items-center gap-1 p-1.5 rounded-lg border transition-all text-center",
                                   enhancementType === p.type && !selectedFilter
                                     ? "border-teal-500 bg-teal-500/10 shadow-lg shadow-teal-500/10"
                                     : "border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-zinc-700",
@@ -978,12 +1019,12 @@ export default function Editor() {
                                 }}
                               >
                                 <div className={cn(
-                                  "w-7 h-7 rounded-md flex items-center justify-center shrink-0 transition-colors [&_svg]:w-3.5 [&_svg]:h-3.5",
+                                  "w-8 h-8 rounded-md flex items-center justify-center shrink-0 transition-colors [&_svg]:w-4 [&_svg]:h-4",
                                   enhancementType === p.type && !selectedFilter ? "bg-teal-500/20 text-teal-400" : "bg-zinc-800 text-zinc-400",
                                 )}>
                                   {p.icon}
                                 </div>
-                                <p className="text-[9px] font-medium leading-tight truncate w-full">{p.label}</p>
+                                <p className="text-[10px] font-medium leading-tight truncate w-full">{p.label}</p>
                               </motion.button>
                             </TooltipTrigger>
                             <TooltipContent side="right" className="text-xs">{p.desc}</TooltipContent>
@@ -996,13 +1037,13 @@ export default function Editor() {
                     {enhancementType !== "upscale" && enhancementType !== "upscale_4x" && file && (
                       <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
-                          <ZoomIn className="w-3 h-3 text-teal-400" />
-                          <Label className="text-[10px] font-medium text-zinc-300">Also Upscale</Label>
+                          <ZoomIn className="w-3.5 h-3.5 text-teal-400" />
+                          <Label className="text-[11px] font-medium text-zinc-300">Also Upscale</Label>
                           {upscaleAfter && (
                             <div className="flex gap-1 ml-1">
                               <button
                                 className={cn(
-                                  "text-[9px] py-0.5 px-1.5 rounded border transition-all font-medium",
+                                  "text-[10px] py-0.5 px-1.5 rounded border transition-all font-medium",
                                   upscaleAfter === "upscale"
                                     ? "border-teal-500 bg-teal-500/10 text-teal-300"
                                     : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
@@ -1011,7 +1052,7 @@ export default function Editor() {
                               >2x</button>
                               <button
                                 className={cn(
-                                  "text-[9px] py-0.5 px-1.5 rounded border transition-all font-medium",
+                                  "text-[10px] py-0.5 px-1.5 rounded border transition-all font-medium",
                                   upscaleAfter === "upscale_4x"
                                     ? "border-teal-500 bg-teal-500/10 text-teal-300"
                                     : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
@@ -1032,8 +1073,8 @@ export default function Editor() {
 
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <Label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
-                        <button onClick={() => setShowAllFilters(!showAllFilters)} className="text-[10px] text-teal-500 hover:text-teal-400">
+                        <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
+                        <button onClick={() => setShowAllFilters(!showAllFilters)} className="text-[11px] text-teal-500 hover:text-teal-400">
                           {showAllFilters ? "Less" : `All ${FILTER_PRESETS.length}`}
                         </button>
                       </div>
@@ -1044,7 +1085,7 @@ export default function Editor() {
                               <motion.button
                                 whileTap={{ scale: 0.95 }}
                                 className={cn(
-                                  "relative rounded-md border transition-all overflow-hidden h-10 group",
+                                  "relative rounded-md border transition-all overflow-hidden h-12 group",
                                   selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
                                 )}
                                 onClick={() => {
@@ -1056,7 +1097,7 @@ export default function Editor() {
                               >
                                 <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
                                 <div className="absolute inset-0 flex items-end p-0.5">
-                                  <span className="text-[7px] font-medium text-white drop-shadow-lg leading-tight truncate">{p.name}</span>
+                                  <span className="text-[9px] font-medium text-white drop-shadow-lg leading-tight truncate">{p.name}</span>
                                 </div>
                                 {p.premium && (
                                   <div className="absolute top-0.5 right-0.5">
@@ -1415,39 +1456,16 @@ export default function Editor() {
                     </div>
                     {isCompleted && currentJob?.processedUrl && (
                       <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
-                        <Button size="sm" className="bg-white text-black hover:bg-white/90 shadow-lg h-9 px-5 font-semibold text-xs"
-                          onClick={() => {
-                            try {
-                              const dataUri = currentJob.processedUrl!;
-                              // Convert data URI to blob for reliable cross-browser download
-                              const byteString = atob(dataUri.split(",")[1] ?? dataUri);
-                              const mimeMatch = dataUri.match(/^data:([^;]+);/);
-                              const mime = mimeMatch?.[1] ?? "image/jpeg";
-                              const ab = new ArrayBuffer(byteString.length);
-                              const ia = new Uint8Array(ab);
-                              for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-                              const blob = new Blob([ab], { type: mime });
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement("a");
-                              a.href = url;
-                              // Use correct extension based on actual MIME type (Sharp outputs JPEG)
-                              const ext = mime === "image/png" ? ".png" : mime === "image/webp" ? ".webp" : ".jpg";
-                              const baseName = (file?.name ?? "image.jpg").replace(/\.[^.]+$/, "");
-                              a.download = `enhanced-${baseName}${ext}`;
-                              document.body.appendChild(a);
-                              a.click();
-                              document.body.removeChild(a);
-                              setTimeout(() => URL.revokeObjectURL(url), 1000);
-                              toast({ title: "Download started", description: "Your enhanced image is being saved." });
-                            } catch {
-                              // Fallback: open in new tab
-                              window.open(currentJob.processedUrl!, "_blank");
-                              toast({ title: "Download", description: "Image opened in a new tab. Right-click to save." });
-                            }
-                          }}
-                        >
-                          <Download className="w-4 h-4 mr-2" />Export
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button size="sm" className="bg-white text-black hover:bg-white/90 shadow-lg h-9 px-5 font-semibold text-sm" onClick={handleExport}>
+                              <Download className="w-4 h-4 mr-2" />Export
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">
+                            <span className="text-xs">Save enhanced image <kbd className="ml-1 px-1 py-0.5 rounded bg-zinc-700 text-[10px]">⌘S</kbd></span>
+                          </TooltipContent>
+                        </Tooltip>
                       </motion.div>
                     )}
                   </div>
