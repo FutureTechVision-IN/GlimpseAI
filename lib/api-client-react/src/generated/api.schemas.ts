@@ -156,6 +156,7 @@ export const EnhanceMediaBodyEnhancementType = {
   portrait: "portrait",
   skin: "skin",
   lighting: "lighting",
+  lighting_enhance: "lighting_enhance",
   color: "color",
   background: "background",
   beauty: "beauty",
@@ -167,6 +168,10 @@ export const EnhanceMediaBodyEnhancementType = {
   trim: "trim",
   stabilize: "stabilize",
   custom: "custom",
+  color_grade_cinematic: "color_grade_cinematic",
+  color_grade_warm: "color_grade_warm",
+  color_grade_cool: "color_grade_cool",
+  skin_retouch: "skin_retouch",
 } as const;
 
 export type EnhanceMediaBodySettings = { [key: string]: unknown };
@@ -200,6 +205,15 @@ export interface Preset {
   /** @nullable */
   thumbnailUrl?: string | null;
   settings?: PresetSettings;
+}
+
+export interface AnalysisResult {
+  description: string;
+  suggestedEnhancement: string;
+  /** @nullable */
+  suggestedFilter?: string | null;
+  detectedSubjects: string[];
+  confidence: number;
 }
 
 export type MediaStatsTopEnhancementTypesItem = {
@@ -379,22 +393,6 @@ export interface CreateProviderBody {
   priority?: number;
 }
 
-export interface AnalyzeMediaBody {
-  base64Data: string;
-  mimeType: string;
-}
-
-export interface AnalysisResult {
-  description: string;
-  suggestedEnhancement: string;
-  /** @nullable */
-  suggestedFilter?: string | null;
-  detectedSubjects: string[];
-  confidence: number;
-  sceneType: string;
-  lightingCondition: string;
-}
-
 export interface UpdateProviderBody {
   name?: string;
   apiKey?: string;
@@ -416,6 +414,10 @@ export const GetUserHistoryType = {
   video: "video",
   all: "all",
 } as const;
+
+export type AnalyzeMediaBody = {
+  jobId: number;
+};
 
 export type ListMediaJobsParams = {
   status?: ListMediaJobsStatus;

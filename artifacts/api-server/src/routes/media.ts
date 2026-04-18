@@ -184,6 +184,7 @@ router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promis
   res.json({
     description: "Unable to analyze image with AI",
     suggestedEnhancement: "auto",
+    suggestedFilter: null,
     detectedSubjects: [],
     confidence: 0.3,
   });

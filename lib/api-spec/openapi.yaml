@@ -286,6 +286,30 @@ paths:
               schema:
                 $ref: "#/components/schemas/MediaJob"
 
+  /media/analyze:
+    post:
+      operationId: analyzeMedia
+      tags: [media]
+      summary: AI analysis of uploaded image — suggests enhancement, filter, and detected subjects
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jobId:
+                  type: integer
+              required:
+                - jobId
+      responses:
+        "200":
+          description: Analysis result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResult"
+
   /media/jobs:
     get:
       operationId: listMediaJobs
@@ -928,7 +952,7 @@ components:
           type: ["integer", "null"]
         enhancementType:
           type: string
-          enum: [auto, portrait, skin, lighting, color, background, beauty, upscale, upscale_4x, blur_background, posture, filter, trim, stabilize, custom]
+          enum: [auto, portrait, skin, lighting, lighting_enhance, color, background, beauty, upscale, upscale_4x, blur_background, posture, filter, trim, stabilize, custom, color_grade_cinematic, color_grade_warm, color_grade_cool, skin_retouch]
         settings:
           type: object
           additionalProperties: true
@@ -1010,6 +1034,27 @@ components:
         - mediaType
         - category
         - isPremium
+
+    AnalysisResult:
+      type: object
+      properties:
+        description:
+          type: string
+        suggestedEnhancement:
+          type: string
+        suggestedFilter:
+          type: ["string", "null"]
+        detectedSubjects:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+      required:
+        - description
+        - suggestedEnhancement
+        - detectedSubjects
+        - confidence
 
     MediaStats:
       type: object

@@ -6,7 +6,6 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface AnalyzeMediaBody {
-  base64Data: string;
-  mimeType: string;
-}
+export type AnalyzeMediaBody = {
+  jobId: number;
+};

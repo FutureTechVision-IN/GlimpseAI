@@ -13,6 +13,4 @@ export interface AnalysisResult {
   suggestedFilter?: string | null;
   detectedSubjects: string[];
   confidence: number;
-  sceneType: string;
-  lightingCondition: string;
 }

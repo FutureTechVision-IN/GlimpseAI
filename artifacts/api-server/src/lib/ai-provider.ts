@@ -16,6 +16,7 @@ interface ProviderKey {
 interface AnalysisResult {
   description: string;
   suggestedEnhancement: string;
+  suggestedFilter: string | null;
   detectedSubjects: string[];
   confidence: number;
 }
@@ -164,7 +165,7 @@ class AIProviderService {
                 },
                 {
                   type: "text",
-                  text: "Analyze this image briefly. Return JSON only: {\n\"description\": \"brief description\",\n\"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin\",\n\"detectedSubjects\": [\"face\", \"landscape\", etc],\n\"confidence\": 0.0-1.0\n}",
+                  text: "Analyze this image briefly. Return JSON only: {\n\"description\": \"brief description\",\n\"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin|color_grade_cinematic|color_grade_warm|color_grade_cool|blur_background|skin_retouch|lighting_enhance\",\n\"suggestedFilter\": \"cinematic|vivid|film|vintage|moody|goldenhour|dramatic|airy|teal_orange|cyberpunk|null\",\n\"detectedSubjects\": [\"face\", \"landscape\", etc],\n\"confidence\": 0.0-1.0\n}",
                 },
               ],
             },
@@ -191,6 +192,7 @@ class AIProviderService {
         return {
           description: parsed.description || "Image uploaded",
           suggestedEnhancement: parsed.suggestedEnhancement || "auto",
+          suggestedFilter: parsed.suggestedFilter || null,
           detectedSubjects: parsed.detectedSubjects || [],
           confidence: parsed.confidence || 0.5,
         };
@@ -238,6 +240,7 @@ class AIProviderService {
         return {
           description: parsed.description || "Image uploaded",
           suggestedEnhancement: parsed.suggestedEnhancement || "auto",
+          suggestedFilter: parsed.suggestedFilter || null,
           detectedSubjects: parsed.detectedSubjects || [],
           confidence: parsed.confidence || 0.5,
         };

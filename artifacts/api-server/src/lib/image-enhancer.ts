@@ -8,6 +8,7 @@ export interface EnhanceOptions {
 
 // Named filter presets (server-side sharp equivalents)
 const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
+  // ── Classic ──
   vivid: (p) => p.modulate({ saturation: 1.35, brightness: 1.03 }).normalize().sharpen({ sigma: 0.6 }),
   portrait: (p) => p.modulate({ brightness: 1.04, saturation: 0.92 }).sharpen({ sigma: 0.7, m1: 0.6, m2: 0.3 }).gamma(1.06),
   bw: (p) => p.grayscale().normalize().sharpen({ sigma: 1.0 }).gamma(1.1),
@@ -27,6 +28,17 @@ const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
   sunset: (p) => p.modulate({ saturation: 1.2, brightness: 1.03 }).tint({ r: 255, g: 200, b: 160 }).gamma(1.05).sharpen({ sigma: 0.4 }),
   matte: (p) => p.modulate({ saturation: 0.7, brightness: 1.02 }).gamma(0.92).linear(0.9, 15).sharpen({ sigma: 0.3 }),
   neon: (p) => p.modulate({ saturation: 1.6, brightness: 1.05 }).sharpen({ sigma: 1.0 }).normalize(),
+  // ── New premium filters ──
+  airy: (p) => p.modulate({ brightness: 1.12, saturation: 0.85 }).gamma(0.88).sharpen({ sigma: 0.3 }).tint({ r: 240, g: 240, b: 250 }),
+  teal_orange: (p) => p.modulate({ saturation: 1.2, brightness: 1.02 }).tint({ r: 220, g: 195, b: 170 }).normalize().sharpen({ sigma: 0.6 }),
+  pastel: (p) => p.modulate({ saturation: 0.55, brightness: 1.15 }).gamma(0.85).sharpen({ sigma: 0.3 }).tint({ r: 240, g: 230, b: 235 }),
+  noir_color: (p) => p.modulate({ saturation: 0.4, brightness: 0.88 }).gamma(1.25).sharpen({ sigma: 1.5, m1: 2.0, m2: 1.0 }).normalize(),
+  cross_process: (p) => p.modulate({ saturation: 1.3, brightness: 1.0 }).tint({ r: 200, g: 240, b: 180 }).gamma(1.1).sharpen({ sigma: 0.6 }),
+  cyberpunk: (p) => p.modulate({ saturation: 1.5, brightness: 0.95 }).tint({ r: 200, g: 150, b: 255 }).gamma(1.15).sharpen({ sigma: 0.8 }),
+  arctic: (p) => p.modulate({ saturation: 0.6, brightness: 1.1 }).tint({ r: 190, g: 215, b: 240 }).gamma(1.02).sharpen({ sigma: 0.4 }),
+  ember: (p) => p.modulate({ saturation: 1.15, brightness: 0.95 }).tint({ r: 255, g: 180, b: 140 }).gamma(1.1).sharpen({ sigma: 0.7 }),
+  forest: (p) => p.modulate({ saturation: 1.1, brightness: 0.97 }).tint({ r: 170, g: 210, b: 170 }).gamma(1.05).sharpen({ sigma: 0.5 }),
+  chrome: (p) => p.modulate({ saturation: 0.3, brightness: 1.08 }).normalize().sharpen({ sigma: 1.5, m1: 1.8, m2: 0.9 }).gamma(1.0),
 };
 
 /**
@@ -108,6 +120,59 @@ export async function enhanceImage(
       }
       case "lighting": {
         pipeline = pipeline.normalize().gamma(1.15).modulate({ brightness: 1.05 }).sharpen({ sigma: 0.8 });
+        break;
+      }
+      case "lighting_enhance": {
+        // Mood-aware lighting: lift shadows, tame highlights, add clarity
+        pipeline = pipeline
+          .normalize()
+          .gamma(1.2)
+          .linear(0.95, 10)  // Lift shadow floor
+          .modulate({ brightness: 1.06, saturation: 1.05 })
+          .sharpen({ sigma: 1.0, m1: 1.2, m2: 0.5 });
+        break;
+      }
+      case "color_grade_cinematic": {
+        // Professional cinematic color grade: teal shadows + warm highlights
+        pipeline = pipeline
+          .modulate({ saturation: 0.82, brightness: 0.96 })
+          .tint({ r: 175, g: 195, b: 220 })
+          .gamma(1.1)
+          .linear(0.95, 8)
+          .sharpen({ sigma: 0.8, m1: 0.8, m2: 0.4 });
+        break;
+      }
+      case "color_grade_warm": {
+        // Warm golden tones with lifted blacks
+        pipeline = pipeline
+          .modulate({ saturation: 1.08, brightness: 1.04 })
+          .tint({ r: 248, g: 225, b: 190 })
+          .gamma(1.05)
+          .linear(0.92, 12)
+          .sharpen({ sigma: 0.5 });
+        break;
+      }
+      case "color_grade_cool": {
+        // Cool blue-teal grade with clean highlights
+        pipeline = pipeline
+          .modulate({ saturation: 0.9, brightness: 1.02 })
+          .tint({ r: 165, g: 195, b: 225 })
+          .gamma(1.08)
+          .normalize()
+          .sharpen({ sigma: 0.6 });
+        break;
+      }
+      case "skin_retouch": {
+        // Advanced skin retouching: smooth + warm + detail preservation
+        const smoothIntensity = typeof s.skinSmoothing === "number"
+          ? Math.min(8, Math.max(0.5, (s.skinSmoothing as number) / 12))
+          : 2.5;
+        pipeline = pipeline
+          .modulate({ brightness: 1.04, saturation: 0.93 })
+          .blur(smoothIntensity)
+          .sharpen({ sigma: 0.6, m1: 0.5, m2: 0.2 })  // Recover detail
+          .gamma(1.06)
+          .tint({ r: 245, g: 230, b: 220 });  // Subtle warm skin tone
         break;
       }
       case "background": {

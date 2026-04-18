@@ -14,6 +14,7 @@ export const EnhanceMediaBodyEnhancementType = {
   portrait: "portrait",
   skin: "skin",
   lighting: "lighting",
+  lighting_enhance: "lighting_enhance",
   color: "color",
   background: "background",
   beauty: "beauty",
@@ -25,4 +26,8 @@ export const EnhanceMediaBodyEnhancementType = {
   trim: "trim",
   stabilize: "stabilize",
   custom: "custom",
+  color_grade_cinematic: "color_grade_cinematic",
+  color_grade_warm: "color_grade_warm",
+  color_grade_cool: "color_grade_cool",
+  skin_retouch: "skin_retouch",
 } as const;

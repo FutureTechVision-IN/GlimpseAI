@@ -195,6 +195,7 @@ export const EnhanceMediaBody = zod.object({
     "portrait",
     "skin",
     "lighting",
+    "lighting_enhance",
     "color",
     "background",
     "beauty",
@@ -206,6 +207,10 @@ export const EnhanceMediaBody = zod.object({
     "trim",
     "stabilize",
     "custom",
+    "color_grade_cinematic",
+    "color_grade_warm",
+    "color_grade_cool",
+    "skin_retouch",
   ]),
   settings: zod.record(zod.string(), zod.unknown()).optional(),
 });
@@ -226,6 +231,21 @@ export const EnhanceMediaResponse = zod.object({
   fileSize: zod.number(),
   createdAt: zod.coerce.date(),
   completedAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * @summary AI analysis of uploaded image — suggests enhancement, filter, and detected subjects
+ */
+export const AnalyzeMediaBody = zod.object({
+  jobId: zod.number(),
+});
+
+export const AnalyzeMediaResponse = zod.object({
+  description: zod.string(),
+  suggestedEnhancement: zod.string(),
+  suggestedFilter: zod.string().nullish(),
+  detectedSubjects: zod.array(zod.string()),
+  confidence: zod.number(),
 });
 
 /**
@@ -299,24 +319,6 @@ export const ListPresetsResponseItem = zod.object({
   settings: zod.record(zod.string(), zod.unknown()).optional(),
 });
 export const ListPresetsResponse = zod.array(ListPresetsResponseItem);
-
-/**
- * @summary AI-powered image analysis with enhancement suggestions
- */
-export const AnalyzeMediaBody = zod.object({
-  base64Data: zod.string(),
-  mimeType: zod.string(),
-});
-
-export const AnalyzeMediaResponse = zod.object({
-  description: zod.string(),
-  suggestedEnhancement: zod.string(),
-  suggestedFilter: zod.string().nullish(),
-  detectedSubjects: zod.array(zod.string()),
-  confidence: zod.number(),
-  sceneType: zod.string(),
-  lightingCondition: zod.string(),
-});
 
 /**
  * @summary Get media processing statistics (wow endpoint)
