@@ -92,8 +92,12 @@ const OPENROUTER_VISION_MODELS = [
   "google/gemma-4-31b-it:free",          // gemma 4 with image support
   "google/gemma-4-26b-a4b-it:free",      // smaller gemma 4 variant
   "z-ai/glm-4.5-air:free",              // matches env key
-  "qwen/qwen3-8b:free",                  // text fallback (no vision)
 ];
+
+// Models that are TEXT-ONLY — skip for any vision/image task
+const TEXT_ONLY_MODELS = new Set([
+  "qwen/qwen3-8b:free",
+]);
 
 // ---------------------------------------------------------------------------
 // SRE-core: APIKeyPoolManager with round-robin + smart circuit breaker
@@ -400,7 +404,7 @@ class AIProviderService {
 
     for (const model of OPENROUTER_VISION_MODELS) {
       // Skip text-only models for vision tasks
-      if (!model.includes("vl") && !model.includes("gemma") && !model.includes("glm") && !model.includes("qwen")) continue;
+      if (TEXT_ONLY_MODELS.has(model)) continue;
       try {
         const response = await fetch(`${baseUrl}/chat/completions`, {
           method: "POST",
