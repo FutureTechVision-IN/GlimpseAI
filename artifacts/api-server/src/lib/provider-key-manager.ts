@@ -23,16 +23,59 @@ export interface KeyEntry {
   lastError: string | null;
 }
 
-const SLUG_TO_MODEL: Record<string, string> = {
-  STEPFUN_STEP_3_5_FLASH_FREE: "stepfun/step-3.5-flash:free",
-  NVIDIA_NEMOTRON_3_SUPER_120B_A12B_FREE: "nvidia/nemotron-3-super-120b-a12b:free",
-  NVIDIA_NEMOTRON_3_NANO_30B_A3B_FREE: "nvidia/nemotron-3-nano-30b-a3b:free",
-  ZAI_GLM_4_5_AIR_FREE: "z-ai/glm-4.5-air:free",
+// ---------------------------------------------------------------------------
+// Model registry: env-var slug → OpenRouter model ID
+// Grouped by capability tier for priority routing
+// ---------------------------------------------------------------------------
+
+/** Primary tier: high-quality vision/LLM models for image & video analysis */
+const PRIMARY_MODELS: Record<string, string> = {
+  // NEW — video-capable models (also support text/vision analysis)
+  BYTEDANCE_SEEDANCE_2_0:      "bytedance/seedance-2.0",
+  ALIBABA_WAN_2_7:             "alibaba/wan-2.7",
+  OPENROUTER_ELEPHANT_ALPHA:   "openrouter/elephant-alpha",
+  MOONSHOTAI_KIMI_K2_5:        "moonshotai/kimi-k2.5",
 };
 
+/** Standard tier: text/vision models, proven free-tier availability */
+const STANDARD_MODELS: Record<string, string> = {
+  STEPFUN_STEP_3_5_FLASH_FREE:              "stepfun/step-3.5-flash:free",
+  NVIDIA_NEMOTRON_3_SUPER_120B_A12B_FREE:   "nvidia/nemotron-3-super-120b-a12b:free",
+  NVIDIA_NEMOTRON_3_NANO_30B_A3B_FREE:      "nvidia/nemotron-3-nano-30b-a3b:free",
+  ZAI_GLM_4_5_AIR_FREE:                    "z-ai/glm-4.5-air:free",
+};
+
+/** Combined map used when loading from env */
+const SLUG_TO_MODEL: Record<string, string> = {
+  ...PRIMARY_MODELS,
+  ...STANDARD_MODELS,
+};
+
+/** Maps model ID → routing group (used by pickKeyForTier priority cascade) */
+const MODEL_GROUP: Record<string, "primary" | "standard" | "germany"> = {};
+for (const m of Object.values(PRIMARY_MODELS))  MODEL_GROUP[m] = "primary";
+for (const m of Object.values(STANDARD_MODELS)) MODEL_GROUP[m] = "standard";
+
+/** Models that support image/video analysis via vision API */
+const VISION_CAPABLE_MODELS = new Set([
+  "bytedance/seedance-2.0",
+  "alibaba/wan-2.7",
+  "openrouter/elephant-alpha",
+  "moonshotai/kimi-k2.5",
+  "stepfun/step-3.5-flash:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+]);
+
 const OPENROUTER_BASE = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
+const GERMANY_OPENROUTER_BASE = process.env.GERMANY_OPENROUTER_BASE_URL ?? OPENROUTER_BASE;
 const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_CONSECUTIVE_ERRORS = 3;
+
+/** Validates that a string looks like an OpenRouter or Gemini API key */
+function isValidKeyFormat(k: string): boolean {
+  const t = k.trim();
+  return t.startsWith("sk-or-") || t.startsWith("AIza") || (t.startsWith("AQ.") && t.length > 20);
+}
 
 class ProviderKeyManager {
   private keys: Map<number, KeyEntry> = new Map();
@@ -44,26 +87,42 @@ class ProviderKeyManager {
     let totalKeys = 0;
     const models = new Set<string>();
 
+    // ── Primary + standard OpenRouter keys ───────────────────────────────
     for (const [slug, model] of Object.entries(SLUG_TO_MODEL)) {
       const envVar = `PROVIDER_KEYS_${slug}`;
       const raw = process.env[envVar];
       if (!raw) continue;
 
-      const keyStrings = raw.split(",").map((k) => k.trim()).filter((k) => k.length > 0);
+      const keyStrings = raw.split(",").map((k) => k.trim()).filter(isValidKeyFormat);
       if (keyStrings.length === 0) continue;
       models.add(model);
 
+      const group = MODEL_GROUP[model] ?? "standard";
+      const tier: "free" | "premium" = group === "primary" ? "premium" : "free";
+
       for (const key of keyStrings) {
-        await this.upsertKey(key, "openrouter", model, "free");
+        await this.upsertKey(key, "openrouter", model, tier, group);
         totalKeys++;
       }
     }
 
-    // Load Gemini keys
+    // ── Germany OpenRouter fallback keys ─────────────────────────────────
+    // Env: GERMANY_OPENROUTER_KEYS=sk-or-v1-xxx,sk-or-v1-yyy,...
+    // These are dedicated higher-limit keys used only when primary keys degrade
+    const germanyRaw = process.env.GERMANY_OPENROUTER_KEYS ?? "";
+    const germanyModel = process.env.GERMANY_OPENROUTER_MODEL ?? "moonshotai/kimi-k2.5";
+    const germanyKeys = germanyRaw.split(",").map((k) => k.trim()).filter(isValidKeyFormat);
+    for (const key of germanyKeys) {
+      await this.upsertKey(key, "openrouter", germanyModel, "premium", "germany");
+      totalKeys++;
+      models.add(germanyModel);
+    }
+
+    // ── Gemini keys (last-resort fallback, premium only) ─────────────────
     const geminiRaw = process.env.GEMINI_API_KEYS ?? "";
-    const geminiKeys = geminiRaw.split(",").map((k) => k.trim()).filter((k) => k.length > 10);
+    const geminiKeys = geminiRaw.split(",").map((k) => k.trim()).filter(isValidKeyFormat);
     for (const key of geminiKeys) {
-      await this.upsertKey(key, "gemini", "gemini-2.0-flash", "premium");
+      await this.upsertKey(key, "gemini", "gemini-2.0-flash", "premium", "gemini");
       totalKeys++;
       models.add("gemini-2.0-flash");
     }
@@ -77,6 +136,7 @@ class ProviderKeyManager {
     provider: "openrouter" | "gemini",
     model: string,
     tier: "free" | "premium",
+    group: "primary" | "standard" | "germany" | "gemini" = "standard",
   ): Promise<KeyEntry> {
     const keyHash = key.slice(-8);
     const keyPrefix = key.slice(0, 12);
@@ -103,13 +163,18 @@ class ProviderKeyManager {
           lastValidatedAt: existing.lastValidatedAt,
           latencyMs: existing.latencyMs,
           lastError: existing.lastError,
+          group,
         };
         this.keys.set(dbId, entry);
         return entry;
       }
-      return this.keys.get(dbId)!;
+      // Update group if key was previously loaded without it
+      const mem = this.keys.get(dbId)!;
+      mem.group = group;
+      return mem;
     }
 
+    const priorityVal = group === "primary" ? 3 : group === "germany" ? 2 : group === "gemini" ? 1 : 2;
     const [inserted] = await db.insert(apiKeysTable).values({
       provider,
       model,
@@ -117,7 +182,7 @@ class ProviderKeyManager {
       keyPrefix,
       tier,
       status: "validating",
-      priority: tier === "premium" ? 2 : 1,
+      priority: priorityVal,
     }).returning();
 
     dbId = inserted.id;
@@ -128,7 +193,7 @@ class ProviderKeyManager {
       model,
       tier,
       status: "validating",
-      priority: tier === "premium" ? 2 : 1,
+      priority: priorityVal,
       totalCalls: 0,
       totalErrors: 0,
       consecutiveErrors: 0,
@@ -136,6 +201,7 @@ class ProviderKeyManager {
       lastValidatedAt: null,
       latencyMs: null,
       lastError: null,
+      group,
     };
     this.keys.set(dbId, entry);
     return entry;
