@@ -345,10 +345,20 @@ export default function Editor() {
   const [cropEnabled, setCropEnabled] = useState(false);
   const [stabilize, setStabilize] = useState(false);
   const [denoise, setDenoise] = useState(false);
+  const [skinSmoothing, setSkinSmoothing] = useState(50);
+
+  // AI Analysis
+  const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showCompare, setShowCompare] = useState(false);
+
+  // Filter gallery scroll
+  const [showAllFilters, setShowAllFilters] = useState(false);
 
   const { toast } = useToast();
   const uploadMedia = useUploadMedia();
   const enhanceMedia = useEnhanceMedia();
+  const analyzeMedia = useAnalyzeMedia();
   const { data: presets } = useListPresets({ type: mediaType });
   const { data: currentJob } = useGetMediaJob(currentJobId as number, {
     query: {
@@ -362,6 +372,9 @@ export default function Editor() {
     },
   });
 
+  // Track the uploaded job ID for AI analysis (set after upload, before enhance)
+  const uploadedJobIdRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!currentJob) return;
     if (currentJob.status === "completed" && processStage !== "completed") {
@@ -374,6 +387,23 @@ export default function Editor() {
       setProcessStage("processing");
     }
   }, [currentJob?.status]);
+
+  // Auto-analyze image after upload
+  const runAnalysis = useCallback((jobId: number) => {
+    setIsAnalyzing(true);
+    analyzeMedia.mutate(
+      { data: { jobId } },
+      {
+        onSuccess: (result) => {
+          setAiSuggestion(result as AISuggestion);
+          setIsAnalyzing(false);
+        },
+        onError: () => {
+          setIsAnalyzing(false);
+        },
+      },
+    );
+  }, [analyzeMedia]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const sel = e.target.files?.[0];
@@ -394,10 +424,45 @@ export default function Editor() {
     setStabilize(false);
     setDenoise(false);
     setSelectedFilter(null);
+    setAiSuggestion(null);
+    setSkinSmoothing(50);
+
     const reader = new FileReader();
-    reader.onload = (ev) => setBase64Data((ev.target?.result as string).split(",")[1]);
+    reader.onload = (ev) => {
+      const b64 = (ev.target?.result as string).split(",")[1];
+      setBase64Data(b64);
+
+      // Silent upload just for analysis (don't show progress)
+      const isPhoto = !sel.type.startsWith("video");
+      if (isPhoto) {
+        uploadMedia.mutate(
+          { data: { filename: sel.name, mimeType: sel.type, size: sel.size, mediaType: "photo", base64Data: b64 } },
+          {
+            onSuccess: (job) => {
+              uploadedJobIdRef.current = job.id;
+              runAnalysis(job.id);
+            },
+          },
+        );
+      }
+    };
     reader.readAsDataURL(sel);
   };
+
+  // Apply AI suggestion
+  const applyAiSuggestion = useCallback(() => {
+    if (!aiSuggestion) return;
+    const et = aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType;
+    setEnhancementType(et);
+    if (aiSuggestion.suggestedFilter) {
+      const fp = FILTER_PRESETS.find((p) => p.key === aiSuggestion.suggestedFilter || p.serverFilter === aiSuggestion.suggestedFilter);
+      if (fp) {
+        setSelectedFilter(fp.key);
+        setFilters(fp.f);
+      }
+    }
+    toast({ title: "AI suggestion applied", description: `Using ${et} enhancement` });
+  }, [aiSuggestion, toast]);
 
   const handleProcess = useCallback(async () => {
     if (!file || !base64Data) return;
@@ -414,6 +479,11 @@ export default function Editor() {
       }
     }
 
+    // Skin smoothing
+    if (skinSmoothing !== 50) {
+      settings.skinSmoothing = skinSmoothing;
+    }
+
     // Video stabilize
     if (mediaType === "video" && stabilize) {
       effectiveType = "stabilize" as EnhanceMediaBodyEnhancementType;
@@ -421,7 +491,7 @@ export default function Editor() {
 
     let finalBase64 = base64Data;
     const hasT = transform.rotation !== 0 || transform.flipH || transform.flipV;
-    const hasF = Object.values(filters).some((v) => v !== 100);
+    const hasF = filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100 || filters.sharpness !== 100;
     const hasC = cropEnabled && (cropBox.x !== 0 || cropBox.y !== 0 || cropBox.x2 !== 100 || cropBox.y2 !== 100);
 
     if (editorMode === "advanced" && mediaType === "photo" && (hasT || hasF || hasC)) {
@@ -438,6 +508,10 @@ export default function Editor() {
       if (filters.contrast !== 100) settings.contrast = filters.contrast;
       if (filters.saturation !== 100) settings.saturation = filters.saturation;
       if (filters.sharpness !== 100) settings.sharpness = filters.sharpness;
+      if (filters.warmth !== 0) settings.warmth = filters.warmth;
+      if (filters.highlights !== 0) settings.highlights = filters.highlights;
+      if (filters.shadows !== 0) settings.shadows = filters.shadows;
+      if (filters.hue !== 0) settings.hue = filters.hue;
     }
 
     setProcessStage("uploading");
@@ -468,7 +542,7 @@ export default function Editor() {
         },
       },
     );
-  }, [file, base64Data, enhancementType, mediaType, transform, filters, cropBox, cropEnabled, stabilize, presetId, editorMode, selectedFilter]);
+  }, [file, base64Data, enhancementType, mediaType, transform, filters, cropBox, cropEnabled, stabilize, presetId, editorMode, selectedFilter, skinSmoothing]);
 
   const resetAll = () => {
     setFile(null); setPreviewUrl(""); setBase64Data("");
@@ -476,406 +550,614 @@ export default function Editor() {
     setTransform(DEFAULT_TRANSFORM); setFilters(DEFAULT_FILTERS);
     setCropBox(DEFAULT_CROP); setCropEnabled(false);
     setStabilize(false); setDenoise(false);
-    setSelectedFilter(null);
+    setSelectedFilter(null); setAiSuggestion(null);
+    setSkinSmoothing(50); uploadedJobIdRef.current = null;
   };
 
   const isProcessing = processStage === "uploading" || processStage === "processing";
   const isCompleted = processStage === "completed";
   const hasEdits = transform.rotation !== 0 || transform.flipH || transform.flipV
-    || Object.values(filters).some((v) => v !== 100)
+    || filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100 || filters.sharpness !== 100
+    || filters.warmth !== 0 || filters.highlights !== 0 || filters.shadows !== 0 || filters.hue !== 0
     || (cropEnabled && (cropBox.x !== 0 || cropBox.y !== 0 || cropBox.x2 !== 100 || cropBox.y2 !== 100));
 
   const previewStyle = buildPreviewStyle(transform, filters, cropEnabled ? cropBox : DEFAULT_CROP);
   const stageInfo = STAGE_INFO[processStage];
 
+  const visibleFilters = showAllFilters ? FILTER_PRESETS : FILTER_PRESETS.slice(0, 12);
+
   const ENHANCEMENT_TYPES: { type: EnhanceMediaBodyEnhancementType; label: string; icon: React.ReactNode }[] = [
-    { type: "auto",       label: "Auto",       icon: <Wand2    className="w-3 h-3" /> },
-    { type: "upscale",    label: "Upscale",    icon: <ZoomIn   className="w-3 h-3" /> },
-    { type: "portrait",   label: "Portrait",   icon: <Sparkles className="w-3 h-3" /> },
-    { type: "color",      label: "Color",      icon: <Palette  className="w-3 h-3" /> },
-    { type: "lighting",   label: "Lighting",   icon: <Sun      className="w-3 h-3" /> },
-    { type: "beauty",     label: "Beauty",     icon: <Eye      className="w-3 h-3" /> },
-    { type: "background", label: "Background", icon: <Camera   className="w-3 h-3" /> },
-    { type: "filter",     label: "Filter",     icon: <Film     className="w-3 h-3" /> },
+    { type: "auto",                   label: "Auto",        icon: <Wand2       className="w-3 h-3" /> },
+    { type: "upscale",                label: "2x Up",       icon: <ZoomIn      className="w-3 h-3" /> },
+    { type: "upscale_4x",             label: "4x Up",       icon: <Layers      className="w-3 h-3" /> },
+    { type: "portrait",               label: "Portrait",    icon: <Sparkles    className="w-3 h-3" /> },
+    { type: "color",                  label: "Color",       icon: <Palette     className="w-3 h-3" /> },
+    { type: "lighting_enhance",       label: "Lighting",    icon: <Sun         className="w-3 h-3" /> },
+    { type: "beauty",                 label: "Beauty",      icon: <Eye         className="w-3 h-3" /> },
+    { type: "blur_background",        label: "Bg Blur",     icon: <Focus       className="w-3 h-3" /> },
+    { type: "skin_retouch",           label: "Retouch",     icon: <Paintbrush  className="w-3 h-3" /> },
+    { type: "color_grade_cinematic",  label: "Cinematic",   icon: <Film        className="w-3 h-3" /> },
+    { type: "color_grade_warm",       label: "Warm",        icon: <Thermometer className="w-3 h-3" /> },
+    { type: "color_grade_cool",       label: "Cool",        icon: <Droplets    className="w-3 h-3" /> },
+    { type: "filter",                 label: "Filter",      icon: <Camera      className="w-3 h-3" /> },
+    { type: "background",             label: "Background",  icon: <Mountain    className="w-3 h-3" /> },
   ];
 
   return (
     <Layout>
-      {showOnboarding && <OnboardingWalkthrough onComplete={completeOnboarding} />}
+      <TooltipProvider delayDuration={200}>
+        {showOnboarding && <OnboardingWalkthrough onComplete={completeOnboarding} />}
 
-      <div className="flex flex-col lg:flex-row h-full min-h-[calc(100vh-4rem)]">
+        <div className="flex flex-col lg:flex-row h-full min-h-[calc(100vh-4rem)]">
 
-        {/* Sidebar */}
-        <aside className="w-full lg:w-80 border-r border-white/10 bg-zinc-950 flex flex-col">
-          <div className="p-4 border-b border-white/10">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-semibold text-lg flex items-center gap-2">
-                <Settings2 className="w-5 h-5 text-teal-500" />
-                Editor
-              </h2>
-              <button onClick={() => setShowOnboarding(true)} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors" title="Show walkthrough">?</button>
+          {/* Sidebar */}
+          <aside className="w-full lg:w-80 xl:w-96 border-r border-white/10 bg-zinc-950 flex flex-col">
+            <div className="p-4 border-b border-white/10">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-semibold text-lg flex items-center gap-2">
+                  <Settings2 className="w-5 h-5 text-teal-500" />
+                  Editor
+                </h2>
+                <button onClick={() => setShowOnboarding(true)} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors" title="Show walkthrough">?</button>
+              </div>
+              {/* Mode toggle */}
+              <div className="flex bg-zinc-900 rounded-lg p-0.5">
+                <button className={cn("flex-1 text-xs font-medium py-1.5 px-3 rounded-md transition-all", editorMode === "simple" ? "bg-teal-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-300")} onClick={() => setEditorMode("simple")}>
+                  <Zap className="w-3 h-3 inline mr-1" />Simple
+                </button>
+                <button className={cn("flex-1 text-xs font-medium py-1.5 px-3 rounded-md transition-all", editorMode === "advanced" ? "bg-teal-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-300")} onClick={() => setEditorMode("advanced")}>
+                  <SlidersHorizontal className="w-3 h-3 inline mr-1" />Advanced
+                </button>
+              </div>
             </div>
-            {/* Mode toggle */}
-            <div className="flex bg-zinc-900 rounded-lg p-0.5">
-              <button className={cn("flex-1 text-xs font-medium py-1.5 px-3 rounded-md transition-all", editorMode === "simple" ? "bg-teal-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-300")} onClick={() => setEditorMode("simple")}>
-                <Zap className="w-3 h-3 inline mr-1" />Simple
-              </button>
-              <button className={cn("flex-1 text-xs font-medium py-1.5 px-3 rounded-md transition-all", editorMode === "advanced" ? "bg-teal-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-300")} onClick={() => setEditorMode("advanced")}>
-                <SlidersHorizontal className="w-3 h-3 inline mr-1" />Advanced
-              </button>
-            </div>
-          </div>
 
-          <ScrollArea className="flex-1">
-            <div className="p-4">
+            <ScrollArea className="flex-1">
+              <div className="p-4">
 
-              {/* SIMPLE MODE */}
-              {editorMode === "simple" && (
-                <div className="space-y-5">
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
-                    <div className="space-y-2">
-                      {SIMPLE_PRESETS.map((p) => (
-                        <button key={p.type + (p.filterName ?? "")}
-                          className={cn("w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left",
-                            enhancementType === p.type && !selectedFilter ? "border-teal-500 bg-teal-500/10" : "border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-zinc-700")}
-                          onClick={() => { setEnhancementType(p.type); setSelectedFilter(null); }}>
-                          <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">{p.icon}</div>
-                          <div>
-                            <p className="text-sm font-medium">{p.label}</p>
-                            <p className="text-xs text-zinc-500">{p.desc}</p>
+                {/* AI Suggestion Banner */}
+                <AnimatePresence>
+                  {file && (isAnalyzing || aiSuggestion) && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="mb-4 overflow-hidden"
+                    >
+                      {isAnalyzing ? (
+                        <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-3 flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center shrink-0">
+                            <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
                           </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <Separator className="bg-white/5" />
-
-                  <div className="space-y-2">
-                    <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {FILTER_PRESETS.map((p) => (
-                        <button key={p.key}
-                          className={cn("text-xs py-2 px-1 rounded-md border transition-all font-medium",
-                            selectedFilter === p.key ? "border-teal-500 text-teal-400 bg-teal-500/10" : "border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 text-zinc-300")}
-                          onClick={() => {
-                            setSelectedFilter(p.key === "original" ? null : p.key);
-                            setFilters(p.f);
-                            if (p.serverFilter) setEnhancementType("filter");
-                          }}>
-                          {p.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {mediaType === "video" && (
-                    <>
-                      <Separator className="bg-white/5" />
-                      <div className="space-y-3">
-                        <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Video Options</Label>
-                        <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
                           <div>
-                            <p className="text-sm font-medium">AI Stabilization</p>
-                            <p className="text-xs text-zinc-500 mt-0.5">Remove camera shake</p>
+                            <p className="text-xs font-medium text-purple-300">AI is analyzing your image...</p>
+                            <p className="text-[10px] text-purple-400/60">Finding the best enhancement</p>
                           </div>
-                          <Switch checked={stabilize} onCheckedChange={setStabilize} />
                         </div>
-                      </div>
-                    </>
+                      ) : aiSuggestion && (
+                        <div className="rounded-xl border border-purple-500/30 bg-gradient-to-r from-purple-500/10 to-fuchsia-500/10 p-3">
+                          <div className="flex items-start gap-3">
+                            <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                              <ScanEye className="w-4 h-4 text-purple-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-purple-200 mb-1">AI Recommendation</p>
+                              <p className="text-[11px] text-zinc-400 leading-relaxed mb-2 line-clamp-2">{aiSuggestion.description}</p>
+                              <div className="flex flex-wrap gap-1 mb-2">
+                                {aiSuggestion.detectedSubjects.slice(0, 4).map((s) => (
+                                  <Badge key={s} variant="outline" className="text-[9px] border-purple-500/30 text-purple-300 px-1.5 py-0 h-4">{s}</Badge>
+                                ))}
+                              </div>
+                              <Button size="sm" className="h-7 text-xs bg-purple-600 hover:bg-purple-700 text-white w-full" onClick={applyAiSuggestion}>
+                                <Sparkles className="w-3 h-3 mr-1" />
+                                Apply: {aiSuggestion.suggestedEnhancement}
+                                {aiSuggestion.suggestedFilter && ` + ${aiSuggestion.suggestedFilter}`}
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between">
+                            <span className="text-[9px] text-zinc-600">Confidence: {Math.round(aiSuggestion.confidence * 100)}%</span>
+                            <button onClick={() => setAiSuggestion(null)} className="text-[9px] text-zinc-600 hover:text-zinc-400">Dismiss</button>
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
                   )}
-                </div>
-              )}
+                </AnimatePresence>
 
-              {/* ADVANCED MODE */}
-              {editorMode === "advanced" && (
-                <Tabs defaultValue="enhance">
-                  <TabsList className="grid grid-cols-4 w-full bg-zinc-900 mb-4 h-9">
-                    <TabsTrigger value="enhance"   className="text-xs px-1 gap-1"><Wand2              className="w-3 h-3" />AI</TabsTrigger>
-                    <TabsTrigger value="transform" className="text-xs px-1 gap-1"><RotateCw           className="w-3 h-3" />Xform</TabsTrigger>
-                    <TabsTrigger value="filters"   className="text-xs px-1 gap-1"><SlidersHorizontal  className="w-3 h-3" />Filters</TabsTrigger>
-                    {mediaType === "video"
-                      ? <TabsTrigger value="video" className="text-xs px-1 gap-1"><Film className="w-3 h-3" />Video</TabsTrigger>
-                      : <TabsTrigger value="crop"  className="text-xs px-1 gap-1"><Crop className="w-3 h-3" />Crop</TabsTrigger>
-                    }
-                  </TabsList>
-
-                  {/* AI Enhance */}
-                  <TabsContent value="enhance" className="space-y-5 mt-0">
+                {/* SIMPLE MODE */}
+                {editorMode === "simple" && (
+                  <div className="space-y-5">
                     <div className="space-y-2">
-                      <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Enhancement Type</Label>
+                      <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
                       <div className="grid grid-cols-2 gap-2">
-                        {ENHANCEMENT_TYPES.map(({ type, label, icon }) => (
-                          <Button key={type} variant="outline" size="sm"
-                            className={cn("justify-start gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800",
-                              enhancementType === type && "border-teal-500 text-teal-400 bg-teal-500/10 hover:bg-teal-500/20")}
-                            onClick={() => setEnhancementType(type)}>
-                            {icon}{label}
-                          </Button>
+                        {SIMPLE_PRESETS.map((p) => (
+                          <Tooltip key={p.type + (p.filterName ?? "")}>
+                            <TooltipTrigger asChild>
+                              <motion.button
+                                whileTap={{ scale: 0.97 }}
+                                className={cn(
+                                  "flex flex-col items-center gap-1.5 p-3 rounded-xl border transition-all text-center",
+                                  enhancementType === p.type && !selectedFilter
+                                    ? "border-teal-500 bg-teal-500/10 shadow-lg shadow-teal-500/10"
+                                    : "border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-zinc-700",
+                                )}
+                                onClick={() => {
+                                  setEnhancementType(p.type);
+                                  setSelectedFilter(null);
+                                  // Instant CSS preview for certain types
+                                  if (p.type === "color_grade_warm") setFilters({ ...DEFAULT_FILTERS, warmth: 20, saturation: 110 });
+                                  else if (p.type === "color_grade_cool") setFilters({ ...DEFAULT_FILTERS, warmth: -20, saturation: 95 });
+                                  else if (p.type === "color_grade_cinematic") setFilters({ ...DEFAULT_FILTERS, brightness: 96, contrast: 105, saturation: 85 });
+                                  else if (p.type === "lighting_enhance") setFilters({ ...DEFAULT_FILTERS, brightness: 108, contrast: 110 });
+                                  else if (p.type === "portrait") setFilters({ ...DEFAULT_FILTERS, brightness: 105, contrast: 95, saturation: 88 });
+                                  else setFilters(DEFAULT_FILTERS);
+                                }}
+                              >
+                                <div className={cn(
+                                  "w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-colors",
+                                  enhancementType === p.type && !selectedFilter ? "bg-teal-500/20 text-teal-400" : "bg-zinc-800 text-zinc-400",
+                                )}>
+                                  {p.icon}
+                                </div>
+                                <p className="text-[11px] font-medium leading-tight">{p.label}</p>
+                              </motion.button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="text-xs">{p.desc}</TooltipContent>
+                          </Tooltip>
                         ))}
                       </div>
                     </div>
-                    {presets && presets.length > 0 && (
+
+                    <Separator className="bg-white/5" />
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
+                        <button onClick={() => setShowAllFilters(!showAllFilters)} className="text-[10px] text-teal-500 hover:text-teal-400">
+                          {showAllFilters ? "Show less" : `All ${FILTER_PRESETS.length}`}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {visibleFilters.map((p) => (
+                          <Tooltip key={p.key}>
+                            <TooltipTrigger asChild>
+                              <motion.button
+                                whileTap={{ scale: 0.95 }}
+                                className={cn(
+                                  "relative rounded-lg border transition-all overflow-hidden h-14 group",
+                                  selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
+                                )}
+                                onClick={() => {
+                                  setSelectedFilter(p.key === "original" ? null : p.key);
+                                  setFilters(p.f);
+                                  if (p.serverFilter) setEnhancementType("filter");
+                                }}
+                              >
+                                <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
+                                <div className="absolute inset-0 flex items-end p-1">
+                                  <span className="text-[9px] font-medium text-white drop-shadow-lg leading-tight">{p.name}</span>
+                                </div>
+                                {p.premium && (
+                                  <div className="absolute top-0.5 right-0.5">
+                                    <div className="w-2 h-2 rounded-full bg-amber-400" />
+                                  </div>
+                                )}
+                                {selectedFilter === p.key && (
+                                  <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="absolute top-0.5 left-0.5">
+                                    <CheckCircle2 className="w-3 h-3 text-teal-400" />
+                                  </motion.div>
+                                )}
+                              </motion.button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="text-xs">
+                              {p.name}{p.premium ? " (Premium)" : ""}
+                            </TooltipContent>
+                          </Tooltip>
+                        ))}
+                      </div>
+                    </div>
+
+                    {mediaType === "video" && (
                       <>
                         <Separator className="bg-white/5" />
-                        <div className="space-y-2">
-                          <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Style Presets</Label>
-                          <div className="space-y-1.5">
-                            {presets.map((preset) => (
-                              <Button key={preset.id} variant="outline" size="sm"
-                                className={cn("w-full justify-between border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800",
-                                  presetId === preset.id && "border-teal-500 text-teal-400 bg-teal-500/10")}
-                                onClick={() => setPresetId(preset.id === presetId ? undefined : preset.id)}>
-                                <span className="flex items-center gap-2">
-                                  <Sparkles className={cn("w-3 h-3", preset.isPremium ? "text-amber-400" : "text-zinc-500")} />
-                                  {preset.name}
-                                </span>
-                                {preset.isPremium && (
-                                  <Badge variant="outline" className="text-[9px] border-amber-500/50 text-amber-400 px-1 py-0 h-4">PRO</Badge>
-                                )}
-                              </Button>
-                            ))}
+                        <div className="space-y-3">
+                          <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Video Options</Label>
+                          <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
+                            <div>
+                              <p className="text-sm font-medium">AI Stabilization</p>
+                              <p className="text-xs text-zinc-500 mt-0.5">Remove camera shake</p>
+                            </div>
+                            <Switch checked={stabilize} onCheckedChange={setStabilize} />
                           </div>
                         </div>
                       </>
                     )}
-                  </TabsContent>
+                  </div>
+                )}
 
-                  {/* Transform */}
-                  <TabsContent value="transform" className="space-y-5 mt-0">
-                    <div className="space-y-2">
-                      <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Rotate</Label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button variant="outline" size="sm" className="gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800"
-                          onClick={() => setTransform((t) => ({ ...t, rotation: (t.rotation - 90 + 360) % 360 }))}>
-                          <RotateCcw className="w-3.5 h-3.5" />CCW
-                        </Button>
-                        <Button variant="outline" size="sm" className="gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800"
-                          onClick={() => setTransform((t) => ({ ...t, rotation: (t.rotation + 90) % 360 }))}>
-                          <RotateCw className="w-3.5 h-3.5" />CW
-                        </Button>
+                {/* ADVANCED MODE */}
+                {editorMode === "advanced" && (
+                  <Tabs defaultValue="enhance">
+                    <TabsList className="grid grid-cols-5 w-full bg-zinc-900 mb-4 h-9">
+                      <TabsTrigger value="enhance"   className="text-xs px-1 gap-1"><Wand2             className="w-3 h-3" />AI</TabsTrigger>
+                      <TabsTrigger value="adjust"    className="text-xs px-1 gap-1"><Contrast          className="w-3 h-3" />Adjust</TabsTrigger>
+                      <TabsTrigger value="transform" className="text-xs px-1 gap-1"><RotateCw          className="w-3 h-3" />Xform</TabsTrigger>
+                      <TabsTrigger value="filters"   className="text-xs px-1 gap-1"><SlidersHorizontal className="w-3 h-3" />Filters</TabsTrigger>
+                      {mediaType === "video"
+                        ? <TabsTrigger value="video" className="text-xs px-1 gap-1"><Film className="w-3 h-3" />Video</TabsTrigger>
+                        : <TabsTrigger value="crop"  className="text-xs px-1 gap-1"><Crop className="w-3 h-3" />Crop</TabsTrigger>
+                      }
+                    </TabsList>
+
+                    {/* AI Enhance */}
+                    <TabsContent value="enhance" className="space-y-5 mt-0">
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Enhancement Type</Label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {ENHANCEMENT_TYPES.map(({ type, label, icon }) => (
+                            <Button key={type} variant="outline" size="sm"
+                              className={cn("justify-start gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 h-8 text-xs",
+                                enhancementType === type && "border-teal-500 text-teal-400 bg-teal-500/10 hover:bg-teal-500/20")}
+                              onClick={() => setEnhancementType(type)}>
+                              {icon}{label}
+                            </Button>
+                          ))}
+                        </div>
                       </div>
-                      {transform.rotation !== 0 && (
-                        <p className="text-xs text-zinc-500 text-center">{transform.rotation} deg applied</p>
+
+                      {/* Skin smoothing control */}
+                      {(enhancementType === "skin_retouch" || enhancementType === "beauty" || enhancementType === "portrait") && (
+                        <>
+                          <Separator className="bg-white/5" />
+                          <div className="space-y-2">
+                            <div className="flex justify-between">
+                              <Label className="text-xs text-zinc-400">Skin Smoothing</Label>
+                              <span className="text-xs text-zinc-500 tabular-nums">{skinSmoothing}%</span>
+                            </div>
+                            <Slider min={0} max={100} step={1} value={[skinSmoothing]} onValueChange={([v]) => setSkinSmoothing(v)} />
+                          </div>
+                        </>
+                      )}
+
+                      {presets && presets.length > 0 && (
+                        <>
+                          <Separator className="bg-white/5" />
+                          <div className="space-y-2">
+                            <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Style Presets</Label>
+                            <div className="space-y-1.5">
+                              {presets.map((preset) => (
+                                <Button key={preset.id} variant="outline" size="sm"
+                                  className={cn("w-full justify-between border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800",
+                                    presetId === preset.id && "border-teal-500 text-teal-400 bg-teal-500/10")}
+                                  onClick={() => setPresetId(preset.id === presetId ? undefined : preset.id)}>
+                                  <span className="flex items-center gap-2">
+                                    <Sparkles className={cn("w-3 h-3", preset.isPremium ? "text-amber-400" : "text-zinc-500")} />
+                                    {preset.name}
+                                  </span>
+                                  {preset.isPremium && (
+                                    <Badge variant="outline" className="text-[9px] border-amber-500/50 text-amber-400 px-1 py-0 h-4">PRO</Badge>
+                                  )}
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </TabsContent>
+
+                    {/* Adjust (NEW — warmth, highlights, shadows, hue) */}
+                    <TabsContent value="adjust" className="space-y-4 mt-0">
+                      <p className="text-[10px] text-zinc-600 mb-2">Fine-tune color & lighting in real time</p>
+                      {([
+                        { key: "brightness" as const, label: "Brightness",  icon: <Sun          className="w-3 h-3" />, min: 0,    max: 200, step: 1 },
+                        { key: "contrast"   as const, label: "Contrast",    icon: <Contrast     className="w-3 h-3" />, min: 0,    max: 200, step: 1 },
+                        { key: "saturation" as const, label: "Saturation",  icon: <Palette      className="w-3 h-3" />, min: 0,    max: 200, step: 1 },
+                        { key: "sharpness"  as const, label: "Sharpness",   icon: <CircleDot    className="w-3 h-3" />, min: 0,    max: 200, step: 1 },
+                        { key: "warmth"     as const, label: "Warmth",      icon: <Thermometer  className="w-3 h-3" />, min: -50,  max: 50,  step: 1 },
+                        { key: "highlights" as const, label: "Highlights",  icon: <Sun          className="w-3 h-3" />, min: -100, max: 100, step: 1 },
+                        { key: "shadows"    as const, label: "Shadows",     icon: <Mountain     className="w-3 h-3" />, min: -100, max: 100, step: 1 },
+                        { key: "hue"        as const, label: "Hue Shift",   icon: <Droplets     className="w-3 h-3" />, min: -180, max: 180, step: 1 },
+                      ]).map(({ key, label, icon, min, max, step }) => (
+                        <div key={key} className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-xs text-zinc-400 flex items-center gap-1.5">{icon}{label}</Label>
+                            <span className="text-xs text-zinc-500 tabular-nums w-10 text-right">{filters[key]}</span>
+                          </div>
+                          <Slider min={min} max={max} step={step} value={[filters[key]]}
+                            onValueChange={([v]) => setFilters((f) => ({ ...f, [key]: v }))} />
+                        </div>
+                      ))}
+                      <Separator className="bg-white/5" />
+                      <Button variant="ghost" size="sm" className="w-full text-zinc-500 hover:text-zinc-300"
+                        onClick={() => setFilters(DEFAULT_FILTERS)}>Reset All</Button>
+                    </TabsContent>
+
+                    {/* Transform */}
+                    <TabsContent value="transform" className="space-y-5 mt-0">
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Rotate</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button variant="outline" size="sm" className="gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800"
+                            onClick={() => setTransform((t) => ({ ...t, rotation: (t.rotation - 90 + 360) % 360 }))}>
+                            <RotateCcw className="w-3.5 h-3.5" />CCW
+                          </Button>
+                          <Button variant="outline" size="sm" className="gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800"
+                            onClick={() => setTransform((t) => ({ ...t, rotation: (t.rotation + 90) % 360 }))}>
+                            <RotateCw className="w-3.5 h-3.5" />CW
+                          </Button>
+                        </div>
+                        {transform.rotation !== 0 && (
+                          <p className="text-xs text-zinc-500 text-center">{transform.rotation}° applied</p>
+                        )}
+                      </div>
+                      <Separator className="bg-white/5" />
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Flip</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button variant="outline" size="sm"
+                            className={cn("gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800", transform.flipH && "border-teal-500 text-teal-400 bg-teal-500/10")}
+                            onClick={() => setTransform((t) => ({ ...t, flipH: !t.flipH }))}>
+                            <FlipHorizontal2 className="w-3.5 h-3.5" />Horiz
+                          </Button>
+                          <Button variant="outline" size="sm"
+                            className={cn("gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800", transform.flipV && "border-teal-500 text-teal-400 bg-teal-500/10")}
+                            onClick={() => setTransform((t) => ({ ...t, flipV: !t.flipV }))}>
+                            <FlipVertical2 className="w-3.5 h-3.5" />Vert
+                          </Button>
+                        </div>
+                      </div>
+                      <Separator className="bg-white/5" />
+                      <Button variant="ghost" size="sm" className="w-full text-zinc-500 hover:text-zinc-300"
+                        onClick={() => setTransform(DEFAULT_TRANSFORM)}>Reset Transform</Button>
+                    </TabsContent>
+
+                    {/* Filters (Advanced) */}
+                    <TabsContent value="filters" className="space-y-4 mt-0">
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {FILTER_PRESETS.map((p) => (
+                            <button key={p.key}
+                              className={cn(
+                                "relative rounded-lg border transition-all overflow-hidden h-12",
+                                selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
+                              )}
+                              onClick={() => { setFilters(p.f); setSelectedFilter(p.key === "original" ? null : p.key); }}>
+                              <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
+                              <div className="absolute inset-0 flex items-end p-1">
+                                <span className="text-[8px] font-medium text-white drop-shadow-lg">{p.name}</span>
+                              </div>
+                              {p.premium && <div className="absolute top-0.5 right-0.5"><div className="w-1.5 h-1.5 rounded-full bg-amber-400" /></div>}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <Separator className="bg-white/5" />
+                      <Button variant="ghost" size="sm" className="w-full text-zinc-500 hover:text-zinc-300"
+                        onClick={() => { setFilters(DEFAULT_FILTERS); setSelectedFilter(null); }}>Reset Filters</Button>
+                    </TabsContent>
+
+                    {/* Crop */}
+                    <TabsContent value="crop" className="space-y-4 mt-0">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium">Enable Crop</p>
+                          <p className="text-xs text-zinc-500 mt-0.5">Trim edges before enhancement</p>
+                        </div>
+                        <Switch checked={cropEnabled} onCheckedChange={setCropEnabled} />
+                      </div>
+                      <Separator className="bg-white/5" />
+                      {([
+                        { key: "x" as const,  label: "Left %",   min: 0,             max: cropBox.x2 - 5 },
+                        { key: "y" as const,  label: "Top %",    min: 0,             max: cropBox.y2 - 5 },
+                        { key: "x2" as const, label: "Right %",  min: cropBox.x + 5, max: 100            },
+                        { key: "y2" as const, label: "Bottom %", min: cropBox.y + 5, max: 100            },
+                      ]).map(({ key, label, min, max }) => (
+                        <div key={key} className="space-y-2">
+                          <div className="flex justify-between">
+                            <Label className="text-xs text-zinc-400">{label}</Label>
+                            <span className="text-xs text-zinc-500 tabular-nums">{cropBox[key]}%</span>
+                          </div>
+                          <Slider min={min} max={max} step={1} value={[cropBox[key]]}
+                            disabled={!cropEnabled}
+                            className={cn(!cropEnabled && "opacity-40")}
+                            onValueChange={([v]) => setCropBox((b) => ({ ...b, [key]: v }))} />
+                        </div>
+                      ))}
+                      <Button variant="ghost" size="sm" className="w-full text-zinc-500 hover:text-zinc-300"
+                        disabled={!cropEnabled} onClick={() => setCropBox(DEFAULT_CROP)}>Reset Crop</Button>
+                    </TabsContent>
+
+                    {/* Video */}
+                    <TabsContent value="video" className="space-y-4 mt-0">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
+                          <div>
+                            <p className="text-sm font-medium">AI Stabilization</p>
+                            <p className="text-xs text-zinc-500 mt-0.5">Remove camera shake with AI</p>
+                          </div>
+                          <Switch checked={stabilize} onCheckedChange={setStabilize} />
+                        </div>
+                        <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
+                          <div>
+                            <p className="text-sm font-medium">Noise Reduction</p>
+                            <p className="text-xs text-zinc-500 mt-0.5">Reduce grain &amp; video noise</p>
+                          </div>
+                          <Switch checked={denoise} onCheckedChange={setDenoise} />
+                        </div>
+                        <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
+                          <div>
+                            <p className="text-sm font-medium">Cinematic Preset</p>
+                            <p className="text-xs text-zinc-500 mt-0.5">Film-grade color grading</p>
+                          </div>
+                          <Switch checked={selectedFilter === "cinematic"} onCheckedChange={(v) => setSelectedFilter(v ? "cinematic" : null)} />
+                        </div>
+                        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                          <p className="text-xs text-amber-400/80">Video processing may take up to 60 s depending on length and resolution.</p>
+                        </div>
+                      </div>
+                    </TabsContent>
+                  </Tabs>
+                )}
+              </div>
+            </ScrollArea>
+
+            {/* Process button */}
+            <div className="p-4 border-t border-white/10 space-y-3">
+              <AnimatePresence>
+                {processStage !== "idle" && (
+                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                    className={cn("flex items-center gap-2 text-sm", stageInfo.colorClass)}>
+                    {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {processStage === "completed" && <CheckCircle2 className="w-4 h-4" />}
+                    {processStage === "failed"    && <AlertCircle  className="w-4 h-4" />}
+                    <span>{stageInfo.label}</span>
+                    {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">step 1/2</span>}
+                    {processStage === "processing" && <span className="text-xs text-zinc-500 ml-auto">step 2/2</span>}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              <Button
+                className="w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20 h-11"
+                onClick={handleProcess}
+                disabled={!file || isProcessing}
+              >
+                {isProcessing
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Processing...</>
+                  : <><Wand2   className="w-4 h-4 mr-2" />{isCompleted ? "Enhance Again" : "Enhance Media"}</>
+                }
+              </Button>
+            </div>
+          </aside>
+
+          {/* Main Preview */}
+          <main className="flex-1 bg-zinc-900 relative flex flex-col">
+            <div className="flex-1 flex items-center justify-center p-8 overflow-hidden">
+              {!file ? (
+                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full">
+                  <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-all cursor-pointer relative overflow-hidden group">
+                    <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                      accept="image/*,video/*" onChange={handleFileChange} />
+                    <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                      <motion.div
+                        animate={{ y: [0, -6, 0] }}
+                        transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
+                        className="w-20 h-20 bg-gradient-to-br from-teal-500/20 to-purple-500/20 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform"
+                      >
+                        <UploadCloud className="w-10 h-10 text-teal-400" />
+                      </motion.div>
+                      <h3 className="text-xl font-bold mb-2">Upload Media</h3>
+                      <p className="text-zinc-500 text-sm mb-1">Drag &amp; drop or click to browse</p>
+                      <p className="text-zinc-600 text-xs mb-6">AI will analyze and suggest the best enhancement</p>
+                      <div className="flex items-center gap-6 text-xs text-zinc-600">
+                        <span className="flex items-center gap-1.5"><ImageIcon className="w-3.5 h-3.5" /> Photos up to {MAX_FILE_MB} MB</span>
+                        <span className="flex items-center gap-1.5"><Video className="w-3.5 h-3.5" /> Videos up to {MAX_FILE_MB} MB</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ) : (
+                <div className="relative w-full h-full flex flex-col items-center justify-center gap-3">
+                  {/* Top toolbar */}
+                  <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between p-2">
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={resetAll}
+                        className="bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8">
+                        <RefreshCw className="w-3.5 h-3.5 mr-1.5" />New
+                      </Button>
+                      {isCompleted && (
+                        <Button variant="outline" size="sm"
+                          className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", showCompare && "border-purple-500 text-purple-300")}
+                          onMouseDown={() => setShowCompare(true)}
+                          onMouseUp={() => setShowCompare(false)}
+                          onMouseLeave={() => setShowCompare(false)}
+                          onTouchStart={() => setShowCompare(true)}
+                          onTouchEnd={() => setShowCompare(false)}
+                        >
+                          <Eye className="w-3.5 h-3.5 mr-1.5" />Hold to compare
+                        </Button>
                       )}
                     </div>
-                    <Separator className="bg-white/5" />
-                    <div className="space-y-2">
-                      <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Flip</Label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button variant="outline" size="sm"
-                          className={cn("gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800", transform.flipH && "border-teal-500 text-teal-400 bg-teal-500/10")}
-                          onClick={() => setTransform((t) => ({ ...t, flipH: !t.flipH }))}>
-                          <FlipHorizontal2 className="w-3.5 h-3.5" />Horiz
-                        </Button>
-                        <Button variant="outline" size="sm"
-                          className={cn("gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800", transform.flipV && "border-teal-500 text-teal-400 bg-teal-500/10")}
-                          onClick={() => setTransform((t) => ({ ...t, flipV: !t.flipV }))}>
-                          <FlipVertical2 className="w-3.5 h-3.5" />Vert
-                        </Button>
-                      </div>
-                    </div>
-                    <Separator className="bg-white/5" />
-                    <Button variant="ghost" size="sm" className="w-full text-zinc-500 hover:text-zinc-300"
-                      onClick={() => setTransform(DEFAULT_TRANSFORM)}>Reset Transform</Button>
-                  </TabsContent>
+                    {isCompleted && currentJob?.processedUrl && (
+                      <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
+                        <a href={currentJob.processedUrl} download={`enhanced-${file?.name ?? "image.jpg"}`}>
+                          <Button size="sm" className="bg-white text-black hover:bg-white/90 shadow-lg h-9 px-5 font-semibold text-xs">
+                            <Download className="w-4 h-4 mr-2" />Export
+                          </Button>
+                        </a>
+                      </motion.div>
+                    )}
+                  </div>
 
-                  {/* Filters (Advanced) */}
-                  <TabsContent value="filters" className="space-y-4 mt-0">
-                    <div className="space-y-2">
-                      <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {FILTER_PRESETS.map((p) => (
-                          <Button key={p.key} variant="outline" size="sm"
-                            className={cn("border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 text-xs h-8",
-                              selectedFilter === p.key && "border-teal-500 text-teal-400 bg-teal-500/10",
-                              !selectedFilter && JSON.stringify(filters) === JSON.stringify(p.f) && "border-teal-500 text-teal-400 bg-teal-500/10")}
-                            onClick={() => { setFilters(p.f); setSelectedFilter(p.key === "original" ? null : p.key); }}>{p.name}</Button>
-                        ))}
-                      </div>
-                    </div>
-                    <Separator className="bg-white/5" />
-                    {(["brightness", "contrast", "saturation", "sharpness"] as const).map((key) => (
-                      <div key={key} className="space-y-2">
-                        <div className="flex justify-between">
-                          <Label className="text-xs text-zinc-400 capitalize">{key}</Label>
-                          <span className="text-xs text-zinc-500 tabular-nums">{filters[key]}</span>
-                        </div>
-                        <Slider min={0} max={200} step={1} value={[filters[key]]}
-                          onValueChange={([v]) => setFilters((f) => ({ ...f, [key]: v }))} />
-                      </div>
-                    ))}
-                    <Separator className="bg-white/5" />
-                    <Button variant="ghost" size="sm" className="w-full text-zinc-500 hover:text-zinc-300"
-                      onClick={() => { setFilters(DEFAULT_FILTERS); setSelectedFilter(null); }}>Reset Filters</Button>
-                  </TabsContent>
+                  {/* Image preview */}
+                  <div className="relative max-w-full rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
+                    <AnimatePresence>
+                      {isProcessing && (
+                        <motion.div
+                          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                          className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-20 rounded-xl"
+                        >
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                          >
+                            <Sparkles className="w-12 h-12 text-teal-500 mb-4" />
+                          </motion.div>
+                          <p className="text-lg font-semibold">{processStage === "uploading" ? "Uploading..." : "Applying AI Magic..."}</p>
+                          <p className="text-sm text-zinc-400 mt-1">This may take a few moments</p>
+                          <div className="mt-4 w-48 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                            <motion.div
+                              className="h-full bg-gradient-to-r from-teal-500 to-purple-500 rounded-full"
+                              animate={{ x: ["-100%", "100%"] }}
+                              transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
+                              style={{ width: "60%" }}
+                            />
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
 
-                  {/* Crop */}
-                  <TabsContent value="crop" className="space-y-4 mt-0">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium">Enable Crop</p>
-                        <p className="text-xs text-zinc-500 mt-0.5">Trim edges before enhancement</p>
-                      </div>
-                      <Switch checked={cropEnabled} onCheckedChange={setCropEnabled} />
-                    </div>
-                    <Separator className="bg-white/5" />
-                    {([
-                      { key: "x" as const,  label: "Left %",   min: 0,             max: cropBox.x2 - 5 },
-                      { key: "y" as const,  label: "Top %",    min: 0,             max: cropBox.y2 - 5 },
-                      { key: "x2" as const, label: "Right %",  min: cropBox.x + 5, max: 100            },
-                      { key: "y2" as const, label: "Bottom %", min: cropBox.y + 5, max: 100            },
-                    ]).map(({ key, label, min, max }) => (
-                      <div key={key} className="space-y-2">
-                        <div className="flex justify-between">
-                          <Label className="text-xs text-zinc-400">{label}</Label>
-                          <span className="text-xs text-zinc-500 tabular-nums">{cropBox[key]}%</span>
-                        </div>
-                        <Slider min={min} max={max} step={1} value={[cropBox[key]]}
-                          disabled={!cropEnabled}
-                          className={cn(!cropEnabled && "opacity-40")}
-                          onValueChange={([v]) => setCropBox((b) => ({ ...b, [key]: v }))} />
-                      </div>
-                    ))}
-                    <Button variant="ghost" size="sm" className="w-full text-zinc-500 hover:text-zinc-300"
-                      disabled={!cropEnabled} onClick={() => setCropBox(DEFAULT_CROP)}>Reset Crop</Button>
-                  </TabsContent>
+                    {isCompleted && currentJob?.processedUrl && !showCompare ? (
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                        {mediaType === "video"
+                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[80vh] object-contain" />
+                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[80vh] object-contain" />
+                        }
+                      </motion.div>
+                    ) : (
+                      mediaType === "video"
+                        ? <video src={previewUrl} controls className="max-w-full max-h-[80vh] object-contain" />
+                        : <img src={previewUrl} alt="Original"
+                            className="max-w-full max-h-[80vh] object-contain transition-all duration-200"
+                            style={isProcessing ? { opacity: 0.5 } : previewStyle} />
+                    )}
+                  </div>
 
-                  {/* Video */}
-                  <TabsContent value="video" className="space-y-4 mt-0">
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
-                        <div>
-                          <p className="text-sm font-medium">AI Stabilization</p>
-                          <p className="text-xs text-zinc-500 mt-0.5">Remove camera shake with AI</p>
-                        </div>
-                        <Switch checked={stabilize} onCheckedChange={setStabilize} />
-                      </div>
-                      <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
-                        <div>
-                          <p className="text-sm font-medium">Noise Reduction</p>
-                          <p className="text-xs text-zinc-500 mt-0.5">Reduce grain &amp; video noise</p>
-                        </div>
-                        <Switch checked={denoise} onCheckedChange={setDenoise} />
-                      </div>
-                      <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
-                        <div>
-                          <p className="text-sm font-medium">Cinematic Preset</p>
-                          <p className="text-xs text-zinc-500 mt-0.5">Film-grade color grading</p>
-                        </div>
-                        <Switch checked={selectedFilter === "cinematic"} onCheckedChange={(v) => setSelectedFilter(v ? "cinematic" : null)} />
-                      </div>
-                      <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-                        <p className="text-xs text-amber-400/80">Video processing may take up to 60 s depending on length and resolution.</p>
-                      </div>
-                    </div>
-                  </TabsContent>
-                </Tabs>
+                  {/* Bottom info bar */}
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+                    <span className="truncate max-w-[200px]">{file.name}</span>
+                    <span>&#8226;</span>
+                    <span>{(file.size / 1024 / 1024).toFixed(1)} MB</span>
+                    <span>&#8226;</span>
+                    <Badge variant="outline" className="text-[9px] border-zinc-700 text-zinc-400 px-1 py-0 h-4">
+                      {editorMode === "simple" ? "Simple" : "Advanced"}
+                    </Badge>
+                    {hasEdits && <><span>&#8226;</span><span className="text-teal-400">Edits staged</span></>}
+                    {selectedFilter && <><span>&#8226;</span><span className="text-purple-400">Filter: {selectedFilter}</span></>}
+                    {isCompleted && (
+                      <><span>&#8226;</span>
+                      <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-teal-400 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />Enhanced
+                      </motion.span></>
+                    )}
+                    {showCompare && <><span>&#8226;</span><span className="text-amber-400">Showing original</span></>}
+                  </div>
+                </div>
               )}
             </div>
-          </ScrollArea>
-
-          {/* Process button */}
-          <div className="p-4 border-t border-white/10 space-y-3">
-            {processStage !== "idle" && (
-              <div className={cn("flex items-center gap-2 text-sm", stageInfo.colorClass)}>
-                {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-4 h-4 animate-spin" />}
-                {processStage === "completed" && <CheckCircle2 className="w-4 h-4" />}
-                {processStage === "failed"    && <AlertCircle  className="w-4 h-4" />}
-                <span>{stageInfo.label}</span>
-                {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">step 1/2</span>}
-                {processStage === "processing" && <span className="text-xs text-zinc-500 ml-auto">step 2/2</span>}
-              </div>
-            )}
-            <Button
-              className="w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20"
-              onClick={handleProcess}
-              disabled={!file || isProcessing}
-            >
-              {isProcessing
-                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Processing...</>
-                : <><Wand2   className="w-4 h-4 mr-2" />{isCompleted ? "Enhance Again" : "Enhance Media"}</>
-              }
-            </Button>
-          </div>
-        </aside>
-
-        {/* Main Preview */}
-        <main className="flex-1 bg-zinc-900 relative flex flex-col">
-          <div className="flex-1 flex items-center justify-center p-8 overflow-hidden">
-            {!file ? (
-              <div className="max-w-md w-full">
-                <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-colors cursor-pointer relative overflow-hidden group">
-                  <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                    accept="image/*,video/*" onChange={handleFileChange} />
-                  <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-                    <div className="w-16 h-16 bg-zinc-900 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                      <UploadCloud className="w-8 h-8 text-zinc-400" />
-                    </div>
-                    <h3 className="text-xl font-semibold mb-2">Upload Media</h3>
-                    <p className="text-zinc-500 text-sm mb-4">Drag &amp; drop or click to browse</p>
-                    <div className="flex items-center gap-4 text-xs text-zinc-600">
-                      <span className="flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Photos up to {MAX_FILE_MB} MB</span>
-                      <span className="flex items-center gap-1"><Video className="w-3 h-3" /> Videos up to {MAX_FILE_MB} MB</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            ) : (
-              <div className="relative w-full h-full flex flex-col items-center justify-center gap-3">
-                <div className="absolute top-0 right-0 z-10 flex items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={resetAll}
-                    className="bg-black/50 backdrop-blur border-white/10 hover:bg-white/10">
-                    <RefreshCw className="w-4 h-4 mr-2" />New Upload
-                  </Button>
-                  {isCompleted && currentJob?.processedUrl && (
-                    <a href={currentJob.processedUrl} download={`enhanced-${file?.name ?? "image.jpg"}`}>
-                      <Button size="sm" className="bg-white text-black hover:bg-white/90 shadow-lg">
-                        <Download className="w-4 h-4 mr-2" />Export
-                      </Button>
-                    </a>
-                  )}
-                </div>
-
-                <div className="relative max-w-full rounded-lg overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
-                  {isProcessing && (
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-20 rounded-lg">
-                      <Loader2 className="w-10 h-10 text-teal-500 animate-spin mb-4" />
-                      <p className="text-lg font-medium">{processStage === "uploading" ? "Uploading..." : "Applying AI Magic..."}</p>
-                      <p className="text-sm text-zinc-400 mt-1">This may take a few moments</p>
-                    </div>
-                  )}
-                  {isCompleted && currentJob?.processedUrl ? (
-                    mediaType === "video"
-                      ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[80vh] object-contain" />
-                      : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[80vh] object-contain" />
-                  ) : (
-                    mediaType === "video"
-                      ? <video src={previewUrl} controls className="max-w-full max-h-[80vh] object-contain" />
-                      : <img src={previewUrl} alt="Original"
-                          className="max-w-full max-h-[80vh] object-contain"
-                          style={isProcessing ? { opacity: 0.5 } : previewStyle} />
-                  )}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
-                  <span className="truncate max-w-[200px]">{file.name}</span>
-                  <span>&#8226;</span>
-                  <span>{(file.size / 1024 / 1024).toFixed(1)} MB</span>
-                  <span>&#8226;</span>
-                  <Badge variant="outline" className="text-[9px] border-zinc-700 text-zinc-400 px-1 py-0 h-4">
-                    {editorMode === "simple" ? "Simple" : "Advanced"}
-                  </Badge>
-                  {hasEdits && <><span>&#8226;</span><span className="text-teal-400">Edits staged</span></>}
-                  {selectedFilter && <><span>&#8226;</span><span className="text-purple-400">Filter: {selectedFilter}</span></>}
-                  {isCompleted && <><span>&#8226;</span><span className="text-teal-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />Enhanced</span></>}
-                </div>
-              </div>
-            )}
-          </div>
-        </main>
-      </div>
+          </main>
+        </div>
+      </TooltipProvider>
     </Layout>
   );
 }
