@@ -44,7 +44,7 @@ while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
 
   for COMMIT in $COMMITS; do
     # Check if .env is in this commit's tree
-    ENV_IN_TREE=$(git ls-tree -r --name-only "$COMMIT" | grep -E '(^|/)\.env(\.|$)' || true)
+    ENV_IN_TREE=$(git ls-tree -r --name-only "$COMMIT" | grep -E '(^|/)\.env(\.|$)' | grep -v '\.env\.example' || true)
     if [ -n "$ENV_IN_TREE" ]; then
       echo -e "${RED}[SECURITY BLOCK] .env found in commit ${COMMIT:0:8} for ref ${REMOTE_REF}${NC}"
       BLOCKED=1

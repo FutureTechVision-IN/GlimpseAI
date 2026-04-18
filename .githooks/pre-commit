@@ -17,7 +17,7 @@ BLOCKED=0
 # -----------------------------------------------------------------------------
 # 1. Block .env files from being staged at all
 # -----------------------------------------------------------------------------
-ENV_FILES=$(git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)' || true)
+ENV_FILES=$(git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)' | grep -v '\.env\.example' || true)
 if [ -n "$ENV_FILES" ]; then
   echo -e "${RED}[SECURITY BLOCK] .env file staged for commit:${NC}"
   echo "$ENV_FILES" | sed 's/^/  /'
