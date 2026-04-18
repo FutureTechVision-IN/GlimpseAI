@@ -33,6 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import AiChatWidget from "../components/ai-chat-widget";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 } from "@/components/ui/table";
@@ -1518,14 +1519,39 @@ interface AiEvt {
   confidence: number;
 }
 
+interface AiPoolKey {
+  label: string;
+  status: "healthy" | "daily_limit" | "circuit_open";
+  provider: string;
+  cooldownUntil?: string | null;
+  lastUsed?: string | null;
+  failCount?: number;
+}
+interface AiPoolStats {
+  total: number;
+  healthy: number;
+  degraded: number;
+  byProvider: Record<string, number>;
+  keys: AiPoolKey[];
+}
+
 function AiInsightsSection() {
   const [events, setEvents] = useState<AiEvt[]>([]);
+  const [pool, setPool] = useState<AiPoolStats | null>(null);
   const { toast } = useToast();
   useEffect(() => {
     try {
       const raw = localStorage.getItem("glimpse_ai_analytics");
       if (raw) setEvents(JSON.parse(raw));
     } catch {}
+
+    const token = localStorage.getItem("glimpse_token");
+    if (token) {
+      fetch("/api/admin/ai-pool", { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setPool(d); })
+        .catch(() => {});
+    }
   }, []);
 
   const total = events.length;
@@ -1594,6 +1620,47 @@ function AiInsightsSection() {
           </Button>
         ) : undefined}
       />
+
+      {/* AI Provider Pool Health */}
+      {pool && (
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-teal-400" />
+                AI Provider Pool Health
+              </CardTitle>
+              <Badge variant="outline" className={pool.healthy > 0 ? "border-teal-500/40 text-teal-400" : "border-amber-500/40 text-amber-400"}>
+                {pool.healthy > 0 ? `${pool.healthy}/${pool.total} Keys Healthy` : "Using Local Analysis"}
+              </Badge>
+            </div>
+            <CardDescription className="text-xs text-zinc-500">
+              Primary analysis: <span className="text-zinc-300 font-medium">Local Sharp Engine (75–92% confidence)</span>
+              {pool.degraded > 0 && <span className="text-amber-400 ml-2">· {pool.degraded} key(s) rate-limited or circuit-open (resets ~24h)</span>}
+            </CardDescription>
+          </CardHeader>
+          {pool.keys.length > 0 && (
+            <CardContent>
+              <div className="space-y-2">
+                {pool.keys.map((k, i) => (
+                  <div key={i} className="flex items-center justify-between py-1.5 border-b border-zinc-800 last:border-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${k.status === "healthy" ? "bg-emerald-400" : k.status === "daily_limit" ? "bg-amber-400" : "bg-red-400"}`} />
+                      <span className="text-xs text-zinc-400 truncate">{k.provider} · {k.label}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {k.lastUsed && <span className="text-[10px] text-zinc-600">used {new Date(k.lastUsed).toLocaleTimeString()}</span>}
+                      <Badge variant="outline" className={`text-[10px] py-0 ${k.status === "healthy" ? "border-emerald-500/40 text-emerald-400" : k.status === "daily_limit" ? "border-amber-500/40 text-amber-400" : "border-red-500/40 text-red-400"}`}>
+                        {k.status === "healthy" ? "Healthy" : k.status === "daily_limit" ? "Daily Limit" : "Circuit Open"}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard title="Total Suggestions" value={total} icon={BrainCircuit} color="teal" />
@@ -1815,6 +1882,7 @@ export default function Admin() {
           </div>
         </ScrollArea>
       </div>
+      <AiChatWidget context="admin" />
     </div>
   );
 }

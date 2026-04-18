@@ -464,6 +464,7 @@ export default function Editor() {
   // Combo enhancement: upscale after primary enhancement
   const [upscaleAfter, setUpscaleAfter] = useState<"upscale" | "upscale_4x" | null>(null);
   const upscaleChainRef = useRef(false); // tracks whether we're in chained upscale step
+  const pendingExportRef = useRef(false);  // auto-download after process+export flow
 
   const { toast } = useToast();
 
@@ -683,6 +684,7 @@ export default function Editor() {
   // Export handler — extracted for reuse by button + keyboard shortcut
   const handleExport = useCallback(() => {
     if (processStage !== "completed" || !currentJob?.processedUrl) return;
+    pendingExportRef.current = false;
     try {
       const dataUri = currentJob.processedUrl;
       const byteString = atob(dataUri.split(",")[1] ?? dataUri);
@@ -708,18 +710,6 @@ export default function Editor() {
       toast({ title: "Download", description: "Image opened in a new tab. Right-click to save." });
     }
   }, [processStage, currentJob?.processedUrl, file?.name, toast]);
-
-  // Keyboard shortcut: Cmd+S / Ctrl+S to export
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        handleExport();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [handleExport]);
 
   const handleProcess = useCallback(async () => {
     if (!file || !base64Data) return;
@@ -800,6 +790,35 @@ export default function Editor() {
       },
     );
   }, [file, base64Data, enhancementType, mediaType, transform, filters, cropBox, cropEnabled, stabilize, presetId, editorMode, selectedFilter, skinSmoothing]);
+
+  // Process & Export — for staged state: trigger processing then auto-download
+  const handleProcessAndExport = useCallback(() => {
+    pendingExportRef.current = true;
+    void handleProcess();
+  }, [handleProcess]);
+
+  // Auto-download when processing completes after Process & Export was clicked
+  useEffect(() => {
+    if (processStage === "completed" && pendingExportRef.current) {
+      handleExport();
+    }
+  }, [processStage, handleExport]);
+
+  // Keyboard shortcut: Cmd+S / Ctrl+S to export (or trigger Process & Export if staged)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (processStage === "completed") {
+          handleExport();
+        } else if (file) {
+          handleProcessAndExport();
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleExport, handleProcessAndExport, processStage, file]);
 
   const resetAll = () => {
     setFile(null); setPreviewUrl(""); setBase64Data("");
@@ -1454,7 +1473,7 @@ export default function Editor() {
                         </Button>
                       )}
                     </div>
-                    {isCompleted && currentJob?.processedUrl && (
+                    {isCompleted && currentJob?.processedUrl ? (
                       <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -1467,7 +1486,23 @@ export default function Editor() {
                           </TooltipContent>
                         </Tooltip>
                       </motion.div>
-                    )}
+                    ) : file && !isProcessing ? (
+                      <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button size="sm" variant="outline"
+                              className="border-teal-500/50 text-teal-300 hover:bg-teal-500/10 h-9 px-4 text-sm font-semibold"
+                              onClick={handleProcessAndExport}
+                            >
+                              <Zap className="w-4 h-4 mr-2" />Enhance &amp; Export
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">
+                            <span className="text-xs">Process enhancement then download <kbd className="ml-1 px-1 py-0.5 rounded bg-zinc-700 text-[10px]">⌘S</kbd></span>
+                          </TooltipContent>
+                        </Tooltip>
+                      </motion.div>
+                    ) : null}
                   </div>
 
                   {/* Image preview */}

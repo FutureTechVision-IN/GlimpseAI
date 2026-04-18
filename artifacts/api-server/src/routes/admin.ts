@@ -2,6 +2,7 @@ import { Router, IRouter } from "express";
 import { db, usersTable, mediaJobsTable, paymentsTable, plansTable, providersTable } from "@workspace/db";
 import { eq, desc, count, sum, and, ilike, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin, AuthRequest } from "../middlewares/auth";
+import { aiProvider } from "../lib/ai-provider";
 import {
   SuspendUserBody,
   SuspendUserParams,
@@ -458,6 +459,12 @@ router.get("/admin/funnel", requireAuth, requireAdmin, async (_req, res): Promis
     converted: paidUsers[0]?.c ?? 0,
     retained: activeThisWeek.length,
   });
+});
+
+// ─── AI Provider pool live diagnostics ─────────────────────
+router.get("/admin/ai-pool", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  const stats = aiProvider.getPoolStats();
+  res.json(stats);
 });
 
 export default router;

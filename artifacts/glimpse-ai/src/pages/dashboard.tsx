@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Wand2, Image as ImageIcon, Video, Clock, ArrowRight, Zap, CheckCircle2, XCircle, Loader2, Shield } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import AiChatWidget from "../components/ai-chat-widget";
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -167,6 +168,7 @@ export default function Dashboard() {
           </Card>
         </div>
       </div>
+      <AiChatWidget context="dashboard" />
     </Layout>
   );
 }
