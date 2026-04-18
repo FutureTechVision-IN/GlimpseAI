@@ -433,7 +433,7 @@ router.get("/admin/usage", requireAuth, requireAdmin, async (_req, res): Promise
       jobs: jobsResult[0]?.c ?? 0,
       photos: photosResult[0]?.c ?? 0,
       videos: videosResult[0]?.c ?? 0,
-      revenue: revenueResult[0]?.total ?? 0,
+      revenue: Number(revenueResult[0]?.total ?? 0),
       signups: signupsResult[0]?.c ?? 0,
     });
   }

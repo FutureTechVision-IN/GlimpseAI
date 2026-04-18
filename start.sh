@@ -6,13 +6,31 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE=""
 BUILD=0
 
+# ---------------------------------------------------------------------------
+# Source .env (if present) so all vars are available before defaults kick in
+# ---------------------------------------------------------------------------
+load_env() {
+  local env_file="${ROOT_DIR}/.env"
+  if [ -f "${env_file}" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source <(grep -v '^\s*#' "${env_file}" | grep -v '^\s*$')
+    set +a
+  fi
+}
+
+load_env
+
+# ---------------------------------------------------------------------------
+# Defaults — only apply when the variable was NOT already set (incl. from .env)
+# ---------------------------------------------------------------------------
 WEB_PORT="${WEB_PORT:-5173}"
 API_PORT="${API_PORT:-3001}"
 DB_PORT="${DB_PORT:-5432}"
 BASE_PATH="${BASE_PATH:-/}"
 POSTGRES_DB="${POSTGRES_DB:-glimpseai}"
-POSTGRES_USER="${POSTGRES_USER:-glimpseai}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-glimpseai}"
+POSTGRES_USER="${POSTGRES_USER:-bipbabu}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 SESSION_SECRET="${SESSION_SECRET:-glimpse-ai-local-dev-secret}"
 RAZORPAY_KEY_ID="${RAZORPAY_KEY_ID:-rzp_test_placeholder}"
 RAZORPAY_KEY_SECRET="${RAZORPAY_KEY_SECRET:-placeholder_secret}"
@@ -22,13 +40,12 @@ usage() {
 Usage:
   ./start.sh                    Auto-detect and start
   ./start.sh --docker           Full Docker mode
-  ./start.sh --native           No Docker, native Node.js
+  ./start.sh --native           No Docker, native Node.js (uses local postgres)
   ./start.sh --hybrid           Docker DB + native dashboard/API
   ./start.sh --docker --build   Rebuild and start Docker
 
-Environment overrides:
-  WEB_PORT, API_PORT, DB_PORT
-  BASE_PATH
+Environment overrides (or set in .env):
+  WEB_PORT, API_PORT, DB_PORT, BASE_PATH
   DATABASE_URL
   POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
   SESSION_SECRET, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
@@ -36,11 +53,15 @@ EOF
 }
 
 log() {
-  printf '[start] %s\n' "$*"
+  printf '\033[1;36m[start]\033[0m %s\n' "$*"
+}
+
+warn() {
+  printf '\033[1;33m[start] WARN:\033[0m %s\n' "$*"
 }
 
 die() {
-  printf '[start] ERROR: %s\n' "$*" >&2
+  printf '\033[1;31m[start] ERROR:\033[0m %s\n' "$*" >&2
   exit 1
 }
 
@@ -54,8 +75,20 @@ port_in_use() {
     lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
     return
   fi
-
   (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1
+}
+
+# Find the first free port starting from $1, trying up to 10 ports
+find_free_port() {
+  local base_port="$1"
+  for offset in 0 1 2 3 4 5 6 7 8 9; do
+    local candidate=$((base_port + offset))
+    if ! port_in_use "${candidate}"; then
+      echo "${candidate}"
+      return
+    fi
+  done
+  die "No free port found in range ${base_port}–$((base_port + 9))"
 }
 
 docker_compose() {
@@ -65,6 +98,22 @@ docker_compose() {
     docker-compose "$@"
   else
     die "Docker Compose is required for this mode."
+  fi
+}
+
+# Stop any existing GlimpseAI containers to avoid port conflicts
+cleanup_containers() {
+  if ! has_cmd docker || ! docker info >/dev/null 2>&1; then
+    return
+  fi
+
+  local running
+  running="$(docker ps -q --filter "name=glimpseai" 2>/dev/null || true)"
+  if [ -n "${running}" ]; then
+    log "Stopping existing GlimpseAI containers"
+    # shellcheck disable=SC2086
+    docker stop ${running} >/dev/null 2>&1 || true
+    docker rm ${running} >/dev/null 2>&1 || true
   fi
 }
 
@@ -86,10 +135,7 @@ ensure_native_deps() {
 
   if [ ! -d "${ROOT_DIR}/node_modules" ]; then
     log "Installing workspace dependencies with pnpm"
-    (
-      cd "${ROOT_DIR}"
-      pnpm install --frozen-lockfile
-    )
+    (cd "${ROOT_DIR}" && pnpm install --frozen-lockfile)
   fi
 }
 
@@ -99,37 +145,51 @@ require_docker() {
 }
 
 wait_for_db() {
-  local attempts=60
-  log "Waiting for PostgreSQL on port ${DB_PORT}"
+  local port="${1:-${DB_PORT}}"
+  local attempts=30
+  log "Waiting for PostgreSQL on port ${port}"
 
   for ((i = 1; i <= attempts; i++)); do
-    if (echo >"/dev/tcp/127.0.0.1/${DB_PORT}") >/dev/null 2>&1; then
-      log "PostgreSQL is ready"
+    if has_cmd pg_isready; then
+      if pg_isready -h 127.0.0.1 -p "${port}" -q 2>/dev/null; then
+        log "PostgreSQL is ready on port ${port}"
+        return
+      fi
+    elif (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+      log "PostgreSQL is ready on port ${port}"
       return
     fi
     sleep 2
   done
 
-  die "PostgreSQL did not become ready on port ${DB_PORT}."
+  die "PostgreSQL did not become ready on port ${port} after ${attempts} attempts."
 }
 
-select_hybrid_db_port() {
-  if [ -n "${DB_PORT:-}" ] && [ "${DB_PORT}" != "5432" ]; then
-    return
-  fi
-
-  if port_in_use 5432; then
-    DB_PORT=5433
-    export DB_PORT
-    log "Port 5432 is already in use locally; using Docker PostgreSQL port ${DB_PORT} instead"
+# Ensure the glimpseai database exists on the target postgres instance
+ensure_database() {
+  local db_url="${1}"
+  # Extract host, port, user from the DATABASE_URL
+  if has_cmd psql; then
+    local db_name="${POSTGRES_DB}"
+    local db_user="${POSTGRES_USER}"
+    local db_port="${DB_PORT}"
+    local exists
+    exists="$(psql -U "${db_user}" -h 127.0.0.1 -p "${db_port}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '${db_name}'" 2>/dev/null || true)"
+    if [ "${exists}" != "1" ]; then
+      log "Creating database '${db_name}'"
+      psql -U "${db_user}" -h 127.0.0.1 -p "${db_port}" -d postgres -c "CREATE DATABASE ${db_name}" 2>/dev/null \
+        || warn "Could not create database '${db_name}' — it may already exist or need manual creation"
+    else
+      log "Database '${db_name}' already exists"
+    fi
   fi
 }
 
 run_db_push() {
-  log "Applying database schema"
+  log "Applying database schema (drizzle-kit push)"
   (
     cd "${ROOT_DIR}/lib/db"
-    DATABASE_URL="${DATABASE_URL}" ./node_modules/.bin/drizzle-kit push --config ./drizzle.config.ts
+    DATABASE_URL="${DATABASE_URL}" npx drizzle-kit push --config ./drizzle.config.ts
   )
 }
 
@@ -138,19 +198,35 @@ run_native_stack() {
   export BASE_PATH API_PORT WEB_PORT SESSION_SECRET RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET DATABASE_URL
   export API_PROXY_TARGET="http://127.0.0.1:${API_PORT}"
 
-  if [ "${wait_for_local_db}" = "1" ]; then
-    wait_for_db
+  # Check for port conflicts early
+  if port_in_use "${API_PORT}"; then
+    local new_api_port
+    new_api_port="$(find_free_port "${API_PORT}")"
+    warn "Port ${API_PORT} in use, switching API to port ${new_api_port}"
+    API_PORT="${new_api_port}"
+    export API_PORT
+    export API_PROXY_TARGET="http://127.0.0.1:${API_PORT}"
   fi
+
+  if port_in_use "${WEB_PORT}"; then
+    local new_web_port
+    new_web_port="$(find_free_port "${WEB_PORT}")"
+    warn "Port ${WEB_PORT} in use, switching web to port ${new_web_port}"
+    WEB_PORT="${new_web_port}"
+    export WEB_PORT
+  fi
+
+  if [ "${wait_for_local_db}" = "1" ]; then
+    wait_for_db "${DB_PORT}"
+  fi
+
+  ensure_database "${DATABASE_URL}"
   run_db_push
 
   log "Starting API on http://127.0.0.1:${API_PORT}"
   (
     cd "${ROOT_DIR}/artifacts/api-server"
     export PORT="${API_PORT}"
-    export DATABASE_URL="${DATABASE_URL}"
-    export SESSION_SECRET="${SESSION_SECRET}"
-    export RAZORPAY_KEY_ID="${RAZORPAY_KEY_ID}"
-    export RAZORPAY_KEY_SECRET="${RAZORPAY_KEY_SECRET}"
     node ./build.mjs
     node --enable-source-maps ./dist/index.mjs
   ) &
@@ -160,28 +236,39 @@ run_native_stack() {
   (
     cd "${ROOT_DIR}/artifacts/glimpse-ai"
     export PORT="${WEB_PORT}"
-    export BASE_PATH="${BASE_PATH}"
-    export API_PROXY_TARGET="${API_PROXY_TARGET}"
-    ./node_modules/.bin/vite --config vite.config.ts --host 0.0.0.0
+    npx vite --config vite.config.ts --host 0.0.0.0
   ) &
   local web_pid=$!
 
-  trap 'kill "${api_pid}" "${web_pid}" 2>/dev/null || true' INT TERM EXIT
+  log ""
+  log "=============================="
+  log "  GlimpseAI is starting up"
+  log "  Dashboard: http://localhost:${WEB_PORT}"
+  log "  API:       http://localhost:${API_PORT}"
+  log "  Mode:      ${MODE}"
+  log "=============================="
+  log ""
+
+  trap 'log "Shutting down..."; kill "${api_pid}" "${web_pid}" 2>/dev/null || true' INT TERM EXIT
   wait "${api_pid}" "${web_pid}"
 }
 
 start_hybrid() {
   require_docker
   ensure_native_deps
-  select_hybrid_db_port
+  cleanup_containers
+
+  # Find a free port for the Docker postgres
+  if port_in_use "${DB_PORT}"; then
+    DB_PORT="$(find_free_port 5432)"
+    export DB_PORT
+    log "Using Docker PostgreSQL on port ${DB_PORT}"
+  fi
 
   export DATABASE_URL="${DATABASE_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${DB_PORT}/${POSTGRES_DB}}"
 
-  log "Starting PostgreSQL container"
-  (
-    cd "${ROOT_DIR}"
-    docker_compose up -d db
-  )
+  log "Starting PostgreSQL container on port ${DB_PORT}"
+  (cd "${ROOT_DIR}" && docker_compose up -d db)
 
   run_native_stack 1
 }
@@ -189,8 +276,21 @@ start_hybrid() {
 start_native() {
   ensure_native_deps
 
+  # Build DATABASE_URL from parts if not explicitly set
   if [ -z "${DATABASE_URL:-}" ]; then
-    die "Native mode requires DATABASE_URL to be set. Use --hybrid to start a local Docker PostgreSQL."
+    # Check if local postgres is running
+    if port_in_use 5432; then
+      DB_PORT=5432
+      if [ -n "${POSTGRES_PASSWORD}" ]; then
+        DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${DB_PORT}/${POSTGRES_DB}"
+      else
+        DATABASE_URL="postgresql://${POSTGRES_USER}@localhost:${DB_PORT}/${POSTGRES_DB}"
+      fi
+      export DATABASE_URL
+      log "Using local PostgreSQL: ${DATABASE_URL}"
+    else
+      die "Native mode requires a running PostgreSQL. Either:\n  - Start local postgres, or\n  - Set DATABASE_URL in .env, or\n  - Use --hybrid for a Docker PostgreSQL."
+    fi
   fi
 
   run_native_stack 0
@@ -198,6 +298,7 @@ start_native() {
 
 start_docker() {
   require_docker
+  cleanup_containers
 
   local args=(up)
   if [ "${BUILD}" -eq 1 ]; then
@@ -205,10 +306,7 @@ start_docker() {
   fi
 
   log "Starting Docker services"
-  (
-    cd "${ROOT_DIR}"
-    docker_compose "${args[@]}"
-  )
+  (cd "${ROOT_DIR}" && docker_compose "${args[@]}")
 }
 
 auto_detect_mode() {
@@ -216,17 +314,28 @@ auto_detect_mode() {
     return
   fi
 
+  # If DATABASE_URL is set and points to a reachable host, go native
   if [ -n "${DATABASE_URL:-}" ]; then
     MODE="native"
+    log "Auto-detected mode: native (DATABASE_URL is set)"
     return
   fi
 
+  # If local postgres is running, go native
+  if port_in_use 5432; then
+    MODE="native"
+    log "Auto-detected mode: native (local PostgreSQL on 5432)"
+    return
+  fi
+
+  # If Docker is available, use hybrid
   if has_cmd docker && docker info >/dev/null 2>&1; then
     MODE="hybrid"
+    log "Auto-detected mode: hybrid (Docker available, no local PostgreSQL)"
     return
   fi
 
-  MODE="native"
+  die "Cannot auto-detect mode. No PostgreSQL running and Docker is unavailable.\n  Use --native with DATABASE_URL or --hybrid with Docker."
 }
 
 parse_args() {

@@ -87,7 +87,7 @@ const testimonials = [
 // --- Testimonial Carousel ---
 function TestimonialCarousel() {
   const [current, setCurrent] = useState(0);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const advance = useCallback(() => {
     setCurrent((p) => (p + 1) % testimonials.length);

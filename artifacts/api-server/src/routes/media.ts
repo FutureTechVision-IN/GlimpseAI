@@ -152,6 +152,14 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
 
     logger.info({ jobId, type: enhancementType, ms: Date.now() - startTime }, "Enhancement completed");
   } catch (err) {
+    logger.error({ err, jobId }, "Enhancement failed");
+    await db.update(mediaJobsTable).set({
+      status: "failed",
+      processingTimeMs: Date.now() - startTime,
+    }).where(eq(mediaJobsTable.id, jobId));
+  }
+});
+
 // ─── Analyze (AI suggestion) ──────────────────────────────────
 router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const { jobId } = req.body;
