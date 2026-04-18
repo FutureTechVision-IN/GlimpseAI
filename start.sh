@@ -11,12 +11,22 @@ BUILD=0
 # ---------------------------------------------------------------------------
 load_env() {
   local env_file="${ROOT_DIR}/.env"
-  if [ -f "${env_file}" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    source <(grep -v '^\s*#' "${env_file}" | grep -v '^\s*$')
-    set +a
+  if [ ! -f "${env_file}" ]; then
+    return
   fi
+
+  while IFS= read -r line || [ -n "${line}" ]; do
+    # Skip comments and blank lines
+    [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line// /}" ]] && continue
+    local key val
+    key="${line%%=*}"
+    val="${line#*=}"
+    # Remove surrounding single/double quotes from value
+    val="${val#\'}" ; val="${val%\'}"
+    val="${val#\"}" ; val="${val%\"}"
+    export "${key}=${val}"
+  done < "${env_file}"
 }
 
 load_env
