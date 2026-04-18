@@ -499,7 +499,7 @@ export default function Landing() {
               transition={{ duration: 1, delay: 0.55, ease }}
               className="mt-16 max-w-5xl mx-auto"
             >
-              <BeforeAfterSlider src="/hero-after.png" />
+              <BeforeAfterSlider src={`${import.meta.env.BASE_URL}hero-after.png`} />
             </motion.div>
           </div>
         </section>
