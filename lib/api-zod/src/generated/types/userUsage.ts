@@ -10,6 +10,9 @@ export interface UserUsage {
   creditsUsed: number;
   creditsLimit: number;
   creditsRemaining: number;
+  dailyCreditsUsed: number;
+  dailyLimit: number;
+  dailyRemaining: number;
   /** @nullable */
   planName?: string | null;
   /** @nullable */

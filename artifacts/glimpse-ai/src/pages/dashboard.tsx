@@ -28,6 +28,10 @@ export default function Dashboard() {
   const creditsUsed = usage?.creditsUsed || 0;
   const creditsLimit = usage?.creditsLimit || 1;
   const creditsPercent = Math.min((creditsUsed / creditsLimit) * 100, 100);
+  const dailyUsed = usage?.dailyCreditsUsed || 0;
+  const dailyLimit = usage?.dailyLimit || 1;
+  const dailyPercent = Math.min((dailyUsed / dailyLimit) * 100, 100);
+  const isFreeUser = !user?.planId;
 
   const getStatusIcon = (status: string) => {
     switch (status) {

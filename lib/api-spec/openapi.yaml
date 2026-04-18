@@ -884,6 +884,12 @@ components:
           type: integer
         creditsRemaining:
           type: integer
+        dailyCreditsUsed:
+          type: integer
+        dailyLimit:
+          type: integer
+        dailyRemaining:
+          type: integer
         planName:
           type: ["string", "null"]
         planExpiry:
@@ -899,6 +905,9 @@ components:
         - creditsUsed
         - creditsLimit
         - creditsRemaining
+        - dailyCreditsUsed
+        - dailyLimit
+        - dailyRemaining
         - photoCount
         - videoCount
         - totalJobs
