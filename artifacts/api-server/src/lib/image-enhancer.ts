@@ -6,6 +6,50 @@ export interface EnhanceOptions {
   settings?: Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// Image analysis helpers — used by adaptive auto-enhance
+// ---------------------------------------------------------------------------
+
+interface ImageStats {
+  meanBrightness: number; // 0-255
+  isLowContrast: boolean;
+  isDark: boolean;
+  isBright: boolean;
+  hasTransparency: boolean;
+}
+
+async function analyzeImageStats(buf: Buffer): Promise<ImageStats> {
+  const meta = await sharp(buf).metadata();
+  const hasTransparency = meta.hasAlpha === true;
+
+  // Downsample to 64px for fast statistics
+  const { dominant, channels } = await sharp(buf)
+    .resize(64, 64, { fit: "inside" })
+    .removeAlpha()
+    .toColourspace("srgb")
+    .stats();
+
+  // Weighted luminance from channel means
+  const rMean = channels[0]?.mean ?? 128;
+  const gMean = channels[1]?.mean ?? 128;
+  const bMean = channels[2]?.mean ?? 128;
+  const meanBrightness = 0.299 * rMean + 0.587 * gMean + 0.114 * bMean;
+
+  // Check contrast spread from channel std-dev
+  const rStd = channels[0]?.stdev ?? 40;
+  const gStd = channels[1]?.stdev ?? 40;
+  const bStd = channels[2]?.stdev ?? 40;
+  const avgStd = (rStd + gStd + bStd) / 3;
+
+  return {
+    meanBrightness,
+    isLowContrast: avgStd < 35,
+    isDark: meanBrightness < 80,
+    isBright: meanBrightness > 190,
+    hasTransparency,
+  };
+}
+
 // Named filter presets (server-side sharp equivalents)
 const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
   // ── Classic ──
@@ -65,41 +109,113 @@ export async function enhanceImage(
   } else {
     switch (type) {
       case "auto": {
-        pipeline = pipeline.normalize().sharpen({ sigma: 1.2, m1: 1.0, m2: 0.5 }).modulate({ brightness: 1.02, saturation: 1.08 }).gamma(1.05);
+        // Adaptive auto-enhance: analyze image statistics and tailor processing
+        const stats = await analyzeImageStats(inputBuffer);
+        logger.info({ meanBrightness: stats.meanBrightness.toFixed(0), isDark: stats.isDark, isLowContrast: stats.isLowContrast }, "Auto-enhance: image analysis");
+
+        if (stats.isDark) {
+          // Dark image: lift shadows, add warmth, boost brightness
+          pipeline = pipeline
+            .gamma(1.35)
+            .linear(0.92, 18)  // Lift shadow floor
+            .modulate({ brightness: 1.12, saturation: 1.1 })
+            .normalize()
+            .sharpen({ sigma: 1.0, m1: 1.2, m2: 0.5 });
+        } else if (stats.isBright) {
+          // Overexposed: recover highlights, add depth
+          pipeline = pipeline
+            .gamma(0.85)
+            .modulate({ brightness: 0.95, saturation: 1.12 })
+            .normalize()
+            .sharpen({ sigma: 1.0, m1: 1.0, m2: 0.4 });
+        } else if (stats.isLowContrast) {
+          // Flat/hazy: strong contrast boost + clarity
+          pipeline = pipeline
+            .normalize()
+            .linear(1.08, -6)  // Contrast curve
+            .modulate({ brightness: 1.02, saturation: 1.15 })
+            .sharpen({ sigma: 1.5, m1: 1.5, m2: 0.7 })
+            .gamma(1.05);
+        } else {
+          // Well-exposed: gentle polish
+          pipeline = pipeline
+            .normalize()
+            .sharpen({ sigma: 1.2, m1: 1.0, m2: 0.5 })
+            .modulate({ brightness: 1.02, saturation: 1.08 })
+            .gamma(1.05);
+        }
         break;
       }
       case "portrait":
       case "beauty":
       case "skin": {
-        pipeline = pipeline.modulate({ brightness: 1.04, saturation: 0.95 }).sharpen({ sigma: 0.8, m1: 0.8, m2: 0.3 }).gamma(1.08).normalize();
+        // Professional portrait enhancement: warm skin tones + soft detail + clarity
+        pipeline = pipeline
+          .modulate({ brightness: 1.05, saturation: 0.93 })
+          .tint({ r: 248, g: 235, b: 225 })  // Subtle warm skin undertone
+          .sharpen({ sigma: 0.8, m1: 0.8, m2: 0.3 })
+          .gamma(1.08)
+          .normalize()
+          .linear(0.97, 4);  // Slight shadow lift for flattering look
         break;
       }
       case "upscale": {
         const w = meta.width ?? 800;
         const h = meta.height ?? 600;
-        pipeline = pipeline.resize(w * 2, h * 2, { kernel: sharp.kernel.lanczos3, fit: "fill" }).sharpen({ sigma: 1.0, m1: 1.5, m2: 0.7 });
+        pipeline = pipeline
+          .resize(w * 2, h * 2, { kernel: sharp.kernel.lanczos3, fit: "fill" })
+          .sharpen({ sigma: 0.8, m1: 1.2, m2: 0.5 })  // Gentle post-upscale sharpening
+          .modulate({ brightness: 1.01 });  // Slight brightness to counter upscale softness
         break;
       }
       case "upscale_4x": {
         const w4 = meta.width ?? 800;
         const h4 = meta.height ?? 600;
-        pipeline = pipeline.resize(w4 * 4, h4 * 4, { kernel: sharp.kernel.lanczos3, fit: "fill" }).sharpen({ sigma: 1.2, m1: 1.8, m2: 0.9 });
+        pipeline = pipeline
+          .resize(w4 * 4, h4 * 4, { kernel: sharp.kernel.lanczos3, fit: "fill" })
+          .sharpen({ sigma: 1.0, m1: 1.5, m2: 0.6 })
+          .modulate({ brightness: 1.01 });
         break;
       }
       case "blur_background": {
-        // Center-weighted portrait blur (tilt-shift bokeh simulation)
+        // Advanced portrait bokeh with radial gradient mask for natural falloff
         const bw = meta.width ?? 800;
         const bh = meta.height ?? 600;
-        const blurred = await sharp(inputBuffer).blur(18).toBuffer();
-        const cw = Math.round(bw * 0.6);
-        const ch = Math.round(bh * 0.7);
-        const cx = Math.round((bw - cw) / 2);
-        const cy = Math.round((bh - ch) / 2);
-        const center = await sharp(inputBuffer)
-          .extract({ left: cx, top: cy, width: cw, height: ch })
+        const blurRadius = Math.max(12, Math.round(Math.min(bw, bh) / 50));
+
+        // Create heavily blurred background
+        const blurred = await sharp(inputBuffer)
+          .blur(blurRadius)
+          .modulate({ brightness: 1.01 })
           .toBuffer();
+
+        // Create radial gradient mask (white center fading to black edges)
+        // This gives a natural, lens-like bokeh falloff
+        const gradientSvg = Buffer.from(`<svg width="${bw}" height="${bh}">
+          <defs>
+            <radialGradient id="g" cx="50%" cy="42%" rx="35%" ry="45%">
+              <stop offset="0%" stop-color="white"/>
+              <stop offset="60%" stop-color="white"/>
+              <stop offset="100%" stop-color="black"/>
+            </radialGradient>
+          </defs>
+          <rect width="${bw}" height="${bh}" fill="url(#g)"/>
+        </svg>`);
+
+        const mask = await sharp(gradientSvg)
+          .resize(bw, bh)
+          .blur(Math.round(blurRadius * 0.6))  // Soften mask edges
+          .toBuffer();
+
+        // Extract sharp center using the mask
+        const sharpCenter = await sharp(inputBuffer)
+          .ensureAlpha()
+          .joinChannel(mask)  // Use gradient as alpha
+          .toBuffer();
+
+        // Composite sharp center over blurred background
         pipeline = sharp(blurred)
-          .composite([{ input: center, left: cx, top: cy }])
+          .composite([{ input: sharpCenter, blend: "over" }])
           .modulate({ brightness: 1.02, saturation: 1.05 })
           .sharpen({ sigma: 0.5 });
         break;
@@ -123,13 +239,32 @@ export async function enhanceImage(
         break;
       }
       case "lighting_enhance": {
-        // Mood-aware lighting: lift shadows, tame highlights, add clarity
-        pipeline = pipeline
-          .normalize()
-          .gamma(1.2)
-          .linear(0.95, 10)  // Lift shadow floor
-          .modulate({ brightness: 1.06, saturation: 1.05 })
-          .sharpen({ sigma: 1.0, m1: 1.2, m2: 0.5 });
+        // Advanced mood-aware lighting: multi-pass shadow/highlight recovery
+        const lightStats = await analyzeImageStats(inputBuffer);
+        if (lightStats.isDark) {
+          // Aggressive shadow recovery for dark images
+          pipeline = pipeline
+            .gamma(1.4)
+            .linear(0.88, 22)
+            .normalize()
+            .modulate({ brightness: 1.1, saturation: 1.08 })
+            .sharpen({ sigma: 1.2, m1: 1.5, m2: 0.6 });
+        } else if (lightStats.isBright) {
+          // Recover blown highlights
+          pipeline = pipeline
+            .gamma(0.82)
+            .modulate({ brightness: 0.93, saturation: 1.1 })
+            .normalize()
+            .sharpen({ sigma: 1.0, m1: 1.2, m2: 0.5 });
+        } else {
+          // Balanced: lift shadows + clarity
+          pipeline = pipeline
+            .normalize()
+            .gamma(1.2)
+            .linear(0.95, 10)
+            .modulate({ brightness: 1.06, saturation: 1.05 })
+            .sharpen({ sigma: 1.0, m1: 1.2, m2: 0.5 });
+        }
         break;
       }
       case "color_grade_cinematic": {
@@ -163,16 +298,34 @@ export async function enhanceImage(
         break;
       }
       case "skin_retouch": {
-        // Advanced skin retouching: smooth + warm + detail preservation
+        // Advanced frequency-separation-inspired skin retouch:
+        // 1. Create smooth layer (low frequency) — blurs blemishes
+        // 2. Extract detail layer (high frequency) — preserves texture
+        // 3. Blend back with reduced blemish visibility
         const smoothIntensity = typeof s.skinSmoothing === "number"
-          ? Math.min(8, Math.max(0.5, (s.skinSmoothing as number) / 12))
+          ? Math.min(8, Math.max(1.0, (s.skinSmoothing as number) / 12))
           : 2.5;
-        pipeline = pipeline
-          .modulate({ brightness: 1.04, saturation: 0.93 })
-          .blur(smoothIntensity)
-          .sharpen({ sigma: 0.6, m1: 0.5, m2: 0.2 })  // Recover detail
+        const rw = meta.width ?? 800;
+        const rh = meta.height ?? 600;
+
+        // Low-frequency (smooth) layer
+        const smoothLayer = await sharp(inputBuffer)
+          .blur(smoothIntensity * 1.5)
+          .modulate({ brightness: 1.03, saturation: 0.92 })
+          .tint({ r: 245, g: 232, b: 222 })  // Warm skin tone
+          .toBuffer();
+
+        // Original sharpened for detail recovery
+        const detailLayer = await sharp(inputBuffer)
+          .sharpen({ sigma: 0.8, m1: 0.6, m2: 0.2 })
+          .ensureAlpha(0.45)  // 45% opacity for subtle detail overlay
+          .toBuffer();
+
+        // Composite: smooth base + detail overlay
+        pipeline = sharp(smoothLayer)
+          .composite([{ input: detailLayer, blend: "over" }])
           .gamma(1.06)
-          .tint({ r: 245, g: 230, b: 220 });  // Subtle warm skin tone
+          .sharpen({ sigma: 0.4, m1: 0.3, m2: 0.15 });  // Final gentle clarity
         break;
       }
       case "background": {
@@ -241,8 +394,19 @@ export async function enhanceImage(
     pipeline = pipeline.blur(intensity);
   }
 
-  // Output as JPEG
-  const outputBuffer = await pipeline.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  // Output: preserve PNG for transparent images, JPEG for photos
+  const stats = await analyzeImageStats(inputBuffer);
+  let outputBuffer: Buffer;
+  let outputMime: string;
+
+  if (stats.hasTransparency) {
+    outputBuffer = await pipeline.png({ compressionLevel: 6 }).toBuffer();
+    outputMime = "image/png";
+  } else {
+    outputBuffer = await pipeline.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+    outputMime = "image/jpeg";
+  }
+
   const outBase64 = outputBuffer.toString("base64");
 
   logger.info({
@@ -252,5 +416,5 @@ export async function enhanceImage(
     ratio: (outputBuffer.length / inputBuffer.length).toFixed(2),
   }, "Image enhancement complete");
 
-  return { base64: outBase64, mimeType: "image/jpeg" };
+  return { base64: outBase64, mimeType: outputMime };
 }
