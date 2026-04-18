@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, MouseEvent, TouchEvent } from "react";
+import React, { useState, useRef, useEffect, useCallback, MouseEvent } from "react";
 import { Link } from "wouter";
 import { Sparkles, Wand2, ArrowRight, Star, PlayCircle, Zap, Image as ImageIcon, Users, ImageUp, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -160,34 +160,61 @@ function BeforeAfterSlider({ src }: { src: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const autoRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
-  // Auto-animate the slider on mount to draw attention
+  // Auto-animate the slider on mount to hint at interactivity
   useEffect(() => {
     if (hasInteracted) return;
     let frame = 0;
     autoRef.current = setInterval(() => {
       frame++;
-      const pos = 50 + Math.sin(frame * 0.04) * 30;
+      const pos = 50 + Math.sin(frame * 0.04) * 25;
       setSliderPosition(pos);
     }, 30);
     return () => clearInterval(autoRef.current);
   }, [hasInteracted]);
 
-  const handleMove = (clientX: number) => {
+  const handleMove = useCallback((clientX: number) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
-    const percentage = (x / rect.width) * 100;
-    setSliderPosition(percentage);
-  };
+    setSliderPosition((x / rect.width) * 100);
+  }, []);
+
+  // Use native event listeners for touch to enable { passive: false }
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    let dragging = false;
+
+    const onTouchStart = (e: globalThis.TouchEvent) => {
+      dragging = true;
+      if (!hasInteracted) {
+        setHasInteracted(true);
+        clearInterval(autoRef.current);
+      }
+      handleMove(e.touches[0].clientX);
+    };
+    const onTouchMove = (e: globalThis.TouchEvent) => {
+      if (!dragging) return;
+      e.preventDefault(); // prevent scroll while dragging slider
+      handleMove(e.touches[0].clientX);
+    };
+    const onTouchEnd = () => { dragging = false; };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [hasInteracted, handleMove]);
 
   const onMouseMove = (e: MouseEvent) => {
     if (!isDragging) return;
     handleMove(e.clientX);
-  };
-
-  const onTouchMove = (e: TouchEvent) => {
-    if (!isDragging) return;
-    handleMove(e.touches[0].clientX);
   };
 
   const startDrag = () => {
@@ -201,65 +228,59 @@ function BeforeAfterSlider({ src }: { src: string }) {
   return (
     <div
       ref={containerRef}
-      className="relative w-full aspect-video rounded-2xl overflow-hidden cursor-ew-resize select-none border border-white/10 shadow-2xl shadow-teal-500/20 group"
+      className="relative w-full aspect-[16/9] rounded-2xl overflow-hidden cursor-ew-resize select-none border border-white/10 shadow-2xl shadow-teal-500/10"
       onMouseMove={onMouseMove}
-      onTouchMove={onTouchMove}
       onMouseDown={startDrag}
-      onTouchStart={startDrag}
       onMouseUp={() => setIsDragging(false)}
-      onTouchEnd={() => setIsDragging(false)}
       onMouseLeave={() => setIsDragging(false)}
     >
       {/* "Before" — same image degraded with CSS filters */}
       <img
         src={src}
         alt="Before"
+        draggable={false}
         className="absolute inset-0 w-full h-full object-cover"
         style={{ filter: "grayscale(0.4) contrast(0.8) brightness(0.72) saturate(0.55)" }}
       />
 
       {/* "After (AI Enhanced)" — original vibrant image revealed via clipPath */}
       <div
-        className="absolute inset-0 w-full h-full overflow-hidden transition-[clip-path] duration-75 ease-out"
-        style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}
+        className="absolute inset-0 w-full h-full overflow-hidden"
+        style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
       >
         <img
           src={src}
           alt="AI Enhanced"
+          draggable={false}
           className="absolute inset-0 w-full h-full object-cover"
           style={{ filter: "contrast(1.08) saturate(1.18) brightness(1.06)" }}
         />
-        {/* Subtle glow on enhanced side */}
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-teal-500/5 to-teal-500/10 pointer-events-none" />
       </div>
 
-      {/* Slider handle with glow */}
+      {/* Slider handle */}
       <div
         className="absolute top-0 bottom-0 w-0.5 bg-white/90 cursor-ew-resize"
-        style={{ left: `calc(${sliderPosition}% - 1px)`, boxShadow: "0 0 20px rgba(255,255,255,0.3), 0 0 40px rgba(20,184,166,0.2)" }}
+        style={{ left: `calc(${sliderPosition}% - 1px)`, boxShadow: "0 0 12px rgba(255,255,255,0.25)" }}
       >
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(255,255,255,0.4)] border-2 border-white/80 group-hover:scale-110 transition-transform">
-          <div className="flex gap-1">
-            <div className="w-0.5 h-4 bg-zinc-400 rounded-full" />
-            <div className="w-0.5 h-4 bg-zinc-400 rounded-full" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg border border-zinc-200">
+          <div className="flex gap-0.5">
+            <div className="w-0.5 h-3 bg-zinc-400 rounded-full" />
+            <div className="w-0.5 h-3 bg-zinc-400 rounded-full" />
           </div>
         </div>
       </div>
 
       {/* Labels */}
-      <div className="absolute top-4 left-4 px-3 py-1.5 bg-black/60 backdrop-blur-md rounded-full text-xs font-medium text-white/80 border border-white/10">
+      <div className="absolute top-3 left-3 px-2.5 py-1 bg-black/50 backdrop-blur-md rounded-full text-[11px] font-medium text-white/70 border border-white/10">
         Before
       </div>
-      <div className="absolute top-4 right-4 px-3 py-1.5 bg-teal-500/60 backdrop-blur-md rounded-full text-xs font-medium text-white border border-teal-400/30 shadow-[0_0_20px_rgba(45,212,191,0.5)]">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-teal-300 animate-pulse" />
-          AI Enhanced
-        </span>
+      <div className="absolute top-3 right-3 px-2.5 py-1 bg-teal-500/50 backdrop-blur-md rounded-full text-[11px] font-medium text-white border border-teal-500/20">
+        AI Enhanced
       </div>
 
       {/* Drag hint — fades after interaction */}
       {!hasInteracted && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/50 backdrop-blur rounded-full text-[11px] text-white/60 border border-white/10 animate-pulse">
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/50 backdrop-blur rounded-full text-[10px] text-white/50 border border-white/10 animate-pulse">
           ← Drag to compare →
         </div>
       )}
@@ -328,7 +349,7 @@ export default function Landing() {
 
       <main>
         {/* ===== HERO ===== */}
-        <section className="pt-32 pb-20 relative overflow-hidden">
+        <section className="pt-24 pb-12 relative overflow-hidden">
           <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-teal-600/20 blur-[120px] rounded-full pointer-events-none" />
 
           <div className="container mx-auto px-4 relative z-10 text-center">
@@ -336,7 +357,7 @@ export default function Landing() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, ease }}
-              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-400 text-sm font-medium mb-8"
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-400 text-sm font-medium mb-6"
             >
               <Wand2 className="w-4 h-4" />
               <span>Next-gen AI Editor Engine v3.0</span>
@@ -358,7 +379,7 @@ export default function Landing() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.18, ease }}
-              className="text-2xl md:text-3xl font-semibold tracking-tight mb-6 text-white/80"
+              className="text-2xl md:text-3xl font-semibold tracking-tight mb-4 text-white/80"
             >
               Make every frame <RotatingWord />
             </motion.div>
@@ -367,7 +388,7 @@ export default function Landing() {
               initial={{ opacity: 0, y: 24 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.25, ease }}
-              className="text-lg md:text-xl text-white/60 max-w-2xl mx-auto mb-10"
+              className="text-lg md:text-xl text-white/60 max-w-2xl mx-auto mb-8"
             >
               Transform ordinary photos and videos into stunning, professional-grade content with a single click. The power of a high-end creative studio, right in your browser.
             </motion.p>
@@ -395,7 +416,7 @@ export default function Landing() {
               initial={{ opacity: 0, y: 50, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{ duration: 1, delay: 0.55, ease }}
-              className="mt-24 max-w-5xl mx-auto"
+              className="mt-16 max-w-5xl mx-auto"
             >
               <BeforeAfterSlider src="/hero-after.png" />
             </motion.div>
