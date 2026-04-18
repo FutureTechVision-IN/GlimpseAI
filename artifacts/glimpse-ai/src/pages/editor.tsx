@@ -67,6 +67,11 @@ import {
   Undo2,
   MessageSquare,
   Send,
+  Scissors,
+  Volume2,
+  VolumeX,
+  Clock,
+  Gauge,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
@@ -141,37 +146,38 @@ const MAX_FILE_MB = 100;
 const ONBOARDING_KEY = "glimpse_onboarding_done";
 
 // -- Filter Gallery (29 presets including premium) --
-const FILTER_PRESETS: { name: string; key: string; f: FilterState; serverFilter: string | null; gradient: string; premium?: boolean }[] = [
+// `f` = CSS filter preview values, `cssExtra` = extra CSS filter string to better match Sharp tint/gamma
+const FILTER_PRESETS: { name: string; key: string; f: FilterState; serverFilter: string | null; gradient: string; premium?: boolean; cssExtra?: string }[] = [
   { name: "Original",    key: "original",      f: DEFAULT_FILTERS,                                                                                      serverFilter: null, gradient: "from-zinc-700 to-zinc-800" },
-  { name: "Vivid",       key: "vivid",         f: { ...DEFAULT_FILTERS, brightness: 108, contrast: 120, saturation: 140, sharpness: 110 },              serverFilter: "vivid", gradient: "from-red-500 to-amber-500" },
-  { name: "Portrait",    key: "portrait",      f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 95, saturation: 88, sharpness: 105 },                serverFilter: "portrait", gradient: "from-rose-400 to-pink-500" },
+  { name: "Vivid",       key: "vivid",         f: { ...DEFAULT_FILTERS, brightness: 103, contrast: 120, saturation: 135, sharpness: 110 },              serverFilter: "vivid", gradient: "from-red-500 to-amber-500" },
+  { name: "Portrait",    key: "portrait",      f: { ...DEFAULT_FILTERS, brightness: 104, contrast: 95, saturation: 92, sharpness: 105 },                serverFilter: "portrait", gradient: "from-rose-400 to-pink-500", cssExtra: "sepia(5%)" },
   { name: "B&W",         key: "bw",            f: { ...DEFAULT_FILTERS, contrast: 115, saturation: 0 },                                                 serverFilter: "bw", gradient: "from-zinc-300 to-zinc-600" },
-  { name: "Film",        key: "film",          f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 90, saturation: 78, sharpness: 92 },                  serverFilter: "film", gradient: "from-amber-600 to-yellow-800" },
-  { name: "HDR",         key: "hdr",           f: { ...DEFAULT_FILTERS, contrast: 145, saturation: 118, sharpness: 118 },                               serverFilter: "hdr", gradient: "from-cyan-500 to-blue-600" },
-  { name: "Vintage",     key: "vintage",       f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 90, saturation: 70, sharpness: 90 },                  serverFilter: "vintage", gradient: "from-amber-400 to-orange-700" },
-  { name: "Cinematic",   key: "cinematic",     f: { ...DEFAULT_FILTERS, brightness: 96, contrast: 105, saturation: 85 },                                serverFilter: "cinematic", gradient: "from-teal-600 to-cyan-800" },
+  { name: "Film",        key: "film",          f: { ...DEFAULT_FILTERS, brightness: 97, contrast: 92, saturation: 80, sharpness: 95 },                  serverFilter: "film", gradient: "from-amber-600 to-yellow-800", cssExtra: "sepia(22%) hue-rotate(-5deg)" },
+  { name: "HDR",         key: "hdr",           f: { ...DEFAULT_FILTERS, contrast: 140, saturation: 120, sharpness: 118 },                               serverFilter: "hdr", gradient: "from-cyan-500 to-blue-600" },
+  { name: "Vintage",     key: "vintage",       f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 92, saturation: 70, sharpness: 92 },                  serverFilter: "vintage", gradient: "from-amber-400 to-orange-700", cssExtra: "sepia(30%) hue-rotate(-8deg)" },
+  { name: "Cinematic",   key: "cinematic",     f: { ...DEFAULT_FILTERS, brightness: 96, contrast: 108, saturation: 85 },                                serverFilter: "cinematic", gradient: "from-teal-600 to-cyan-800", cssExtra: "sepia(8%) hue-rotate(185deg)" },
   { name: "Vibrant",     key: "vibrant",       f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 110, saturation: 145, sharpness: 108 },              serverFilter: "vibrant", gradient: "from-fuchsia-500 to-pink-600" },
   { name: "Film Noir",   key: "filmnoir",      f: { ...DEFAULT_FILTERS, brightness: 90, contrast: 130, saturation: 0, sharpness: 112 },                 serverFilter: "filmnoir", gradient: "from-zinc-900 to-zinc-700" },
-  { name: "Golden Hour", key: "goldenhour",    f: { ...DEFAULT_FILTERS, brightness: 106, saturation: 110 },                                             serverFilter: "goldenhour", gradient: "from-yellow-400 to-orange-500" },
-  { name: "Moody",       key: "moody",         f: { ...DEFAULT_FILTERS, brightness: 92, contrast: 105, saturation: 75 },                                serverFilter: "moody", gradient: "from-indigo-800 to-purple-900" },
+  { name: "Golden Hour", key: "goldenhour",    f: { ...DEFAULT_FILTERS, brightness: 106, saturation: 110 },                                             serverFilter: "goldenhour", gradient: "from-yellow-400 to-orange-500", cssExtra: "sepia(18%) hue-rotate(-10deg)" },
+  { name: "Moody",       key: "moody",         f: { ...DEFAULT_FILTERS, brightness: 92, contrast: 105, saturation: 75 },                                serverFilter: "moody", gradient: "from-indigo-800 to-purple-900", cssExtra: "sepia(10%) hue-rotate(220deg)" },
   { name: "Fresh",       key: "fresh",         f: { ...DEFAULT_FILTERS, brightness: 108, saturation: 115 },                                             serverFilter: "fresh", gradient: "from-green-400 to-emerald-500" },
-  { name: "Retro",       key: "retro",         f: { ...DEFAULT_FILTERS, brightness: 98, contrast: 95, saturation: 65, sharpness: 90 },                  serverFilter: "retro", gradient: "from-orange-600 to-red-800" },
+  { name: "Retro",       key: "retro",         f: { ...DEFAULT_FILTERS, brightness: 98, contrast: 95, saturation: 65, sharpness: 92 },                  serverFilter: "retro", gradient: "from-orange-600 to-red-800", cssExtra: "sepia(28%) hue-rotate(-12deg)" },
   { name: "Dramatic",    key: "dramatic",      f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 140, saturation: 110, sharpness: 120 },               serverFilter: "dramatic", gradient: "from-red-700 to-zinc-900" },
-  { name: "Warm Tone",   key: "warm_tone",     f: { ...DEFAULT_FILTERS, brightness: 105, saturation: 110, warmth: 20 },                                 serverFilter: "warm_tone", gradient: "from-orange-400 to-red-500" },
-  { name: "Cool Tone",   key: "cool_tone",     f: { ...DEFAULT_FILTERS, brightness: 102, saturation: 95, warmth: -20 },                                 serverFilter: "cool_tone", gradient: "from-sky-400 to-blue-600" },
-  { name: "Sunset",      key: "sunset",        f: { ...DEFAULT_FILTERS, brightness: 105, saturation: 120, warmth: 25 },                                 serverFilter: "sunset", gradient: "from-orange-500 to-pink-600" },
-  { name: "Matte",       key: "matte",         f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 85, saturation: 80 },                                serverFilter: "matte", gradient: "from-stone-400 to-stone-600" },
+  { name: "Warm Tone",   key: "warm_tone",     f: { ...DEFAULT_FILTERS, brightness: 104, saturation: 110, warmth: 20 },                                 serverFilter: "warm_tone", gradient: "from-orange-400 to-red-500", cssExtra: "sepia(15%)" },
+  { name: "Cool Tone",   key: "cool_tone",     f: { ...DEFAULT_FILTERS, brightness: 102, saturation: 95, warmth: -20 },                                 serverFilter: "cool_tone", gradient: "from-sky-400 to-blue-600", cssExtra: "hue-rotate(195deg) sepia(8%)" },
+  { name: "Sunset",      key: "sunset",        f: { ...DEFAULT_FILTERS, brightness: 103, saturation: 120, warmth: 25 },                                 serverFilter: "sunset", gradient: "from-orange-500 to-pink-600", cssExtra: "sepia(20%) hue-rotate(-15deg)" },
+  { name: "Matte",       key: "matte",         f: { ...DEFAULT_FILTERS, brightness: 102, contrast: 85, saturation: 70 },                                serverFilter: "matte", gradient: "from-stone-400 to-stone-600" },
   { name: "Neon",        key: "neon",          f: { ...DEFAULT_FILTERS, contrast: 130, saturation: 160, sharpness: 115 },                               serverFilter: "neon", gradient: "from-violet-500 to-fuchsia-600" },
   // Premium filters
-  { name: "Airy",        key: "airy",          f: { ...DEFAULT_FILTERS, brightness: 112, contrast: 90, saturation: 85 },                                serverFilter: "airy", gradient: "from-sky-200 to-blue-300", premium: true },
-  { name: "Teal & Orange", key: "teal_orange", f: { ...DEFAULT_FILTERS, contrast: 115, saturation: 110 },                                              serverFilter: "teal_orange", gradient: "from-teal-500 to-orange-500", premium: true },
-  { name: "Pastel",      key: "pastel",        f: { ...DEFAULT_FILTERS, brightness: 110, contrast: 85, saturation: 70 },                                serverFilter: "pastel", gradient: "from-pink-300 to-violet-300", premium: true },
-  { name: "Noir Color",  key: "noir_color",    f: { ...DEFAULT_FILTERS, brightness: 92, contrast: 125, saturation: 60 },                                serverFilter: "noir_color", gradient: "from-zinc-800 to-amber-900", premium: true },
-  { name: "Cross Process", key: "cross_process", f: { ...DEFAULT_FILTERS, contrast: 120, saturation: 130 },                                            serverFilter: "cross_process", gradient: "from-green-500 to-purple-600", premium: true },
-  { name: "Cyberpunk",   key: "cyberpunk",     f: { ...DEFAULT_FILTERS, contrast: 130, saturation: 140 },                                               serverFilter: "cyberpunk", gradient: "from-cyan-400 to-fuchsia-600", premium: true },
-  { name: "Arctic",      key: "arctic",        f: { ...DEFAULT_FILTERS, brightness: 108, contrast: 95, saturation: 75, warmth: -30 },                   serverFilter: "arctic", gradient: "from-cyan-200 to-blue-400", premium: true },
-  { name: "Ember",       key: "ember",         f: { ...DEFAULT_FILTERS, brightness: 98, contrast: 115, saturation: 110, warmth: 30 },                   serverFilter: "ember", gradient: "from-orange-600 to-red-700", premium: true },
-  { name: "Chrome",      key: "chrome",        f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 120, saturation: 20, sharpness: 115 },               serverFilter: "chrome", gradient: "from-zinc-300 to-zinc-500", premium: true },
+  { name: "Airy",        key: "airy",          f: { ...DEFAULT_FILTERS, brightness: 112, contrast: 90, saturation: 85 },                                serverFilter: "airy", gradient: "from-sky-200 to-blue-300", premium: true, cssExtra: "sepia(5%) hue-rotate(200deg)" },
+  { name: "Teal & Orange", key: "teal_orange", f: { ...DEFAULT_FILTERS, contrast: 115, saturation: 120 },                                              serverFilter: "teal_orange", gradient: "from-teal-500 to-orange-500", premium: true, cssExtra: "sepia(15%) hue-rotate(-5deg)" },
+  { name: "Pastel",      key: "pastel",        f: { ...DEFAULT_FILTERS, brightness: 115, contrast: 85, saturation: 55 },                                serverFilter: "pastel", gradient: "from-pink-300 to-violet-300", premium: true, cssExtra: "sepia(8%) hue-rotate(320deg)" },
+  { name: "Noir Color",  key: "noir_color",    f: { ...DEFAULT_FILTERS, brightness: 88, contrast: 125, saturation: 40 },                                serverFilter: "noir_color", gradient: "from-zinc-800 to-amber-900", premium: true },
+  { name: "Cross Process", key: "cross_process", f: { ...DEFAULT_FILTERS, contrast: 120, saturation: 130 },                                            serverFilter: "cross_process", gradient: "from-green-500 to-purple-600", premium: true, cssExtra: "hue-rotate(30deg) sepia(8%)" },
+  { name: "Cyberpunk",   key: "cyberpunk",     f: { ...DEFAULT_FILTERS, contrast: 130, saturation: 150 },                                               serverFilter: "cyberpunk", gradient: "from-cyan-400 to-fuchsia-600", premium: true, cssExtra: "hue-rotate(280deg) sepia(10%)" },
+  { name: "Arctic",      key: "arctic",        f: { ...DEFAULT_FILTERS, brightness: 110, contrast: 95, saturation: 60, warmth: -30 },                   serverFilter: "arctic", gradient: "from-cyan-200 to-blue-400", premium: true, cssExtra: "hue-rotate(195deg) sepia(5%)" },
+  { name: "Ember",       key: "ember",         f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 115, saturation: 115, warmth: 30 },                   serverFilter: "ember", gradient: "from-orange-600 to-red-700", premium: true, cssExtra: "sepia(18%)" },
+  { name: "Chrome",      key: "chrome",        f: { ...DEFAULT_FILTERS, brightness: 108, contrast: 120, saturation: 30, sharpness: 115 },               serverFilter: "chrome", gradient: "from-zinc-300 to-zinc-500", premium: true },
 ];
 
 // -- Simple-mode one-click presets (expanded) --
@@ -284,24 +290,29 @@ function getAlternatives(imageType: string, primary: string): { type: EnhanceMed
 // Canvas helpers
 // ---------------------------------------------------------------------------
 
-function buildCssFilter(f: FilterState): string {
+function buildCssFilter(f: FilterState, cssExtra?: string): string {
   const blurPx = f.sharpness < 100 ? ((100 - f.sharpness) / 100) * 3 : 0;
   const hueRot = f.hue ?? 0;
   const warmthShift = f.warmth ?? 0;
-  return [
+  const parts = [
     `brightness(${f.brightness}%)`,
     `contrast(${f.contrast}%)`,
     `saturate(${f.saturation}%)`,
     blurPx > 0 ? `blur(${blurPx.toFixed(2)}px)` : "",
     hueRot !== 0 ? `hue-rotate(${hueRot}deg)` : "",
     warmthShift > 0 ? `sepia(${Math.min(warmthShift * 2, 50)}%)` : "",
-  ].filter(Boolean).join(" ");
+    warmthShift < 0 ? `hue-rotate(${Math.max(warmthShift * 3, -60)}deg)` : "",
+    // cssExtra = per-filter CSS string that approximates Sharp's .tint() / .gamma()
+    cssExtra ?? "",
+  ];
+  return parts.filter(Boolean).join(" ");
 }
 
 function buildPreviewStyle(
   transform: TransformState,
   filters: FilterState,
   crop: CropBox,
+  cssExtra?: string,
 ): React.CSSProperties {
   const t: string[] = [];
   if (transform.rotation) t.push(`rotate(${transform.rotation}deg)`);
@@ -310,7 +321,7 @@ function buildPreviewStyle(
   const { x, y, x2, y2 } = crop;
   const hasCrop = x !== 0 || y !== 0 || x2 !== 100 || y2 !== 100;
   return {
-    filter: buildCssFilter(filters),
+    filter: buildCssFilter(filters, cssExtra),
     transform: t.length ? t.join(" ") : undefined,
     clipPath: hasCrop ? `inset(${y}% ${100 - x2}% ${100 - y2}% ${x}%)` : undefined,
     transition: "filter 0.2s ease, transform 0.2s ease",
@@ -322,6 +333,7 @@ async function applyTransformsToBase64(
   transform: TransformState,
   crop: CropBox,
   filters: FilterState,
+  cssExtra?: string,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -342,7 +354,7 @@ async function applyTransformsToBase64(
         canvas.width = Math.round(canvasW);
         canvas.height = Math.round(canvasH);
         const ctx = canvas.getContext("2d")!;
-        ctx.filter = buildCssFilter(filters);
+        ctx.filter = buildCssFilter(filters, cssExtra);
         ctx.save();
         ctx.translate(canvas.width / 2, canvas.height / 2);
         ctx.rotate((transform.rotation * Math.PI) / 180);
@@ -452,6 +464,12 @@ export default function Editor() {
   const [stabilize, setStabilize] = useState(false);
   const [denoise, setDenoise] = useState(false);
   const [skinSmoothing, setSkinSmoothing] = useState(50);
+  // Video editing controls
+  const [videoSpeed, setVideoSpeed] = useState(1.0);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(100);
+  const [muteAudio, setMuteAudio] = useState(false);
+  const [videoColorGrade, setVideoColorGrade] = useState<string | null>(null);
 
   // AI Analysis
   const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null);
@@ -748,6 +766,15 @@ export default function Editor() {
       effectiveType = "stabilize" as EnhanceMediaBodyEnhancementType;
     }
 
+    // Video-specific settings
+    if (mediaType === "video") {
+      if (videoSpeed !== 1.0) settings.speed = videoSpeed;
+      if (trimStart > 0 || trimEnd < 100) { settings.trimStart = trimStart; settings.trimEnd = trimEnd; }
+      if (muteAudio) settings.muteAudio = true;
+      if (denoise) settings.denoise = true;
+      if (videoColorGrade) settings.videoColorGrade = videoColorGrade;
+    }
+
     let finalBase64 = base64Data;
     const hasT = transform.rotation !== 0 || transform.flipH || transform.flipV;
     const hasF = filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100 || filters.sharpness !== 100;
@@ -755,7 +782,7 @@ export default function Editor() {
 
     if (editorMode === "advanced" && mediaType === "photo" && (hasT || hasF || hasC)) {
       try {
-        finalBase64 = await applyTransformsToBase64(file, transform, cropEnabled ? cropBox : DEFAULT_CROP, filters);
+        finalBase64 = await applyTransformsToBase64(file, transform, cropEnabled ? cropBox : DEFAULT_CROP, filters, activePresetCssExtra);
       } catch {
         toast({ title: "Transform error", description: "Could not apply edits. Uploading original.", variant: "destructive" });
       }
@@ -838,6 +865,7 @@ export default function Editor() {
     setTransform(DEFAULT_TRANSFORM); setFilters(DEFAULT_FILTERS);
     setCropBox(DEFAULT_CROP); setCropEnabled(false);
     setStabilize(false); setDenoise(false);
+    setVideoSpeed(1.0); setTrimStart(0); setTrimEnd(100); setMuteAudio(false); setVideoColorGrade(null);
     setSelectedFilter(null); setAiSuggestion(null);
     setSkinSmoothing(50); uploadedJobIdRef.current = null;
     setUndoStack([]); setChatMessages([]); setShowAiChat(false);
@@ -851,7 +879,8 @@ export default function Editor() {
     || filters.warmth !== 0 || filters.highlights !== 0 || filters.shadows !== 0 || filters.hue !== 0
     || (cropEnabled && (cropBox.x !== 0 || cropBox.y !== 0 || cropBox.x2 !== 100 || cropBox.y2 !== 100));
 
-  const previewStyle = buildPreviewStyle(transform, filters, cropEnabled ? cropBox : DEFAULT_CROP);
+  const activePresetCssExtra = selectedFilter ? FILTER_PRESETS.find(p => p.key === selectedFilter)?.cssExtra : undefined;
+  const previewStyle = buildPreviewStyle(transform, filters, cropEnabled ? cropBox : DEFAULT_CROP, activePresetCssExtra);
   const stageInfo = STAGE_INFO[processStage];
 
   const visibleFilters = showAllFilters ? FILTER_PRESETS : FILTER_PRESETS.slice(0, 12);
@@ -1367,6 +1396,68 @@ export default function Editor() {
                     {/* Video */}
                     <TabsContent value="video" className="space-y-4 mt-0">
                       <div className="space-y-3">
+                        {/* Speed Control */}
+                        <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/50 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Gauge className="w-3.5 h-3.5 text-teal-400" />
+                              <p className="text-sm font-medium">Speed</p>
+                            </div>
+                            <span className="text-xs font-mono text-teal-400">{videoSpeed.toFixed(2)}x</span>
+                          </div>
+                          <Slider
+                            value={[videoSpeed]}
+                            min={0.25} max={4} step={0.25}
+                            onValueChange={([v]) => setVideoSpeed(v)}
+                            className="py-1"
+                          />
+                          <div className="flex justify-between text-[10px] text-zinc-600">
+                            <span>0.25x</span><span>1x</span><span>2x</span><span>4x</span>
+                          </div>
+                        </div>
+
+                        {/* Trim Controls */}
+                        <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/50 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Scissors className="w-3.5 h-3.5 text-teal-400" />
+                            <p className="text-sm font-medium">Trim</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1">
+                              <Label className="text-[10px] text-zinc-500">Start %</Label>
+                              <Slider
+                                value={[trimStart]}
+                                min={0} max={trimEnd - 1} step={1}
+                                onValueChange={([v]) => setTrimStart(v)}
+                                className="py-1"
+                              />
+                            </div>
+                            <div className="flex-1">
+                              <Label className="text-[10px] text-zinc-500">End %</Label>
+                              <Slider
+                                value={[trimEnd]}
+                                min={trimStart + 1} max={100} step={1}
+                                onValueChange={([v]) => setTrimEnd(v)}
+                                className="py-1"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-zinc-500">Keep {trimStart}% – {trimEnd}% of video</p>
+                        </div>
+
+                        {/* Audio */}
+                        <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
+                          <div className="flex items-center gap-2">
+                            {muteAudio ? <VolumeX className="w-3.5 h-3.5 text-zinc-500" /> : <Volume2 className="w-3.5 h-3.5 text-teal-400" />}
+                            <div>
+                              <p className="text-sm font-medium">Mute Audio</p>
+                              <p className="text-xs text-zinc-500 mt-0.5">Strip audio track from output</p>
+                            </div>
+                          </div>
+                          <Switch checked={muteAudio} onCheckedChange={setMuteAudio} />
+                        </div>
+
+                        {/* AI Stabilization */}
                         <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
                           <div>
                             <p className="text-sm font-medium">AI Stabilization</p>
@@ -1374,6 +1465,8 @@ export default function Editor() {
                           </div>
                           <Switch checked={stabilize} onCheckedChange={setStabilize} />
                         </div>
+
+                        {/* Noise Reduction */}
                         <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
                           <div>
                             <p className="text-sm font-medium">Noise Reduction</p>
@@ -1381,13 +1474,46 @@ export default function Editor() {
                           </div>
                           <Switch checked={denoise} onCheckedChange={setDenoise} />
                         </div>
-                        <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
-                          <div>
-                            <p className="text-sm font-medium">Cinematic Preset</p>
-                            <p className="text-xs text-zinc-500 mt-0.5">Film-grade color grading</p>
+
+                        {/* Video Color Grading */}
+                        <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/50 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Film className="w-3.5 h-3.5 text-teal-400" />
+                            <p className="text-sm font-medium">Color Grade</p>
                           </div>
-                          <Switch checked={selectedFilter === "cinematic"} onCheckedChange={(v) => setSelectedFilter(v ? "cinematic" : null)} />
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {[
+                              { key: "cinematic", label: "Cinematic", gradient: "from-teal-600 to-cyan-800" },
+                              { key: "warm", label: "Warm", gradient: "from-orange-500 to-red-600" },
+                              { key: "cool", label: "Cool", gradient: "from-blue-500 to-indigo-600" },
+                              { key: "vintage", label: "Vintage", gradient: "from-amber-500 to-orange-700" },
+                              { key: "vivid", label: "Vivid", gradient: "from-pink-500 to-red-500" },
+                              { key: "bw", label: "B&W", gradient: "from-zinc-400 to-zinc-700" },
+                            ].map(g => (
+                              <button
+                                key={g.key}
+                                className={cn(
+                                  "relative rounded-md border overflow-hidden h-8 transition-all",
+                                  videoColorGrade === g.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
+                                )}
+                                onClick={() => setVideoColorGrade(videoColorGrade === g.key ? null : g.key)}
+                              >
+                                <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", g.gradient)} />
+                                <span className="relative text-[9px] font-medium text-white drop-shadow-lg">{g.label}</span>
+                              </button>
+                            ))}
+                          </div>
                         </div>
+
+                        {/* Frame Capture hint */}
+                        <div className="flex items-center gap-2 p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
+                          <Camera className="w-3.5 h-3.5 text-zinc-400" />
+                          <div>
+                            <p className="text-sm font-medium text-zinc-300">Frame Capture</p>
+                            <p className="text-xs text-zinc-500 mt-0.5">Pause video in preview, then capture current frame as an image for photo enhancement.</p>
+                          </div>
+                        </div>
+
                         <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
                           <p className="text-xs text-amber-400/80">Video processing may take up to 60 s depending on length and resolution.</p>
                         </div>

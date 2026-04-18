@@ -57,6 +57,46 @@ function jobToResponse(j: typeof mediaJobsTable.$inferSelect) {
   };
 }
 
+/**
+ * Lightweight version for list endpoints — returns thumbnails but omits
+ * the huge full-size base64 blobs (originalUrl, processedUrl) to avoid
+ * RangeError: Invalid string length on JSON.stringify.
+ */
+function jobToListResponse(j: typeof mediaJobsTable.$inferSelect) {
+  const guessMime = (b64: string | null): string => {
+    if (!b64) return "image/jpeg";
+    if (b64.startsWith("data:")) return "image/jpeg";
+    if (b64.startsWith("/9j/")) return "image/jpeg";
+    if (b64.startsWith("iVBOR")) return "image/png";
+    if (b64.startsWith("R0lGO")) return "image/gif";
+    if (b64.startsWith("UklGR")) return "image/webp";
+    return "image/jpeg";
+  };
+  const toDataUri = (b64: string | null): string | null => {
+    if (!b64) return null;
+    if (b64.startsWith("data:")) return b64;
+    return `data:${guessMime(b64)};base64,${b64}`;
+  };
+
+  return {
+    id: j.id,
+    userId: j.userId,
+    mediaType: j.mediaType,
+    status: j.status,
+    filename: j.filename,
+    originalUrl: null,       // omitted for list — fetch single job for full data
+    processedUrl: null,      // omitted for list
+    thumbnailUrl: toDataUri(j.thumbnailUrl),  // small enough to include
+    enhancementType: j.enhancementType,
+    presetId: j.presetId,
+    errorMessage: j.errorMessage,
+    processingTimeMs: j.processingTimeMs,
+    fileSize: j.fileSize,
+    createdAt: j.createdAt,
+    completedAt: j.completedAt,
+  };
+}
+
 // ─── Upload ───────────────────────────────────────────────────
 router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const parsed = UploadMediaBody.safeParse(req.body);
@@ -236,7 +276,7 @@ router.get("/media/jobs", requireAuth, async (req: AuthRequest, res): Promise<vo
       .orderBy(desc(mediaJobsTable.createdAt));
   }
 
-  res.json(jobs.map(jobToResponse));
+  res.json(jobs.map(jobToListResponse));
 });
 
 // ─── Get single job ───────────────────────────────────────────
