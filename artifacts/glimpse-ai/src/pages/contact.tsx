@@ -15,7 +15,7 @@ export default function Contact() {
             <CardContent className="p-6 text-center">
               <Mail className="w-8 h-8 text-teal-400 mx-auto mb-3" />
               <h3 className="font-medium text-sm mb-1">Email</h3>
-              <a href="mailto:futuretechvision.global@gmail.com" className="text-sm text-teal-400 hover:text-teal-300 transition-colors">
+              <a href="mailto:futuretechvision.global@gmail.com" className="text-xs sm:text-sm text-teal-400 hover:text-teal-300 transition-colors break-words">
                 futuretechvision.global@gmail.com
               </a>
             </CardContent>
