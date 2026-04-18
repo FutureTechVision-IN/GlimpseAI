@@ -1,9 +1,11 @@
 import sharp from "sharp";
 import { logger } from "./logger";
+import type { AIEnhancementGuidance } from "./ai-provider";
 
 export interface EnhanceOptions {
   enhancementType: string;
   settings?: Record<string, unknown>;
+  aiGuidance?: AIEnhancementGuidance | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -590,6 +592,92 @@ export async function enhanceImage(
     pipeline = pipeline.blur(intensity);
   }
 
+  // ── AI-Guided Enhancement Layer ─────────────────────────────────────────────
+  // When AI guidance is available (from LLM vision analysis), apply its tuning
+  // as a final refinement pass AFTER the primary enhancement pipeline.
+  const guidance = options.aiGuidance;
+  if (guidance) {
+    logger.info({ source: guidance.source, desc: guidance.description }, "Applying AI enhancement guidance");
+
+    // Brightness & saturation via modulate (multiplicative)
+    const modOpts: { brightness?: number; saturation?: number; hue?: number } = {};
+    if (guidance.brightness !== null && Math.abs(guidance.brightness - 1.0) > 0.02) {
+      modOpts.brightness = guidance.brightness;
+    }
+    if (guidance.saturation !== null && Math.abs(guidance.saturation - 1.0) > 0.02) {
+      modOpts.saturation = guidance.saturation;
+    }
+    if (Object.keys(modOpts).length > 0) {
+      pipeline = pipeline.modulate(modOpts);
+    }
+
+    // Contrast via gamma
+    if (guidance.contrast !== null && Math.abs(guidance.contrast - 1.0) > 0.02) {
+      // Higher contrast = lower gamma (more S-curve), lower contrast = higher gamma
+      const contrastGamma = 1 + ((1.0 - guidance.contrast) * 0.5);
+      pipeline = pipeline.gamma(Math.max(0.5, Math.min(2.0, contrastGamma)));
+    }
+
+    // Gamma correction
+    if (guidance.gammaCorrection !== null && Math.abs(guidance.gammaCorrection - 1.0) > 0.02) {
+      pipeline = pipeline.gamma(guidance.gammaCorrection);
+    }
+
+    // Shadow recovery via tone mapping
+    if (guidance.shadowRecovery !== null && guidance.shadowRecovery > 2) {
+      const shadowBuf = await pipeline.toBuffer();
+      const toneMapped = await toneMap(shadowBuf, guidance.shadowRecovery, 0);
+      pipeline = sharp(toneMapped);
+    }
+
+    // Highlight recovery via tone mapping
+    if (guidance.highlightRecovery !== null && guidance.highlightRecovery > 2) {
+      const hlBuf = await pipeline.toBuffer();
+      const toneMapped = await toneMap(hlBuf, 0, guidance.highlightRecovery);
+      pipeline = sharp(toneMapped);
+    }
+
+    // Color warmth via recomb matrix
+    if (guidance.warmth !== null && Math.abs(guidance.warmth) > 3) {
+      const w = guidance.warmth;
+      const rBoost = 1 + (w > 0 ? w / 80 : 0);
+      const bBoost = 1 + (w < 0 ? Math.abs(w) / 80 : 0);
+      const rCut = w < 0 ? 1 - Math.abs(w) / 100 : 1;
+      const bCut = w > 0 ? 1 - w / 100 : 1;
+      pipeline = pipeline.recomb([
+        [rBoost * rCut, 0.02, 0],
+        [0.01, 1.0, 0.01],
+        [0, 0.02, bBoost * bCut],
+      ]);
+    }
+
+    // Sharpening
+    if (guidance.sharpness !== null && guidance.sharpness > 0.4) {
+      pipeline = pipeline.sharpen({ sigma: guidance.sharpness, m1: guidance.sharpness * 1.2, m2: guidance.sharpness * 0.3 });
+    }
+
+    // Denoising
+    if (guidance.denoiseStrength !== null && guidance.denoiseStrength > 0.3) {
+      pipeline = pipeline.blur(guidance.denoiseStrength);
+    }
+
+    // Vignette (darkened corners via overlay)
+    if (guidance.vignetteStrength !== null && guidance.vignetteStrength > 0.05) {
+      const vigW = meta.width ?? 800;
+      const vigH = meta.height ?? 600;
+      const opacity = Math.round(guidance.vignetteStrength * 255);
+      const vignetteSvg = Buffer.from(`<svg width="${vigW}" height="${vigH}">
+        <defs><radialGradient id="v" cx="50%" cy="50%" r="70%">
+          <stop offset="55%" stop-color="black" stop-opacity="0"/>
+          <stop offset="100%" stop-color="black" stop-opacity="${(opacity / 255).toFixed(2)}"/>
+        </radialGradient></defs>
+        <rect width="${vigW}" height="${vigH}" fill="url(#v)"/>
+      </svg>`);
+      const vignetteOverlay = await sharp(vignetteSvg).resize(vigW, vigH).png().toBuffer();
+      pipeline = pipeline.composite([{ input: vignetteOverlay, blend: "multiply" }]);
+    }
+  }
+
   // Output: preserve PNG for transparent images, JPEG for photos
   const stats = await analyzeImageStats(inputBuffer);
   let outputBuffer: Buffer;
@@ -607,6 +695,8 @@ export async function enhanceImage(
 
   logger.info({
     type, filterName,
+    aiGuided: !!guidance,
+    aiSource: guidance?.source ?? "none",
     inputBytes: inputBuffer.length,
     outputBytes: outputBuffer.length,
     ratio: (outputBuffer.length / inputBuffer.length).toFixed(2),

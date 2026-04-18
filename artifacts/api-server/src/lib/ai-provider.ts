@@ -24,6 +24,26 @@ export interface AnalysisResult {
   analysisSource: "local" | "openrouter" | "gemini";  // which engine produced this
 }
 
+/**
+ * AI-generated numerical guidance for the Sharp enhancement pipeline.
+ * Values are anchored: 1.0 = no change; >1 = increase; <1 = decrease.
+ * null fields = "let Sharp decide" (no override).
+ */
+export interface AIEnhancementGuidance {
+  brightness: number | null;     // 0.7 – 1.4
+  contrast: number | null;       // 0.7 – 1.5
+  saturation: number | null;     // 0.5 – 1.6
+  sharpness: number | null;      // 0.5 – 2.5 (sigma)
+  warmth: number | null;         // -30 to +30  (R-B shift)
+  shadowRecovery: number | null; // 0 – 40
+  highlightRecovery: number | null; // 0 – 30
+  denoiseStrength: number | null; // 0 – 3 (blur sigma for denoising)
+  gammaCorrection: number | null; // 0.7 – 1.5
+  vignetteStrength: number | null; // 0 – 0.4
+  description: string;           // human-readable explanation
+  source: "openrouter" | "gemini" | "local";
+}
+
 // ---------------------------------------------------------------------------
 // Self-Learning Feedback Accumulator
 // Tracks user apply/dismiss actions → biases confidence up/down per enhancement
@@ -516,6 +536,178 @@ class AIProviderService {
       }
     }
     return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI-Guided Enhancement — asks LLM for specific numerical processing params
+  // ---------------------------------------------------------------------------
+  async getEnhancementGuidance(
+    base64Data: string,
+    mimeType: string,
+    enhancementType: string,
+  ): Promise<AIEnhancementGuidance | null> {
+    const thumb = await this.createAnalysisThumbnail(base64Data, mimeType);
+
+    const prompt = `You are an expert photo editor. Analyze this image and provide EXACT numerical processing parameters for a "${enhancementType}" enhancement.
+
+Return JSON only — no markdown, no explanation:
+{"brightness":1.0,"contrast":1.0,"saturation":1.0,"sharpness":1.0,"warmth":0,"shadowRecovery":0,"highlightRecovery":0,"denoiseStrength":0,"gammaCorrection":1.0,"vignetteStrength":0,"description":"one sentence explaining what adjustments you chose and why"}
+
+Rules:
+- brightness: 0.7-1.4 (1.0 = no change)
+- contrast: 0.7-1.5 (1.0 = no change)
+- saturation: 0.5-1.6 (1.0 = no change)
+- sharpness: 0.3-2.5 (sigma for unsharp mask, 1.0 = moderate)
+- warmth: -30 to +30 (positive = warmer/redder, negative = cooler/bluer)
+- shadowRecovery: 0-40 (0 = none, 40 = heavy shadow lift)
+- highlightRecovery: 0-30 (0 = none, 30 = heavy highlight pull)
+- denoiseStrength: 0-3 (0 = none, 3 = heavy noise reduction)
+- gammaCorrection: 0.7-1.5 (1.0 = no change, >1 = lift midtones)
+- vignetteStrength: 0-0.4 (0 = none)
+- Be aggressive but tasteful. Each value should create a VISIBLE difference.`;
+
+    // Try OpenRouter first, then Gemini
+    const result = await this.tryOpenRouterGuidance(thumb.data, thumb.mime, prompt)
+      ?? await this.tryGeminiGuidance(thumb.data, thumb.mime, prompt);
+
+    if (result) {
+      logger.info({
+        enhancementType,
+        source: result.source,
+        brightness: result.brightness,
+        contrast: result.contrast,
+        saturation: result.saturation,
+      }, "AI enhancement guidance received");
+      return result;
+    }
+
+    return null;
+  }
+
+  private async tryOpenRouterGuidance(base64Data: string, mimeType: string, prompt: string): Promise<AIEnhancementGuidance | null> {
+    const pk = this.getNextKey("openrouter");
+    if (!pk) return null;
+
+    const baseUrl = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
+
+    for (const model of OPENROUTER_VISION_MODELS) {
+      if (TEXT_ONLY_MODELS.has(model)) continue;
+      try {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${pk.key}`,
+            "HTTP-Referer": "https://glimpseai.app",
+            "X-Title": "GlimpseAI",
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Data}` } },
+                { type: "text", text: prompt },
+              ],
+            }],
+            max_tokens: 300,
+            temperature: 0.15,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => "");
+          this.markFailed(pk, errBody);
+          break;
+        }
+
+        const data = await response.json() as any;
+        const content: string = data?.choices?.[0]?.message?.content ?? "";
+        this.markSuccess(pk);
+
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const p = JSON.parse(jsonMatch[0]);
+          return this.sanitizeGuidance(p, "openrouter");
+        }
+        break;
+      } catch (e) {
+        logger.debug({ err: e, model }, "OpenRouter guidance error");
+        this.markFailed(pk);
+        break;
+      }
+    }
+    return null;
+  }
+
+  private async tryGeminiGuidance(base64Data: string, mimeType: string, prompt: string): Promise<AIEnhancementGuidance | null> {
+    const pk = this.getNextKey("gemini");
+    if (!pk) return null;
+
+    for (const model of ["gemini-2.0-flash", "gemini-1.5-flash"]) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${pk.key}`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [
+              { inlineData: { mimeType, data: base64Data } },
+              { text: prompt },
+            ]}],
+            generationConfig: { maxOutputTokens: 300, temperature: 0.15 },
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => "");
+          this.markFailed(pk, errBody.includes("429") ? "per day" : errBody);
+          break;
+        }
+
+        const data = await response.json() as any;
+        const content: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+        this.markSuccess(pk);
+
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const p = JSON.parse(jsonMatch[0]);
+          return this.sanitizeGuidance(p, "gemini");
+        }
+        break;
+      } catch (e) {
+        logger.debug({ err: e, model }, "Gemini guidance error");
+        this.markFailed(pk);
+        break;
+      }
+    }
+    return null;
+  }
+
+  /** Clamp and validate AI-returned parameters to safe ranges */
+  private sanitizeGuidance(raw: any, source: "openrouter" | "gemini"): AIEnhancementGuidance {
+    const clamp = (v: unknown, min: number, max: number, def: number | null): number | null => {
+      if (v === null || v === undefined) return def;
+      const n = Number(v);
+      if (isNaN(n)) return def;
+      return Math.max(min, Math.min(max, n));
+    };
+    return {
+      brightness: clamp(raw.brightness, 0.7, 1.4, null),
+      contrast: clamp(raw.contrast, 0.7, 1.5, null),
+      saturation: clamp(raw.saturation, 0.5, 1.6, null),
+      sharpness: clamp(raw.sharpness, 0.3, 2.5, null),
+      warmth: clamp(raw.warmth, -30, 30, null),
+      shadowRecovery: clamp(raw.shadowRecovery, 0, 40, null),
+      highlightRecovery: clamp(raw.highlightRecovery, 0, 30, null),
+      denoiseStrength: clamp(raw.denoiseStrength, 0, 3, null),
+      gammaCorrection: clamp(raw.gammaCorrection, 0.7, 1.5, null),
+      vignetteStrength: clamp(raw.vignetteStrength, 0, 0.4, null),
+      description: typeof raw.description === "string" ? raw.description.slice(0, 300) : "AI-guided enhancement",
+      source,
+    };
   }
 
   // ---------------------------------------------------------------------------
