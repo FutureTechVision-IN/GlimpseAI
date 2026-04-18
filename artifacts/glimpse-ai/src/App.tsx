@@ -15,6 +15,9 @@ import Pricing from "./pages/pricing";
 import Settings from "./pages/settings";
 import Billing from "./pages/billing";
 import Admin from "./pages/admin";
+import Terms from "./pages/terms";
+import Privacy from "./pages/privacy";
+import Contact from "./pages/contact";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -71,6 +74,9 @@ function Router() {
           <Admin />
         </ProtectedRoute>
       </Route>
+      <Route path="/terms" component={Terms} />
+      <Route path="/privacy" component={Privacy} />
+      <Route path="/contact" component={Contact} />
       <Route component={NotFound} />
     </Switch>
   );

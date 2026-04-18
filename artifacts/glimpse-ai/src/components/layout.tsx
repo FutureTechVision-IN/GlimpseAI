@@ -82,7 +82,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {children}
+        <div className="flex-1 overflow-y-auto">
+          {children}
+        </div>
+
+        {/* Footer */}
+        <footer className="border-t border-white/10 bg-zinc-950 px-6 py-4">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+            <span className="text-xs text-zinc-600">&copy; {new Date().getFullYear()} GlimpseAI. All rights reserved.</span>
+            <nav className="flex items-center gap-5 text-xs text-zinc-500">
+              <Link href="/pricing" className="hover:text-teal-400 transition-colors">Pricing</Link>
+              <Link href="/terms" className="hover:text-teal-400 transition-colors">Terms</Link>
+              <Link href="/privacy" className="hover:text-teal-400 transition-colors">Privacy</Link>
+              <Link href="/contact" className="hover:text-teal-400 transition-colors">Contact</Link>
+            </nav>
+          </div>
+        </footer>
       </main>
     </div>
   );

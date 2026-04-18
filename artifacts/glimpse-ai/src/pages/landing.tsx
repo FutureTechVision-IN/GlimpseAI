@@ -610,15 +610,15 @@ export default function Landing() {
             <Link href="/pricing" className="hover:text-white transition-colors">
               Pricing
             </Link>
-            <a href="#" className="hover:text-white transition-colors">
+            <Link href="/terms" className="hover:text-white transition-colors">
               Terms
-            </a>
-            <a href="#" className="hover:text-white transition-colors">
+            </Link>
+            <Link href="/privacy" className="hover:text-white transition-colors">
               Privacy
-            </a>
-            <a href="#" className="hover:text-white transition-colors">
+            </Link>
+            <Link href="/contact" className="hover:text-white transition-colors">
               Contact
-            </a>
+            </Link>
           </div>
 
           <div className="text-sm text-zinc-600">&copy; {new Date().getFullYear()} GlimpseAI. All rights reserved.</div>
