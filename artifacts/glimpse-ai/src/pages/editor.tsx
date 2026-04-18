@@ -13,6 +13,7 @@ import {
 } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { saveToHistory } from "@/lib/local-history";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -592,6 +593,16 @@ export default function Editor() {
       setProcessStage("completed");
       upscaleChainRef.current = false;
       toast({ title: "Enhancement complete!", description: upscaleAfter ? "Enhancement + upscale applied!" : "Your media has been successfully enhanced." });
+
+      // Save to local history (photos only, max 5)
+      if (studioMode === "photo" && currentJob.processedUrl) {
+        saveToHistory({
+          filename: file?.name ?? "image.jpg",
+          enhancementType: enhancementType ?? "auto",
+          dataUri: currentJob.processedUrl,
+          mimeType: file?.type ?? "image/jpeg",
+        }).catch(() => {}); // silent fail — local storage only
+      }
     } else if (currentJob.status === "failed" && processStage !== "failed") {
       setProcessStage("failed");
       upscaleChainRef.current = false;
