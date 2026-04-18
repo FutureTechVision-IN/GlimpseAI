@@ -921,24 +921,40 @@ function ApiKeysSection() {
   const [status, setStatus] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkForm, setBulkForm] = useState({ keys: "", provider: "openrouter", model: "stepfun/step-3.5-flash:free", tier: "free" });
+  const [bulkForm, setBulkForm] = useState({ keys: "", provider: "openrouter", model: "moonshotai/kimi-k2.5", tier: "free" });
   const [validating, setValidating] = useState(false);
+  const [usageReport, setUsageReport] = useState<any>(null);
   const { toast } = useToast();
 
   const token = localStorage.getItem("glimpse_token");
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 
+  // All available models grouped by priority
+  const AVAILABLE_MODELS = [
+    { id: "moonshotai/kimi-k2.5", label: "Kimi K2.5 (Primary — vision+reasoning)", group: "primary" },
+    { id: "openrouter/elephant-alpha", label: "Elephant Alpha (Primary — multimodal)", group: "primary" },
+    { id: "bytedance/seedance-2.0", label: "Seedance 2.0 (Primary — video+image)", group: "primary" },
+    { id: "alibaba/wan-2.7", label: "WAN 2.7 (Primary — video enhancement)", group: "primary" },
+    { id: "stepfun/step-3.5-flash:free", label: "Step 3.5 Flash (Standard — free)", group: "standard" },
+    { id: "nvidia/nemotron-3-super-120b-a12b:free", label: "Nemotron Super 120B (Standard — free)", group: "standard" },
+    { id: "nvidia/nemotron-3-nano-30b-a3b:free", label: "Nemotron Nano 30B (Standard — free)", group: "standard" },
+    { id: "z-ai/glm-4.5-air:free", label: "GLM 4.5 Air (Standard — free)", group: "standard" },
+    { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash (Gemini — last resort)", group: "gemini" },
+  ];
+
   const fetchKeys = async () => {
     setIsLoading(true);
     try {
-      const [keysRes, statusRes] = await Promise.all([
+      const [keysRes, statusRes, reportRes] = await Promise.all([
         fetch("/api/admin/provider-keys", { headers }),
         fetch("/api/admin/provider-keys/status", { headers }),
+        fetch("/api/admin/provider-keys/usage-report", { headers }),
       ]);
       const keysData = await keysRes.json();
       const statusData = await statusRes.json();
       setKeys(keysData.keys ?? []);
       setStatus(statusData);
+      if (reportRes.ok) setUsageReport(await reportRes.json());
     } catch { /* ignore */ }
     setIsLoading(false);
   };
@@ -978,17 +994,28 @@ function ApiKeysSection() {
     await fetchKeys();
   };
 
+  /**
+   * Smart bulk import:
+   * - Accepts keys one-per-line OR space-separated OR mixed paste with model names
+   * - Automatically filters out non-key tokens (model names, labels, blank tokens)
+   * - Sends the raw text to backend which tokenizes correctly
+   */
   const handleBulkImport = async () => {
-    const keyList = bulkForm.keys.split("\n").map(k => k.trim()).filter(k => k.length > 0);
-    if (keyList.length === 0) return;
+    if (!bulkForm.keys.trim()) return;
+    // Send all lines as array — backend will tokenize by whitespace and filter non-keys
+    const lines = bulkForm.keys.split("\n").map(k => k.trim()).filter(k => k.length > 0);
+    if (lines.length === 0) return;
     const res = await fetch("/api/admin/provider-keys/bulk-import", {
       method: "POST", headers,
-      body: JSON.stringify({ keys: keyList, provider: bulkForm.provider, model: bulkForm.model, tier: bulkForm.tier }),
+      body: JSON.stringify({ keys: lines, provider: bulkForm.provider, model: bulkForm.model, tier: bulkForm.tier }),
     });
     const data = await res.json();
-    toast({ title: `${data.added} keys imported` });
+    toast({
+      title: `${data.added} key${data.added === 1 ? "" : "s"} imported`,
+      description: `Total in pool: ${data.totalKeys}. Run Validate All to activate.`,
+    });
     setBulkOpen(false);
-    setBulkForm({ keys: "", provider: "openrouter", model: "stepfun/step-3.5-flash:free", tier: "free" });
+    setBulkForm({ keys: "", provider: "openrouter", model: "moonshotai/kimi-k2.5", tier: "free" });
     await fetchKeys();
   };
 
@@ -1163,7 +1190,9 @@ function ApiKeysSection() {
         <DialogContent className="bg-zinc-900 border-zinc-800 max-w-lg">
           <DialogHeader>
             <DialogTitle>Bulk Import API Keys</DialogTitle>
-            <DialogDescription className="text-zinc-400">Paste one key per line</DialogDescription>
+            <DialogDescription className="text-zinc-400">
+              Paste keys one per line, space-separated, or mixed. Model names in the paste are automatically ignored.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
@@ -1186,13 +1215,29 @@ function ApiKeysSection() {
             </div>
             <div>
               <Label className="text-xs text-zinc-400">Model</Label>
-              <Input value={bulkForm.model} onChange={e => setBulkForm(f => ({ ...f, model: e.target.value }))}
-                placeholder="e.g. stepfun/step-3.5-flash:free" className="bg-zinc-800 border-zinc-700 mt-1 font-mono text-xs" />
+              <select value={bulkForm.model} onChange={e => setBulkForm(f => ({ ...f, model: e.target.value }))}
+                className="w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm font-mono">
+                <optgroup label="── Primary Tier ──">
+                  {AVAILABLE_MODELS.filter(m => m.group === "primary").map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="── Standard Tier ──">
+                  {AVAILABLE_MODELS.filter(m => m.group === "standard").map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="── Gemini Fallback ──">
+                  {AVAILABLE_MODELS.filter(m => m.group === "gemini").map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </optgroup>
+              </select>
             </div>
             <div>
-              <Label className="text-xs text-zinc-400">Keys (one per line)</Label>
+              <Label className="text-xs text-zinc-400">Keys (one per line or space-separated)</Label>
               <Textarea value={bulkForm.keys} onChange={e => setBulkForm(f => ({ ...f, keys: e.target.value }))}
-                className="bg-zinc-800 border-zinc-700 mt-1 font-mono text-xs" rows={8} placeholder="sk-or-v1-abc123..." />
+                className="bg-zinc-800 border-zinc-700 mt-1 font-mono text-xs" rows={8} placeholder="sk-or-v1-abc123&#10;sk-or-v1-def456&#10;or paste space-separated keys..." />
             </div>
           </div>
           <DialogFooter>

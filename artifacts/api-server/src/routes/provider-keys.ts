@@ -241,4 +241,10 @@ router.get("/admin/analytics/monthly-summary", requireAuth, requireAdmin, async 
   res.json({ months: result });
 });
 
+// ─── Key Usage Report ──────────────────────────────────────────────────────
+// Detailed report: which keys are used, which aren't, priority cascade status
+router.get("/admin/provider-keys/usage-report", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  res.json(providerKeyManager.getUsageReport());
+});
+
 export default router;

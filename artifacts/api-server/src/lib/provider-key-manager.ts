@@ -539,7 +539,10 @@ class ProviderKeyManager {
   getSafeEntries(): Array<Omit<KeyEntry, "key"> & { keyPrefix: string }> {
     return Array.from(this.keys.values())
       .sort((a, b) => {
+        const groupOrder = { primary: 0, standard: 1, germany: 2, gemini: 3 };
         const statusOrder = { active: 0, degraded: 1, validating: 2, inactive: 3 };
+        const gDiff = (groupOrder[a.group] ?? 4) - (groupOrder[b.group] ?? 4);
+        if (gDiff !== 0) return gDiff;
         return (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4);
       })
       .map((e) => ({
@@ -548,6 +551,7 @@ class ProviderKeyManager {
         provider: e.provider,
         model: e.model,
         tier: e.tier,
+        group: e.group,
         status: e.status,
         priority: e.priority,
         totalCalls: e.totalCalls,
@@ -584,8 +588,104 @@ class ProviderKeyManager {
     return true;
   }
 
-  getAvailableModels(): string[] {
-    return [...new Set(Array.from(this.keys.values()).map((k) => k.model))];
+  getUsageReport(): {
+    summary: { totalKeys: number; activeKeys: number; degradedKeys: number; unusedKeys: number; totalCalls: number; totalErrors: number };
+    byGroup: { group: string; total: number; active: number; degraded: number; totalCalls: number; usageRate: string }[];
+    byModel: { model: string; total: number; active: number; totalCalls: number }[];
+    unusedKeys: { keyPrefix: string; provider: string; model: string; group: string; status: string }[];
+    recommendations: string[];
+  } {
+    const all = Array.from(this.keys.values());
+    const totalCalls = all.reduce((s, k) => s + k.totalCalls, 0);
+    const totalErrors = all.reduce((s, k) => s + k.totalErrors, 0);
+    const unusedKeys = all.filter((k) => k.totalCalls === 0);
+
+    // By group
+    const groupMap = new Map<string, { total: number; active: number; degraded: number; calls: number }>();
+    for (const k of all) {
+      const g = groupMap.get(k.group) ?? { total: 0, active: 0, degraded: 0, calls: 0 };
+      g.total++;
+      g.calls += k.totalCalls;
+      if (k.status === "active") g.active++;
+      if (k.status === "degraded") g.degraded++;
+      groupMap.set(k.group, g);
+    }
+
+    // By model
+    const modelMap = new Map<string, { total: number; active: number; calls: number }>();
+    for (const k of all) {
+      const m = modelMap.get(k.model) ?? { total: 0, active: 0, calls: 0 };
+      m.total++;
+      m.calls += k.totalCalls;
+      if (k.status === "active") m.active++;
+      modelMap.set(k.model, m);
+    }
+
+    // Recommendations
+    const recs: string[] = [];
+    const primaryGroup = groupMap.get("primary");
+    if (!primaryGroup || primaryGroup.active === 0) {
+      recs.push("⚠️ No primary-group keys are active — run Load from Env and Validate All.");
+    }
+    if (unusedKeys.length > 0) {
+      recs.push(`🔑 ${unusedKeys.length} key(s) have never been used — validate and activate them.`);
+    }
+    const errorRate = totalCalls > 0 ? totalErrors / totalCalls : 0;
+    if (errorRate > 0.2) recs.push(`⚠️ High error rate (${Math.round(errorRate * 100)}%) — review degraded keys.`);
+    if (!groupMap.has("germany") || (groupMap.get("germany")?.total ?? 0) === 0) {
+      recs.push("💡 No Germany fallback keys configured — add GERMANY_OPENROUTER_KEYS to .env for higher resilience.");
+    }
+    if (recs.length === 0) recs.push("✅ Key pool is healthy. All tiers configured and active.");
+
+    return {
+      summary: {
+        totalKeys: all.length,
+        activeKeys: all.filter((k) => k.status === "active").length,
+        degradedKeys: all.filter((k) => k.status === "degraded").length,
+        unusedKeys: unusedKeys.length,
+        totalCalls,
+        totalErrors,
+      },
+      byGroup: Array.from(groupMap.entries()).map(([group, s]) => ({
+        group,
+        total: s.total,
+        active: s.active,
+        degraded: s.degraded,
+        totalCalls: s.calls,
+        usageRate: s.total > 0 ? `${Math.round((s.active / s.total) * 100)}% active` : "0%",
+      })),
+      byModel: Array.from(modelMap.entries()).map(([model, s]) => ({
+        model,
+        total: s.total,
+        active: s.active,
+        totalCalls: s.calls,
+      })),
+      unusedKeys: unusedKeys.map((k) => ({
+        keyPrefix: k.key.slice(0, 12) + "..." + k.key.slice(-4),
+        provider: k.provider,
+        model: k.model,
+        group: k.group,
+        status: k.status,
+      })),
+      recommendations: recs,
+    };
+  }
+
+  getAvailableModels(): { id: string; group: string; visionCapable: boolean }[] {
+    const seen = new Set<string>();
+    const result: { id: string; group: string; visionCapable: boolean }[] = [];
+    for (const m of Object.values(PRIMARY_MODELS)) {
+      if (!seen.has(m)) { seen.add(m); result.push({ id: m, group: "primary", visionCapable: VISION_CAPABLE_MODELS.has(m) }); }
+    }
+    for (const m of Object.values(STANDARD_MODELS)) {
+      if (!seen.has(m)) { seen.add(m); result.push({ id: m, group: "standard", visionCapable: VISION_CAPABLE_MODELS.has(m) }); }
+    }
+    result.push({ id: "gemini-2.0-flash", group: "gemini", visionCapable: true });
+    return result;
+  }
+
+  getAvailableModelIds(): string[] {
+    return this.getAvailableModels().map((m) => m.id);
   }
 
   getKeyById(id: number): KeyEntry | undefined {

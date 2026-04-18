@@ -79,13 +79,20 @@ class FeedbackAccumulator {
 
 export const feedbackAccumulator = FeedbackAccumulator.getInstance();
 
-// Vision-capable models available on OpenRouter free tier (ranked by quality)
+// Vision-capable models available on OpenRouter — ordered by quality/reliability
+// Primary tier (new high-quality models) → standard tier fallback
 const OPENROUTER_VISION_MODELS = [
-  "nvidia/nemotron-nano-12b-v2-vl:free",   // vision-language, confirmed available
-  "google/gemma-4-31b-it:free",             // gemma 4 with image support
-  "google/gemma-4-26b-a4b-it:free",         // smaller gemma 4 variant
-  "z-ai/glm-4.5-air:free",                  // matches our env key
-  "qwen/qwen3-8b:free",                     // text fallback (no vision, use for description enrichment)
+  // Primary tier — new models with strong vision & reasoning
+  "moonshotai/kimi-k2.5",               // top vision+reasoning, supports image input
+  "openrouter/elephant-alpha",           // OpenRouter flagship multimodal
+  "bytedance/seedance-2.0",              // video+image capable
+  "alibaba/wan-2.7",                     // video enhancement model
+  // Standard tier — proven free-tier models
+  "nvidia/nemotron-nano-12b-v2-vl:free", // vision-language, confirmed available
+  "google/gemma-4-31b-it:free",          // gemma 4 with image support
+  "google/gemma-4-26b-a4b-it:free",      // smaller gemma 4 variant
+  "z-ai/glm-4.5-air:free",              // matches env key
+  "qwen/qwen3-8b:free",                  // text fallback (no vision)
 ];
 
 // ---------------------------------------------------------------------------
