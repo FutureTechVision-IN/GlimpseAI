@@ -45,7 +45,14 @@ export default function Login() {
       <div className="w-full max-w-md bg-zinc-950 border border-white/10 rounded-2xl p-8 shadow-xl">
         <h1 className="text-2xl font-semibold text-white mb-2">Welcome back</h1>
         <p className="text-white/60 mb-6">Log in to your account to continue editing.</p>
-        
+
+        {import.meta.env.VITE_DEMO_MODE === "true" && (
+          <div className="mb-4 p-3 rounded-lg bg-teal-500/10 border border-teal-500/20 text-xs text-teal-300 flex items-start gap-2">
+            <Sparkles className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span><strong>Demo mode</strong> — enter any email &amp; password to explore the full dashboard.</span>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <label className="text-sm font-medium text-white/80">Email</label>

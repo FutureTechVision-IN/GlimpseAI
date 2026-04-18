@@ -50,6 +50,18 @@ export default function Dashboard() {
         <div className="pointer-events-none absolute -top-40 -right-40 w-[500px] h-[500px] rounded-full bg-teal-500/5 blur-[120px]" />
         <div className="pointer-events-none absolute -bottom-40 -left-40 w-[400px] h-[400px] rounded-full bg-purple-500/5 blur-[100px]" />
 
+        {/* Demo mode banner */}
+        {import.meta.env.VITE_DEMO_MODE === "true" && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="relative flex items-center gap-3 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20 text-sm text-amber-300"
+          >
+            <Sparkles className="w-4 h-4 shrink-0 text-amber-400" />
+            <span><strong>Demo Mode</strong> — Running on GitHub Pages with live mock data. Login with any credentials to explore.</span>
+          </motion.div>
+        )}
+
         {/* Hero Header */}
         <motion.header
           initial={{ opacity: 0, y: -10 }}
