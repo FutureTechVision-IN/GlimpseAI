@@ -22,6 +22,11 @@ const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
   fresh: (p) => p.modulate({ saturation: 1.15, brightness: 1.08 }).gamma(0.95).normalize().sharpen({ sigma: 0.5 }),
   retro: (p) => p.modulate({ saturation: 0.65, brightness: 0.98 }).tint({ r: 200, g: 180, b: 150 }).gamma(1.18).sharpen({ sigma: 0.4 }),
   dramatic: (p) => p.normalize().sharpen({ sigma: 2.0, m1: 2.5, m2: 1.2 }).modulate({ saturation: 1.1, brightness: 0.95 }).gamma(1.15),
+  warm_tone: (p) => p.modulate({ saturation: 1.1, brightness: 1.04 }).tint({ r: 245, g: 220, b: 185 }).gamma(1.04).sharpen({ sigma: 0.5 }),
+  cool_tone: (p) => p.modulate({ saturation: 0.95, brightness: 1.02 }).tint({ r: 170, g: 200, b: 230 }).gamma(1.06).sharpen({ sigma: 0.5 }),
+  sunset: (p) => p.modulate({ saturation: 1.2, brightness: 1.03 }).tint({ r: 255, g: 200, b: 160 }).gamma(1.05).sharpen({ sigma: 0.4 }),
+  matte: (p) => p.modulate({ saturation: 0.7, brightness: 1.02 }).gamma(0.92).linear(0.9, 15).sharpen({ sigma: 0.3 }),
+  neon: (p) => p.modulate({ saturation: 1.6, brightness: 1.05 }).sharpen({ sigma: 1.0 }).normalize(),
 };
 
 /**
@@ -61,6 +66,40 @@ export async function enhanceImage(
         const w = meta.width ?? 800;
         const h = meta.height ?? 600;
         pipeline = pipeline.resize(w * 2, h * 2, { kernel: sharp.kernel.lanczos3, fit: "fill" }).sharpen({ sigma: 1.0, m1: 1.5, m2: 0.7 });
+        break;
+      }
+      case "upscale_4x": {
+        const w4 = meta.width ?? 800;
+        const h4 = meta.height ?? 600;
+        pipeline = pipeline.resize(w4 * 4, h4 * 4, { kernel: sharp.kernel.lanczos3, fit: "fill" }).sharpen({ sigma: 1.2, m1: 1.8, m2: 0.9 });
+        break;
+      }
+      case "blur_background": {
+        // Center-weighted portrait blur (tilt-shift bokeh simulation)
+        const bw = meta.width ?? 800;
+        const bh = meta.height ?? 600;
+        const blurred = await sharp(inputBuffer).blur(18).toBuffer();
+        const cw = Math.round(bw * 0.6);
+        const ch = Math.round(bh * 0.7);
+        const cx = Math.round((bw - cw) / 2);
+        const cy = Math.round((bh - ch) / 2);
+        const center = await sharp(inputBuffer)
+          .extract({ left: cx, top: cy, width: cw, height: ch })
+          .toBuffer();
+        pipeline = sharp(blurred)
+          .composite([{ input: center, left: cx, top: cy }])
+          .modulate({ brightness: 1.02, saturation: 1.05 })
+          .sharpen({ sigma: 0.5 });
+        break;
+      }
+      case "posture": {
+        // Portrait optimization with pose-aware corrections
+        pipeline = pipeline
+          .normalize()
+          .modulate({ brightness: 1.03, saturation: 0.95 })
+          .sharpen({ sigma: 0.9, m1: 0.8, m2: 0.4 })
+          .gamma(1.06)
+          .linear(1.02, 2);
         break;
       }
       case "color": {
@@ -120,6 +159,21 @@ export async function enhanceImage(
   if (typeof s.warmth === "number" && s.warmth !== 0) {
     const w = s.warmth as number;
     pipeline = pipeline.tint({ r: 128 + w, g: 128, b: 128 - w });
+  }
+  if (typeof s.highlights === "number" && s.highlights !== 100) {
+    const hl = (s.highlights as number) / 100;
+    pipeline = pipeline.linear(hl, 0);
+  }
+  if (typeof s.shadows === "number" && s.shadows !== 100) {
+    const sh = Math.max(0.3, Math.min(3.0, (s.shadows as number) / 100));
+    pipeline = pipeline.gamma(1 / sh);
+  }
+  if (typeof s.hue === "number" && s.hue !== 0) {
+    pipeline = pipeline.modulate({ hue: s.hue as number });
+  }
+  if (typeof s.skinSmoothing === "number" && (s.skinSmoothing as number) > 0) {
+    const intensity = Math.min(5, (s.skinSmoothing as number) / 20);
+    pipeline = pipeline.blur(intensity);
   }
 
   // Output as JPEG

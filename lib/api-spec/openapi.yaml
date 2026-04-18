@@ -928,7 +928,7 @@ components:
           type: ["integer", "null"]
         enhancementType:
           type: string
-          enum: [auto, portrait, skin, lighting, color, background, beauty, upscale, filter, trim, stabilize, custom]
+          enum: [auto, portrait, skin, lighting, color, background, beauty, upscale, upscale_4x, blur_background, posture, filter, trim, stabilize, custom]
         settings:
           type: object
           additionalProperties: true

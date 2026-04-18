@@ -152,13 +152,41 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
 
     logger.info({ jobId, type: enhancementType, ms: Date.now() - startTime }, "Enhancement completed");
   } catch (err) {
-    logger.error({ jobId, err }, "Enhancement failed");
-    await db.update(mediaJobsTable).set({
-      status: "failed",
-      errorMessage: err instanceof Error ? err.message : "Enhancement failed",
-      processingTimeMs: Date.now() - startTime,
-    }).where(eq(mediaJobsTable.id, jobId));
+// ─── Analyze (AI suggestion) ──────────────────────────────────
+router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const { jobId } = req.body;
+  if (!jobId || typeof jobId !== "number") {
+    res.status(400).json({ error: "jobId (number) is required" });
+    return;
   }
+
+  const [job] = await db.select().from(mediaJobsTable)
+    .where(and(eq(mediaJobsTable.id, jobId), eq(mediaJobsTable.userId, req.userId!)));
+
+  if (!job || !job.base64Data) {
+    res.status(404).json({ error: "Job not found or no image data" });
+    return;
+  }
+
+  const mimeType = job.base64Data.startsWith("iVBOR") ? "image/png"
+    : job.base64Data.startsWith("UklGR") ? "image/webp" : "image/jpeg";
+
+  try {
+    const result = await aiProvider.analyzeImage(job.base64Data, mimeType);
+    if (result) {
+      res.json(result);
+      return;
+    }
+  } catch (err) {
+    logger.warn({ err }, "AI analysis failed, returning defaults");
+  }
+
+  res.json({
+    description: "Unable to analyze image with AI",
+    suggestedEnhancement: "auto",
+    detectedSubjects: [],
+    confidence: 0.3,
+  });
 });
 
 // ─── List jobs ────────────────────────────────────────────────
