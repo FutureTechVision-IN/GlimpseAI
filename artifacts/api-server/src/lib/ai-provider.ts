@@ -16,8 +16,11 @@ interface ProviderKey {
 interface AnalysisResult {
   description: string;
   suggestedEnhancement: string;
+  suggestedFilter: string | null;
   detectedSubjects: string[];
   confidence: number;
+  sceneType: string;
+  lightingCondition: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +167,7 @@ class AIProviderService {
                 },
                 {
                   type: "text",
-                  text: "Analyze this image briefly. Return JSON only: {\n\"description\": \"brief description\",\n\"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin\",\n\"detectedSubjects\": [\"face\", \"landscape\", etc],\n\"confidence\": 0.0-1.0\n}",
+                  text: "Analyze this image briefly. Return JSON only: {\n\"description\": \"brief description\",\n\"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin|blur_background|posture\",\n\"suggestedFilter\": \"cinematic|vivid|vintage|moody|goldenhour|dramatic|warmtone|cooltone|null\",\n\"detectedSubjects\": [\"face\", \"landscape\", etc],\n\"confidence\": 0.0-1.0,\n\"sceneType\": \"portrait|landscape|street|indoor|nature|food|architecture|abstract|other\",\n\"lightingCondition\": \"bright|dim|golden_hour|overexposed|underexposed|balanced|dramatic\"\n}",
                 },
               ],
             },
@@ -191,8 +194,11 @@ class AIProviderService {
         return {
           description: parsed.description || "Image uploaded",
           suggestedEnhancement: parsed.suggestedEnhancement || "auto",
+          suggestedFilter: parsed.suggestedFilter || null,
           detectedSubjects: parsed.detectedSubjects || [],
           confidence: parsed.confidence || 0.5,
+          sceneType: parsed.sceneType || "other",
+          lightingCondition: parsed.lightingCondition || "balanced",
         };
       }
     } catch (e) {
@@ -215,7 +221,7 @@ class AIProviderService {
           contents: [{
             parts: [
               { inlineData: { mimeType, data: base64Data.substring(0, 500) } },
-              { text: "Analyze this image briefly. Return JSON only: {\"description\": \"brief\", \"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin\", \"detectedSubjects\": [], \"confidence\": 0.0-1.0}" },
+              { text: "Analyze this image briefly. Return JSON only: {\"description\": \"brief\", \"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin|blur_background|posture\", \"suggestedFilter\": \"cinematic|vivid|vintage|moody|goldenhour|dramatic|warmtone|cooltone|null\", \"detectedSubjects\": [], \"confidence\": 0.0-1.0, \"sceneType\": \"portrait|landscape|street|indoor|nature|food|architecture|abstract|other\", \"lightingCondition\": \"bright|dim|golden_hour|overexposed|underexposed|balanced|dramatic\"}" },
             ],
           }],
           generationConfig: { maxOutputTokens: 200, temperature: 0.1 },
@@ -238,8 +244,11 @@ class AIProviderService {
         return {
           description: parsed.description || "Image uploaded",
           suggestedEnhancement: parsed.suggestedEnhancement || "auto",
+          suggestedFilter: parsed.suggestedFilter || null,
           detectedSubjects: parsed.detectedSubjects || [],
           confidence: parsed.confidence || 0.5,
+          sceneType: parsed.sceneType || "other",
+          lightingCondition: parsed.lightingCondition || "balanced",
         };
       }
     } catch (e) {

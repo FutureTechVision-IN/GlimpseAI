@@ -8,6 +8,7 @@ import {
   EnhanceMediaBody,
   ListMediaJobsQueryParams,
   ListPresetsQueryParams,
+  AnalyzeMediaBody,
 } from "@workspace/api-zod";
 import { enhanceImage } from "../lib/image-enhancer";
 import { aiProvider } from "../lib/ai-provider";
@@ -220,6 +221,38 @@ router.get("/media/presets", requireAuth, async (req: AuthRequest, res): Promise
     thumbnailUrl: p.thumbnailUrl,
     settings: p.settings,
   })));
+});
+
+// ─── AI Analysis ──────────────────────────────────────────────
+router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const parsed = AnalyzeMediaBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const { base64Data, mimeType } = parsed.data;
+
+  try {
+    const analysis = await aiProvider.analyzeImage(base64Data, mimeType);
+    if (analysis) {
+      res.json(analysis);
+    } else {
+      // Fallback when all AI providers fail
+      res.json({
+        description: "Unable to analyze image — AI providers unavailable",
+        suggestedEnhancement: "auto",
+        suggestedFilter: null,
+        detectedSubjects: [],
+        confidence: 0.3,
+        sceneType: "other",
+        lightingCondition: "balanced",
+      });
+    }
+  } catch (err) {
+    logger.error({ err }, "Media analysis failed");
+    res.status(500).json({ error: "Analysis failed" });
+  }
 });
 
 // ─── Stats ────────────────────────────────────────────────────
