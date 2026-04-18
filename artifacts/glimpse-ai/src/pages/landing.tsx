@@ -56,33 +56,150 @@ const testimonials = [
     quote: "GlimpseAI completely replaced my complex editing workflow. What used to take hours now takes seconds.",
     name: "Sarah Jenkins",
     role: "Professional Photographer",
-    avatar: "Sarah",
   },
   {
     quote: "The AI upscaling is mind-blowing. I recovered detail from old photos I thought were lost forever.",
     name: "Marcus Chen",
     role: "Content Creator",
-    avatar: "Marcus",
   },
   {
     quote: "Our marketing team switched to GlimpseAI. The cinematic color grading saved us thousands in post-production.",
     name: "Elena Rodriguez",
     role: "Marketing Director",
-    avatar: "Elena",
   },
   {
     quote: "I've tested every AI editor on the market. GlimpseAI consistently delivers professional-quality results.",
     name: "David Park",
     role: "Film Editor",
-    avatar: "David",
   },
   {
     quote: "From raw footage to polished content in under a minute. GlimpseAI is the tool I can't live without.",
     name: "Priya Sharma",
     role: "YouTube Creator",
-    avatar: "Priya",
   },
 ];
+
+// --- Name-to-gender detection ---
+// First-name lookup tables covering common Western, South Asian, East Asian, and Arabic names.
+const FEMALE_FIRST_NAMES = new Set([
+  "sarah","elena","priya","maria","anna","emma","lily","sophia","olivia","ava",
+  "isabella","mia","charlotte","amelia","harper","evelyn","abigail","emily",
+  "elizabeth","mila","ella","scarlett","grace","victoria","riley","aria","zoe",
+  "nora","hannah","layla","ellie","chloe","penelope","luna","natalie",
+  "aubrey","claire","ruby","stella","leah","hazel","savannah","camila",
+  "aisha","fatima","nadia","yasmin","amira","leilani","aaliya","zara","farah",
+  "neha","meena","sunita","divya","kavya","shreya","pooja","anjali","nisha",
+  "deepa","lakshmi","geeta","rekha","sandhya","asha","radha",
+  "valeria","sofia","valentina","martina","carolina","luisa",
+  "jessica","jennifer","ashley","amanda","stephanie","michelle","melissa",
+  "nicole","samantha","laura","patricia","linda","barbara","karen","lisa",
+  "nancy","margaret","ruth","sharon","rachel","sara","kelly","jane","andrea",
+  "paula","rebecca","amy","helen","angela","diana","nina","rose","sue",
+  "gloria","judy","virginia","diane","cynthia","lillian","denise","marie",
+  "theresa","wanda","vera","shirley","anita","cheryl","lorraine","irene",
+  "katrina","gina","penny","tiffany","crystal","brenda","wendy","jacqueline",
+  "amber","dana","robin","kim","stacy","tammy","tamara","lindsey","tracy",
+  "kathleen","katharine","kathryn","ann","alice","sandra","carol","marilyn",
+  "xu","wei","fang","xiu","ying","lin","ping","yan","qian","jing",
+  "ayesha","lina","rima","hana","nour","dina","mona","rania",
+  "yuki","sakura","hana","yui","akemi","haruka","mai","rin",
+]);
+
+const MALE_FIRST_NAMES = new Set([
+  "marcus","david","james","john","robert","michael","william","richard","joseph",
+  "charles","thomas","daniel","matthew","george","donald","anthony","steven","mark",
+  "paul","andrew","kenneth","joshua","kevin","brian","timothy","ronald","edward",
+  "jason","jeffrey","ryan","jacob","gary","nicholas","eric","jonathan","stephen",
+  "larry","justin","scott","brandon","benjamin","samuel","raymond","frank",
+  "alexander","christopher","patrick","jack","dennis","jerry","tyler","aaron",
+  "jose","adam","henry","douglas","nathan","peter","zachary","kyle","walter",
+  "ethan","jeremy","harold","carl","arthur","keith","roger","terry","sean",
+  "gerald","austin","alan","juan","xavier","albert","wayne",
+  "liam","noah","oliver","elijah","lucas","mason","logan","caleb","dylan",
+  "hunter","jordan","owen","luke","landon","brayden","gabriel","julian","evan",
+  "carter","wyatt","lincoln","eli","ian","aidan",
+  "raj","rahul","arjun","vikram","suresh","mahesh","ramesh","vijay","ajay",
+  "sanjay","ankur","ravi","amit","rohit","nikhil","ankit","gaurav","kunal",
+  "vivek","manish","rohan","karan","aarav","ishaan",
+  "carlos","miguel","antonio","alejandro","jorge","rodrigo","martin","pedro","fernando",
+  "wei","ming","hao","jian","bo","cheng","lei","zhang",
+  "omar","ali","hassan","ahmed","khalid","ibrahim","yusuf","tariq","kareem",
+  "hiroshi","takashi","kenji","daisuke","satoshi","taro","riku","hayato","ken",
+]);
+
+/** Returns 'female', 'male', or 'neutral' based on the first name. */
+function detectGender(firstName: string): "female" | "male" | "neutral" {
+  const key = firstName.toLowerCase().trim();
+  if (FEMALE_FIRST_NAMES.has(key)) return "female";
+  if (MALE_FIRST_NAMES.has(key)) return "male";
+  return "neutral";
+}
+
+/**
+ * Deterministic 0–98 integer from any string.
+ * Used to select a stable portrait index from the randomuser.me CDN.
+ */
+function nameHash(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) {
+    h = (Math.imul(31, h) + name.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h) % 99;
+}
+
+/**
+ * Primary portrait URL — randomuser.me free CDN of AI-generated faces.
+ * URLs are stable (e.g. /portraits/women/44.jpg) and served at 128×128px.
+ */
+function getPortraitUrl(fullName: string): string {
+  const firstName = fullName.split(" ")[0];
+  const gender = detectGender(firstName);
+  const folder = gender === "female" ? "women" : "men";
+  const index = nameHash(fullName);
+  return `https://randomuser.me/api/portraits/${folder}/${index}.jpg`;
+}
+
+/**
+ * Fallback URL — DiceBear Notionists SVG avatar.
+ * Rendered if the primary photo fails to load (e.g., offline / CDN unreachable).
+ */
+function getFallbackAvatarUrl(fullName: string): string {
+  return `https://api.dicebear.com/7.x/notionists/svg?seed=${encodeURIComponent(fullName)}&backgroundColor=27272a`;
+}
+
+// --- Testimonial Avatar with loading skeleton + error fallback ---
+function TestimonialAvatar({ name, size = 48 }: { name: string; size?: number }) {
+  const [src, setSrc] = useState(() => getPortraitUrl(name));
+  const [loaded, setLoaded] = useState(false);
+
+  return (
+    <div
+      className="relative rounded-full overflow-hidden flex-shrink-0 border-2 border-teal-500/40 ring-2 ring-teal-500/10 bg-zinc-800"
+      style={{ width: size, height: size }}
+    >
+      {/* Loading skeleton */}
+      {!loaded && (
+        <div className="absolute inset-0 bg-zinc-700 animate-pulse" />
+      )}
+      <img
+        src={src}
+        alt={name}
+        width={size}
+        height={size}
+        decoding="async"
+        className={`w-full h-full object-cover transition-opacity duration-300 ${
+          loaded ? "opacity-100" : "opacity-0"
+        }`}
+        onLoad={() => setLoaded(true)}
+        onError={() => {
+          // Switch to DiceBear fallback on network/CDN error
+          setSrc(getFallbackAvatarUrl(name));
+          setLoaded(true);
+        }}
+      />
+    </div>
+  );
+}
 
 // --- Testimonial Carousel ---
 function TestimonialCarousel() {
@@ -120,13 +237,7 @@ function TestimonialCarousel() {
               &ldquo;{testimonials[current].quote}&rdquo;
             </blockquote>
             <div className="flex items-center justify-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/20 overflow-hidden">
-                <img
-                  src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${testimonials[current].avatar}`}
-                  alt={testimonials[current].name}
-                  className="w-full h-full"
-                />
-              </div>
+              <TestimonialAvatar name={testimonials[current].name} size={48} />
               <div className="text-left">
                 <div className="font-semibold text-sm">{testimonials[current].name}</div>
                 <div className="text-xs text-zinc-400">{testimonials[current].role}</div>
