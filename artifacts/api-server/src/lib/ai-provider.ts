@@ -121,15 +121,42 @@ class AIProviderService {
     pk.lastUsed = Date.now();
   }
 
+  /**
+   * Shrink base64 image to a thumbnail suitable for vision API analysis.
+   * Avoids sending multi-MB images that exceed token limits or slow down requests.
+   * Returns base64 (no prefix) and the resulting mimeType.
+   */
+  private async createAnalysisThumbnail(base64Data: string, mimeType: string): Promise<{ data: string; mime: string }> {
+    try {
+      const sharp = (await import("sharp")).default;
+      const buf = Buffer.from(base64Data, "base64");
+      const thumb = await sharp(buf)
+        .resize(768, 768, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 70, mozjpeg: true })
+        .toBuffer();
+      return { data: thumb.toString("base64"), mime: "image/jpeg" };
+    } catch (err) {
+      logger.debug({ err }, "Thumbnail generation failed, using original");
+      // Fallback: use original if sharp fails (keep under 1MB for API)
+      if (base64Data.length > 1_400_000) {
+        return { data: base64Data.substring(0, 1_400_000), mime: mimeType };
+      }
+      return { data: base64Data, mime: mimeType };
+    }
+  }
+
   /** Analyze an image using vision-capable model */
   async analyzeImage(base64Data: string, mimeType: string): Promise<AnalysisResult | null> {
+    // Generate a reasonably sized thumbnail for vision API
+    const thumb = await this.createAnalysisThumbnail(base64Data, mimeType);
+
     // Try OpenRouter first (primary), then Gemini (fallback)
     logger.info("AI analysis: trying OpenRouter first (priority provider)");
-    const result = await this.tryOpenRouterAnalysis(base64Data, mimeType);
+    const result = await this.tryOpenRouterAnalysis(thumb.data, thumb.mime);
     if (result) return result;
 
     logger.info("AI analysis: OpenRouter unavailable, falling back to Gemini");
-    const geminiResult = await this.tryGeminiAnalysis(base64Data, mimeType);
+    const geminiResult = await this.tryGeminiAnalysis(thumb.data, thumb.mime);
     if (geminiResult) return geminiResult;
 
     logger.warn("All AI providers failed for analysis, using defaults");
@@ -161,7 +188,7 @@ class AIProviderService {
               content: [
                 {
                   type: "image_url",
-                  image_url: { url: `data:${mimeType};base64,${base64Data.substring(0, 500)}` },
+                  image_url: { url: `data:${mimeType};base64,${base64Data}` },
                 },
                 {
                   type: "text",
@@ -216,7 +243,7 @@ class AIProviderService {
         body: JSON.stringify({
           contents: [{
             parts: [
-              { inlineData: { mimeType, data: base64Data.substring(0, 500) } },
+              { inlineData: { mimeType, data: base64Data } },
               { text: "Analyze this image briefly. Return JSON only: {\"description\": \"brief\", \"suggestedEnhancement\": \"auto|portrait|color|lighting|upscale|beauty|skin\", \"detectedSubjects\": [], \"confidence\": 0.0-1.0}" },
             ],
           }],

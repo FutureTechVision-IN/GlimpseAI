@@ -1437,7 +1437,10 @@ export default function Editor() {
                               const url = URL.createObjectURL(blob);
                               const a = document.createElement("a");
                               a.href = url;
-                              a.download = `enhanced-${file?.name ?? "image.jpg"}`;
+                              // Use correct extension based on actual MIME type (Sharp outputs JPEG)
+                              const ext = mime === "image/png" ? ".png" : mime === "image/webp" ? ".webp" : ".jpg";
+                              const baseName = (file?.name ?? "image.jpg").replace(/\.[^.]+$/, "");
+                              a.download = `enhanced-${baseName}${ext}`;
                               document.body.appendChild(a);
                               a.click();
                               document.body.removeChild(a);
