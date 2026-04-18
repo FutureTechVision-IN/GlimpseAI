@@ -156,7 +156,21 @@ function TestimonialCarousel() {
 function BeforeAfterSlider({ src }: { src: string }) {
   const [sliderPosition, setSliderPosition] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
+  const [hasInteracted, setHasInteracted] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const autoRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+
+  // Auto-animate the slider on mount to draw attention
+  useEffect(() => {
+    if (hasInteracted) return;
+    let frame = 0;
+    autoRef.current = setInterval(() => {
+      frame++;
+      const pos = 50 + Math.sin(frame * 0.04) * 30;
+      setSliderPosition(pos);
+    }, 30);
+    return () => clearInterval(autoRef.current);
+  }, [hasInteracted]);
 
   const handleMove = (clientX: number) => {
     if (!containerRef.current) return;
@@ -176,14 +190,22 @@ function BeforeAfterSlider({ src }: { src: string }) {
     handleMove(e.touches[0].clientX);
   };
 
+  const startDrag = () => {
+    setIsDragging(true);
+    if (!hasInteracted) {
+      setHasInteracted(true);
+      clearInterval(autoRef.current);
+    }
+  };
+
   return (
     <div
       ref={containerRef}
-      className="relative w-full aspect-video rounded-2xl overflow-hidden cursor-ew-resize select-none border border-white/10 shadow-2xl shadow-teal-500/20"
+      className="relative w-full aspect-video rounded-2xl overflow-hidden cursor-ew-resize select-none border border-white/10 shadow-2xl shadow-teal-500/20 group"
       onMouseMove={onMouseMove}
       onTouchMove={onTouchMove}
-      onMouseDown={() => setIsDragging(true)}
-      onTouchStart={() => setIsDragging(true)}
+      onMouseDown={startDrag}
+      onTouchStart={startDrag}
       onMouseUp={() => setIsDragging(false)}
       onTouchEnd={() => setIsDragging(false)}
       onMouseLeave={() => setIsDragging(false)}
@@ -193,40 +215,54 @@ function BeforeAfterSlider({ src }: { src: string }) {
         src={src}
         alt="Before"
         className="absolute inset-0 w-full h-full object-cover"
-        style={{ filter: "grayscale(0.45) contrast(0.78) brightness(0.72) saturate(0.5)" }}
+        style={{ filter: "grayscale(0.4) contrast(0.8) brightness(0.72) saturate(0.55)" }}
       />
 
       {/* "After (AI Enhanced)" — original vibrant image revealed via clipPath */}
       <div
-        className="absolute inset-0 w-full h-full overflow-hidden"
+        className="absolute inset-0 w-full h-full overflow-hidden transition-[clip-path] duration-75 ease-out"
         style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}
       >
         <img
           src={src}
           alt="AI Enhanced"
           className="absolute inset-0 w-full h-full object-cover"
-          style={{ filter: "contrast(1.08) saturate(1.15) brightness(1.05)" }}
+          style={{ filter: "contrast(1.08) saturate(1.18) brightness(1.06)" }}
         />
+        {/* Subtle glow on enhanced side */}
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-teal-500/5 to-teal-500/10 pointer-events-none" />
       </div>
 
+      {/* Slider handle with glow */}
       <div
-        className="absolute top-0 bottom-0 w-1 bg-white cursor-ew-resize shadow-[0_0_10px_rgba(0,0,0,0.5)]"
-        style={{ left: `calc(${sliderPosition}% - 2px)` }}
+        className="absolute top-0 bottom-0 w-0.5 bg-white/90 cursor-ew-resize"
+        style={{ left: `calc(${sliderPosition}% - 1px)`, boxShadow: "0 0 20px rgba(255,255,255,0.3), 0 0 40px rgba(20,184,166,0.2)" }}
       >
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg border border-zinc-200">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(255,255,255,0.4)] border-2 border-white/80 group-hover:scale-110 transition-transform">
           <div className="flex gap-1">
-            <div className="w-0.5 h-3 bg-zinc-400 rounded-full" />
-            <div className="w-0.5 h-3 bg-zinc-400 rounded-full" />
+            <div className="w-0.5 h-4 bg-zinc-400 rounded-full" />
+            <div className="w-0.5 h-4 bg-zinc-400 rounded-full" />
           </div>
         </div>
       </div>
 
-      <div className="absolute top-4 left-4 px-3 py-1 bg-black/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-white/10">
+      {/* Labels */}
+      <div className="absolute top-4 left-4 px-3 py-1.5 bg-black/60 backdrop-blur-md rounded-full text-xs font-medium text-white/80 border border-white/10">
         Before
       </div>
-      <div className="absolute top-4 right-4 px-3 py-1 bg-teal-500/50 backdrop-blur-md rounded-full text-xs font-medium text-white border border-teal-500/20 shadow-[0_0_15px_rgba(45,212,191,0.5)]">
-        AI Enhanced
+      <div className="absolute top-4 right-4 px-3 py-1.5 bg-teal-500/60 backdrop-blur-md rounded-full text-xs font-medium text-white border border-teal-400/30 shadow-[0_0_20px_rgba(45,212,191,0.5)]">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-teal-300 animate-pulse" />
+          AI Enhanced
+        </span>
       </div>
+
+      {/* Drag hint — fades after interaction */}
+      {!hasInteracted && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/50 backdrop-blur rounded-full text-[11px] text-white/60 border border-white/10 animate-pulse">
+          ← Drag to compare →
+        </div>
+      )}
     </div>
   );
 }

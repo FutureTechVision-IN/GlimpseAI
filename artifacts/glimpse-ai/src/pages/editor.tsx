@@ -852,27 +852,27 @@ export default function Editor() {
                           </div>
                         </div>
                       ) : aiSuggestion && (
-                        <div className="rounded-xl border border-teal-500/30 bg-gradient-to-r from-teal-500/10 to-cyan-500/10 p-3">
+                        <div className="rounded-xl border border-teal-500/30 bg-gradient-to-r from-teal-500/10 to-cyan-500/10 p-4">
                           <div className="flex items-start gap-3">
-                            <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                              <ScanEye className="w-4 h-4 text-teal-400" />
+                            <div className="w-10 h-10 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                              <ScanEye className="w-5 h-5 text-teal-400" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <p className="text-xs font-medium text-teal-200">AI Recommendation</p>
-                                <Badge variant="outline" className="text-[8px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-3.5 capitalize">
+                              <div className="flex items-center gap-2 mb-1.5">
+                                <p className="text-sm font-semibold text-teal-200">AI Recommendation</p>
+                                <Badge variant="outline" className="text-[10px] border-teal-500/40 text-teal-300 px-2 py-0.5 h-5 capitalize">
                                   {inferImageType(aiSuggestion.detectedSubjects)}
                                 </Badge>
                               </div>
-                              <p className="text-[11px] text-zinc-400 leading-relaxed mb-2 line-clamp-2">{aiSuggestion.description}</p>
-                              <div className="flex flex-wrap gap-1 mb-2">
+                              <p className="text-sm text-zinc-300 leading-relaxed mb-3">{aiSuggestion.description}</p>
+                              <div className="flex flex-wrap gap-1.5 mb-3">
                                 {aiSuggestion.detectedSubjects.slice(0, 4).map((s) => (
-                                  <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
+                                  <Badge key={s} variant="outline" className="text-[10px] border-teal-500/30 text-teal-300 px-2 py-0.5 h-5">{s}</Badge>
                                 ))}
                               </div>
-                              <Button size="sm" className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white w-full" onClick={applyAiSuggestion}>
-                                <Sparkles className="w-3 h-3 mr-1" />
-                                Apply Best: {aiSuggestion.suggestedEnhancement}
+                              <Button size="sm" className="h-9 text-sm bg-teal-600 hover:bg-teal-700 text-white w-full font-medium shadow-lg shadow-teal-500/20" onClick={applyAiSuggestion}>
+                                <Sparkles className="w-4 h-4 mr-1.5" />
+                                Apply: {aiSuggestion.suggestedEnhancement}
                                 {aiSuggestion.suggestedFilter && ` + ${aiSuggestion.suggestedFilter}`}
                               </Button>
                               {/* Alternative suggestions based on image type */}
@@ -883,14 +883,14 @@ export default function Editor() {
                                 );
                                 if (alts.length === 0) return null;
                                 return (
-                                  <div className="mt-2 pt-2 border-t border-white/5">
-                                    <p className="text-[9px] text-zinc-600 mb-1.5">Or try:</p>
-                                    <div className="flex flex-wrap gap-1">
+                                  <div className="mt-3 pt-3 border-t border-white/5">
+                                    <p className="text-xs text-zinc-500 mb-2">Or try:</p>
+                                    <div className="flex flex-wrap gap-1.5">
                                       {alts.map(a => (
                                         <button
                                           key={a.type}
                                           onClick={() => applyAlternative(a.type)}
-                                          className="text-[9px] px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors"
+                                          className="text-xs px-3 py-1.5 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors min-h-[32px]"
                                         >
                                           {a.label}
                                         </button>
@@ -901,8 +901,31 @@ export default function Editor() {
                               })()}
                             </div>
                           </div>
-                          <div className="mt-2 flex items-center justify-between">
-                            <span className="text-[9px] text-zinc-600">Confidence: {Math.round(aiSuggestion.confidence * 100)}%</span>
+                          {/* Confidence + Dismiss row */}
+                          <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="flex items-center gap-2 cursor-help">
+                                  <div className={cn(
+                                    "w-2 h-2 rounded-full",
+                                    aiSuggestion.confidence >= 0.85 ? "bg-emerald-400" : aiSuggestion.confidence >= 0.6 ? "bg-amber-400" : "bg-red-400"
+                                  )} />
+                                  <span className={cn(
+                                    "text-xs font-medium",
+                                    aiSuggestion.confidence >= 0.85 ? "text-emerald-400" : aiSuggestion.confidence >= 0.6 ? "text-amber-400" : "text-red-400"
+                                  )}>
+                                    {Math.round(aiSuggestion.confidence * 100)}% confidence
+                                  </span>
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom" className="text-xs max-w-[200px]">
+                                {aiSuggestion.confidence >= 0.85
+                                  ? "High confidence — AI is very sure this enhancement will look great"
+                                  : aiSuggestion.confidence >= 0.6
+                                    ? "Medium confidence — this enhancement should produce good results"
+                                    : "Low confidence — you might want to try alternatives for better results"}
+                              </TooltipContent>
+                            </Tooltip>
                             <button
                               onClick={() => {
                                 trackAiEvent({
@@ -914,9 +937,9 @@ export default function Editor() {
                                 });
                                 setAiSuggestion(null);
                               }}
-                              className="text-[9px] text-zinc-600 hover:text-zinc-400"
+                              className="min-w-[44px] min-h-[44px] flex items-center justify-center text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
                             >
-                              Dismiss
+                              <X className="w-4 h-4 mr-1" />Dismiss
                             </button>
                           </div>
                         </div>
@@ -1315,9 +1338,14 @@ export default function Editor() {
               <AnimatePresence>
                 {processStage !== "idle" && (
                   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-                    className={cn("flex items-center gap-2 text-sm", stageInfo.colorClass)}>
+                    className={cn("flex items-center gap-2 text-sm relative", stageInfo.colorClass)}>
                     {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-4 h-4 animate-spin" />}
-                    {processStage === "completed" && <CheckCircle2 className="w-4 h-4" />}
+                    {processStage === "completed" && (
+                      <motion.div className="flex items-center gap-2" initial={{ scale: 0.5 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 400, damping: 15 }}>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <motion.div className="absolute -inset-2 rounded-lg bg-teal-500/20" initial={{ opacity: 0.8, scale: 0.8 }} animate={{ opacity: 0, scale: 1.5 }} transition={{ duration: 0.6 }} />
+                      </motion.div>
+                    )}
                     {processStage === "failed"    && <AlertCircle  className="w-4 h-4" />}
                     <span>{stageInfo.label}</span>
                     {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">{upscaleAfter ? "step 1/3" : "step 1/2"}</span>}
@@ -1326,7 +1354,10 @@ export default function Editor() {
                 )}
               </AnimatePresence>
               <Button
-                className="w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20 h-11"
+                className={cn(
+                  "w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20 h-11 transition-all",
+                  file && !isProcessing && !isCompleted && "animate-pulse shadow-teal-500/40 shadow-xl"
+                )}
                 onClick={handleProcess}
                 disabled={!file || isProcessing}
               >
@@ -1399,11 +1430,36 @@ export default function Editor() {
                     </div>
                     {isCompleted && currentJob?.processedUrl && (
                       <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
-                        <a href={currentJob.processedUrl} download={`enhanced-${file?.name ?? "image.jpg"}`}>
-                          <Button size="sm" className="bg-white text-black hover:bg-white/90 shadow-lg h-9 px-5 font-semibold text-xs">
-                            <Download className="w-4 h-4 mr-2" />Export
-                          </Button>
-                        </a>
+                        <Button size="sm" className="bg-white text-black hover:bg-white/90 shadow-lg h-9 px-5 font-semibold text-xs"
+                          onClick={() => {
+                            try {
+                              const dataUri = currentJob.processedUrl!;
+                              // Convert data URI to blob for reliable cross-browser download
+                              const byteString = atob(dataUri.split(",")[1] ?? dataUri);
+                              const mimeMatch = dataUri.match(/^data:([^;]+);/);
+                              const mime = mimeMatch?.[1] ?? "image/jpeg";
+                              const ab = new ArrayBuffer(byteString.length);
+                              const ia = new Uint8Array(ab);
+                              for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+                              const blob = new Blob([ab], { type: mime });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement("a");
+                              a.href = url;
+                              a.download = `enhanced-${file?.name ?? "image.jpg"}`;
+                              document.body.appendChild(a);
+                              a.click();
+                              document.body.removeChild(a);
+                              setTimeout(() => URL.revokeObjectURL(url), 1000);
+                              toast({ title: "Download started", description: "Your enhanced image is being saved." });
+                            } catch {
+                              // Fallback: open in new tab
+                              window.open(currentJob.processedUrl!, "_blank");
+                              toast({ title: "Download", description: "Image opened in a new tab. Right-click to save." });
+                            }
+                          }}
+                        >
+                          <Download className="w-4 h-4 mr-2" />Export
+                        </Button>
                       </motion.div>
                     )}
                   </div>
@@ -1506,9 +1562,9 @@ export default function Editor() {
                         exit={{ opacity: 0, height: 0 }}
                         className="w-full max-w-lg overflow-hidden"
                       >
-                        <div className="rounded-xl border border-teal-500/20 bg-zinc-950/80 backdrop-blur p-4 space-y-3">
+                        <div className="rounded-xl border border-teal-500/20 bg-zinc-950/80 backdrop-blur p-5 space-y-4">
                           {isAnalyzing ? (
-                            <div className="flex items-center gap-3 justify-center py-3">
+                            <div className="flex items-center gap-3 justify-center py-4">
                               <Loader2 className="w-5 h-5 text-teal-400 animate-spin" />
                               <span className="text-sm text-teal-300">Scanning image with AI...</span>
                             </div>
@@ -1516,30 +1572,52 @@ export default function Editor() {
                             <>
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                  <ScanEye className="w-4 h-4 text-teal-400" />
+                                  <ScanEye className="w-5 h-5 text-teal-400" />
                                   <span className="text-sm font-semibold text-teal-200">AI Recommends</span>
-                                  <Badge variant="outline" className="text-[9px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-4 capitalize">
+                                  <Badge variant="outline" className="text-[10px] border-teal-500/40 text-teal-300 px-2 py-0.5 h-5 capitalize">
                                     {inferImageType(aiSuggestion.detectedSubjects)}
                                   </Badge>
                                 </div>
-                                <span className="text-[10px] text-zinc-600">{Math.round(aiSuggestion.confidence * 100)}% confident</span>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <div className="flex items-center gap-1.5 cursor-help">
+                                      <div className={cn(
+                                        "w-2 h-2 rounded-full",
+                                        aiSuggestion.confidence >= 0.85 ? "bg-emerald-400" : aiSuggestion.confidence >= 0.6 ? "bg-amber-400" : "bg-red-400"
+                                      )} />
+                                      <span className={cn(
+                                        "text-xs font-medium",
+                                        aiSuggestion.confidence >= 0.85 ? "text-emerald-400" : aiSuggestion.confidence >= 0.6 ? "text-amber-400" : "text-red-400"
+                                      )}>
+                                        {Math.round(aiSuggestion.confidence * 100)}%
+                                      </span>
+                                    </div>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="text-xs max-w-[200px]">
+                                    {aiSuggestion.confidence >= 0.85
+                                      ? "High confidence — AI is very sure this enhancement will look great"
+                                      : aiSuggestion.confidence >= 0.6
+                                        ? "Medium confidence — should produce good results"
+                                        : "Low confidence — consider trying alternatives"}
+                                  </TooltipContent>
+                                </Tooltip>
                               </div>
-                              <p className="text-xs text-zinc-400 leading-relaxed">{aiSuggestion.description}</p>
-                              <div className="flex flex-wrap gap-1">
+                              <p className="text-sm text-zinc-300 leading-relaxed">{aiSuggestion.description}</p>
+                              <div className="flex flex-wrap gap-1.5">
                                 {aiSuggestion.detectedSubjects.slice(0, 5).map(s => (
-                                  <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
+                                  <Badge key={s} variant="outline" className="text-[10px] border-teal-500/30 text-teal-300 px-2 py-0.5 h-5">{s}</Badge>
                                 ))}
                               </div>
-                              <div className="flex items-center gap-2">
-                                <Button size="sm" className="flex-1 h-8 text-xs bg-teal-600 hover:bg-teal-700 text-white" onClick={applyAiSuggestion}>
-                                  <Sparkles className="w-3 h-3 mr-1" />
+                              <div className="flex items-center gap-3">
+                                <Button size="sm" className="flex-1 h-9 text-sm bg-teal-600 hover:bg-teal-700 text-white font-medium shadow-lg shadow-teal-500/20" onClick={applyAiSuggestion}>
+                                  <Sparkles className="w-4 h-4 mr-1.5" />
                                   Apply: {aiSuggestion.suggestedEnhancement}
                                 </Button>
                                 <button
                                   onClick={() => setShowPowerUp(false)}
-                                  className="text-xs text-zinc-600 hover:text-zinc-400 px-2"
+                                  className="min-w-[44px] min-h-[44px] flex items-center justify-center text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
                                 >
-                                  Dismiss
+                                  <X className="w-4 h-4" />
                                 </button>
                               </div>
                               {/* Alternatives */}
@@ -1547,14 +1625,14 @@ export default function Editor() {
                                 const alts = getAlternatives(inferImageType(aiSuggestion.detectedSubjects), aiSuggestion.suggestedEnhancement);
                                 if (alts.length === 0) return null;
                                 return (
-                                  <div className="pt-2 border-t border-white/5">
-                                    <p className="text-[10px] text-zinc-600 mb-1.5">Other options:</p>
-                                    <div className="flex flex-wrap gap-1.5">
+                                  <div className="pt-3 border-t border-white/5">
+                                    <p className="text-xs text-zinc-500 mb-2">Other options:</p>
+                                    <div className="flex flex-wrap gap-2">
                                       {alts.map(a => (
                                         <button
                                           key={a.type}
                                           onClick={() => { applyAlternative(a.type); setShowPowerUp(false); }}
-                                          className="text-[10px] px-2.5 py-1 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors"
+                                          className="text-xs px-3 py-1.5 min-h-[32px] rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 hover:bg-teal-500/5 transition-all"
                                         >
                                           {a.label}
                                         </button>
@@ -1638,7 +1716,7 @@ export default function Editor() {
                         <div className="w-6 h-6 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
                           <Loader2 className="w-3 h-3 text-teal-400 animate-spin" />
                         </div>
-                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl rounded-tl-none px-3 py-2 text-xs text-zinc-400">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-xl rounded-tl-none px-3 py-2 text-sm text-zinc-400">
                           Analyzing your image...
                         </div>
                       </div>
@@ -1652,32 +1730,32 @@ export default function Editor() {
                           {msg.role === "ai" ? <Sparkles className="w-3 h-3" /> : "U"}
                         </div>
                         <div className={cn(
-                          "max-w-[220px] rounded-xl px-3 py-2 text-xs leading-relaxed",
+                          "max-w-[240px] rounded-xl px-3 py-2 text-sm leading-relaxed",
                           msg.role === "ai"
                             ? "bg-zinc-900 border border-zinc-800 rounded-tl-none text-zinc-300"
                             : "bg-teal-600/20 border border-teal-500/20 rounded-tr-none text-teal-100"
                         )}>
-                          <p>{msg.text}</p>
+                          <p className="whitespace-pre-line">{msg.text}</p>
                           {msg.action && !msg.applied && msg.role === "ai" && (
                             <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5">
-                              <p className="text-[10px] text-zinc-500">
+                              <p className="text-xs text-zinc-500">
                                 Suggested: <span className="text-teal-300 capitalize">{msg.action.type}</span>
                                 {msg.action.filter && <> · <span className="text-amber-300 capitalize">{msg.action.filter}</span></>}
                               </p>
                               <Button
                                 size="sm"
-                                className="w-full h-6 text-[10px] bg-teal-600 hover:bg-teal-700 text-white"
+                                className="w-full h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white"
                                 onClick={() => {
                                   applyAiSuggestion();
                                 }}
                               >
-                                <Sparkles className="w-2.5 h-2.5 mr-1" />Apply
+                                <Sparkles className="w-3 h-3 mr-1" />Apply
                               </Button>
                             </div>
                           )}
                           {msg.applied && msg.role === "ai" && (
-                            <div className="mt-1.5 flex items-center gap-1 text-[9px] text-emerald-400">
-                              <CheckCircle2 className="w-2.5 h-2.5" />Applied
+                            <div className="mt-1.5 flex items-center gap-1 text-xs text-emerald-400">
+                              <CheckCircle2 className="w-3 h-3" />Applied
                             </div>
                           )}
                         </div>
@@ -1704,48 +1782,138 @@ export default function Editor() {
                       setChatMessages(prev => [...prev, { id: userId, role: "user", text: txt }]);
                       setChatInput("");
                       const lower = txt.toLowerCase();
-                      // Context-aware auto-reply
+                      // Context-aware auto-reply with NLP pattern matching
                       setTimeout(() => {
                         const replyId = ++chatIdRef.current;
+                        const imageType = aiSuggestion ? inferImageType(aiSuggestion.detectedSubjects) : null;
+                        const confidencePct = aiSuggestion ? Math.round(aiSuggestion.confidence * 100) : 0;
+
                         // Greetings
-                        if (/^(hi|hello|hey|howdy|sup|what'?s up|how are you)/i.test(lower)) {
+                        if (/^(hi|hello|hey|howdy|sup|what'?s up|how are you|good (morning|afternoon|evening)|yo\b)/i.test(lower)) {
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: `Hey there! 👋 I'm your GlimpseAI assistant. ${file ? "I can see you've uploaded an image — want me to suggest the best enhancement?" : "Upload a photo and I'll recommend the perfect enhancement for it!"}`,
+                            text: file
+                              ? `Hey! 👋 I've ${aiSuggestion ? `analyzed your ${imageType} image and I'm ${confidencePct}% confident about my recommendation. Want me to apply it?` : "already started analyzing your image. I'll have a recommendation shortly!"}`
+                              : "Hi there! 👋 I'm your GlimpseAI assistant. Upload a photo and I'll find the perfect enhancement for it!",
                           }]);
-                        } else if (/^(help|what can you|how do|guide|tutorial)/i.test(lower)) {
+                        // Help/capabilities
+                        } else if (/^(help|what can you|how do|guide|tutorial|features|capabilities)/i.test(lower)) {
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: "I can help you with:\n• Auto-analyzing your image for the best enhancement\n• Suggesting filters and color grades\n• Upscaling to 2x or 4x resolution\n• Portrait retouching and skin smoothing\n\nJust upload a photo to get started!",
+                            text: "Here's what I can do:\n\n✨ Auto-analyze images for the best enhancement\n🎨 Suggest filters & color grades based on content\n📐 Upscale to 2x or 4x resolution\n👤 Portrait retouching & skin smoothing\n🎬 Cinematic color grading\n💡 Fix lighting issues\n🔄 Combine enhancements (enhance + upscale)\n\nJust upload a photo to get started!",
                           }]);
-                        } else if (/upscale|scale|resolution|enlarge|bigger/i.test(lower)) {
+                        // Upscale/resolution
+                        } else if (/upscale|scale|resolution|enlarge|bigger|sharper|hd|high.?res/i.test(lower)) {
+                          const wants4x = /4x|quad|maximum|highest|best quality/i.test(lower);
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: file ? "I can upscale your image! Choose 2x for double resolution or 4x for maximum detail. You can even combine upscaling with other enhancements." : "Upload an image first, then I can help you upscale it!",
-                            ...(file ? { action: { type: "upscale" as EnhanceMediaBodyEnhancementType } } : {}),
+                            text: file
+                              ? `I can ${wants4x ? "quadruple (4x)" : "double (2x)"} your image resolution using AI upscaling. ${upscaleAfter ? "You already have upscaling queued — it will run after your primary enhancement!" : "You can also combine this with other enhancements using the 'Also Upscale' toggle."}`
+                              : "Upload an image first, then I can upscale it to 2x or 4x resolution!",
+                            ...(file ? { action: { type: (wants4x ? "upscale_4x" : "upscale") as EnhanceMediaBodyEnhancementType } } : {}),
                           }]);
-                        } else if (/portrait|face|skin|retouch|smooth/i.test(lower)) {
+                        // Portrait/face/skin
+                        } else if (/portrait|face|skin|retouch|smooth|beauty|selfie|headshot/i.test(lower)) {
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: file ? "For portraits, I recommend Portrait Polish — it smooths skin and warms tones naturally. Want me to apply it?" : "Upload a portrait and I'll optimize it for you!",
+                            text: file
+                              ? `${imageType === "portrait" ? "Great eye! This is a portrait, so " : ""}I recommend Portrait Polish — it naturally smooths skin, warms tones, and enhances facial features. ${aiSuggestion?.suggestedEnhancement === "portrait" ? `My AI analysis agrees with ${confidencePct}% confidence!` : ""}`
+                              : "Upload a portrait and I'll optimize it with natural skin smoothing and warm tones!",
                             ...(file ? { action: { type: "portrait" as EnhanceMediaBodyEnhancementType } } : {}),
                           }]);
-                        } else if (/cinematic|movie|film|color grade/i.test(lower)) {
+                        // Cinematic/film/movie
+                        } else if (/cinematic|movie|film|color.?grade|hollywood|dramatic/i.test(lower)) {
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: file ? "Great choice! Cinematic Grade gives your image a film-grade color treatment. Shall I apply it?" : "Upload an image and I'll give it that cinematic look!",
+                            text: file
+                              ? "Cinematic Grade applies film-grade color treatment — think moody shadows, lifted highlights, and rich tonal depth. Perfect for creating that professional film look."
+                              : "Upload an image and I'll give it that blockbuster cinematic treatment!",
                             ...(file ? { action: { type: "color_grade_cinematic" as EnhanceMediaBodyEnhancementType } } : {}),
                           }]);
+                        // Lighting
+                        } else if (/light(ing)?|dark|bright|shadow|expose|underexposed|overexposed|dim/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: file
+                              ? "Fix Lighting uses mood-aware algorithms to recover shadows and tame highlights. It's especially effective for underexposed or harsh-lighting shots."
+                              : "Upload a photo with lighting issues and I'll fix them!",
+                            ...(file ? { action: { type: "lighting_enhance" as EnhanceMediaBodyEnhancementType } } : {}),
+                          }]);
+                        // Warm/cool tones
+                        } else if (/warm|golden|cozy|sunset|cool|cold|blue|icy/i.test(lower)) {
+                          const isWarm = /warm|golden|cozy|sunset/i.test(lower);
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: file
+                              ? `${isWarm ? "Warm Tones adds golden, inviting warmth — great for portraits and lifestyle shots." : "Cool Tones shifts to crisp, blue-shift palette — perfect for modern and minimalist looks."}`
+                              : `Upload an image and I'll apply ${isWarm ? "warm, golden" : "cool, crisp"} tones!`,
+                            ...(file ? { action: { type: (isWarm ? "color_grade_warm" : "color_grade_cool") as EnhanceMediaBodyEnhancementType } } : {}),
+                          }]);
+                        // Background blur/bokeh
+                        } else if (/blur|bokeh|background|depth|focus|defocus/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: file
+                              ? "Background Blur creates intelligent portrait bokeh — it detects the subject and blurs the background naturally, simulating a shallow depth of field."
+                              : "Upload a photo and I'll add professional background blur!",
+                            ...(file ? { action: { type: "blur_background" as EnhanceMediaBodyEnhancementType } } : {}),
+                          }]);
+                        // What should I do / best / recommend
+                        } else if (/what.*(should|do|recommend|suggest|best)|which.*(enhancement|filter|effect)/i.test(lower)) {
+                          if (aiSuggestion) {
+                            setChatMessages(prev => [...prev, {
+                              id: replyId,
+                              role: "ai",
+                              text: `Based on my analysis of your ${imageType} image, I recommend "${aiSuggestion.suggestedEnhancement}"${aiSuggestion.suggestedFilter ? ` with the ${aiSuggestion.suggestedFilter} filter` : ""}. I'm ${confidencePct}% confident this will give you the best results. ${aiSuggestion.description}`,
+                              action: {
+                                type: aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType,
+                                filter: aiSuggestion.suggestedFilter ?? undefined,
+                              },
+                            }]);
+                          } else if (file) {
+                            setChatMessages(prev => [...prev, {
+                              id: replyId,
+                              role: "ai",
+                              text: "I'm still analyzing your image. Hold tight — I'll have a personalized recommendation in a moment!",
+                            }]);
+                          } else {
+                            setChatMessages(prev => [...prev, {
+                              id: replyId,
+                              role: "ai",
+                              text: "Upload an image first! I'll analyze it and tell you exactly which enhancement will work best.",
+                            }]);
+                          }
+                        // Thanks / positive feedback
+                        } else if (/thanks|thank you|thx|awesome|great|perfect|nice|love it|cool|amazing/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: "You're welcome! 🎨 Let me know if you'd like to try a different enhancement or have any other questions.",
+                          }]);
+                        // Auto enhance
+                        } else if (/auto|automatic|one.?click|quick|fast|easy|fix/i.test(lower)) {
+                          setChatMessages(prev => [...prev, {
+                            id: replyId,
+                            role: "ai",
+                            text: file
+                              ? "Auto Enhance is our AI-powered one-click fix — it analyzes your image and applies the optimal combination of adjustments automatically."
+                              : "Upload an image and I'll auto-enhance it with one click!",
+                            ...(file ? { action: { type: "auto" as EnhanceMediaBodyEnhancementType } } : {}),
+                          }]);
+                        // Fallback with AI context
                         } else if (aiSuggestion) {
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: `Based on my analysis, I recommend "${aiSuggestion.suggestedEnhancement}" for your image. ${aiSuggestion.description}`,
+                            text: `Based on my analysis of your ${imageType} image, I recommend "${aiSuggestion.suggestedEnhancement}" (${confidencePct}% confidence). ${aiSuggestion.description}\n\nYou can also ask me about specific enhancements like upscaling, portrait retouching, cinematic grading, or lighting fixes.`,
                             action: {
                               type: aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType,
                               filter: aiSuggestion.suggestedFilter ?? undefined,
@@ -1755,16 +1923,16 @@ export default function Editor() {
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: "I'm still analyzing your image. Try asking about specific enhancements like upscaling, portrait retouching, or cinematic color grading!",
+                            text: "I'm analyzing your image now. In the meantime, you can ask me about specific enhancements:\n\n• \"upscale\" — increase resolution\n• \"portrait\" — skin smoothing\n• \"cinematic\" — film-grade color\n• \"lighting\" — fix exposure\n• \"auto\" — one-click fix\n\nOr wait for my personalized recommendation!",
                           }]);
                         } else {
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: "Upload an image first so I can analyze it and suggest the perfect enhancement for you!",
+                            text: "Upload an image to get started! I'll analyze it and suggest the perfect enhancement. You can also ask me about what I can do — try \"help\".",
                           }]);
                         }
-                      }, 500);
+                      }, 400);
                     }}
                     className="flex items-center gap-2"
                   >
