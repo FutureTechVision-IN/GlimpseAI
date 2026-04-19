@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import Layout from "../components/layout";
+import { useAuth } from "../lib/auth-context";
 import {
   useUploadMedia,
   useEnhanceMedia,
@@ -74,6 +75,7 @@ import {
   VolumeX,
   Clock,
   Gauge,
+  Lock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
@@ -443,6 +445,34 @@ export default function Editor() {
   // Route-based studio mode
   const [location] = useLocation();
   const studioMode: "photo" | "video" = location.includes("video-studio") ? "video" : "photo";
+
+  // ─── Tier-awareness ────────────────────────────────────────
+  const { user } = useAuth();
+  const planSlug: string | null = (user as any)?.planSlug ?? null;
+  const isAdmin = user?.role === "admin";
+  // Premium-only features
+  const PREMIUM_FEATURES = new Set(["upscale_4x", "posture"]);
+  const BASIC_PLUS_FEATURES = new Set(["stabilize", "trim"]);
+  const PREMIUM_FILTER_KEYS = new Set([
+    "airy", "teal_orange", "pastel", "noir_color", "cross_process",
+    "cyberpunk", "arctic", "ember", "chrome",
+  ]);
+  const canAccessPremium = isAdmin || planSlug === "premium";
+  const canAccessBasic = canAccessPremium || planSlug === "basic";
+
+  const isFeatureLocked = (featureType: string, filterKey?: string): boolean => {
+    if (isAdmin) return false;
+    if (PREMIUM_FEATURES.has(featureType)) return !canAccessPremium;
+    if (BASIC_PLUS_FEATURES.has(featureType)) return !canAccessBasic;
+    if (featureType === "filter" && filterKey && PREMIUM_FILTER_KEYS.has(filterKey)) return !canAccessPremium;
+    return false;
+  };
+
+  const tierLabel = (featureType: string): string => {
+    if (PREMIUM_FEATURES.has(featureType)) return "Premium";
+    if (BASIC_PLUS_FEATURES.has(featureType)) return "Basic";
+    return "Premium";
+  };
 
   // Onboarding
   const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem(ONBOARDING_KEY));
@@ -927,7 +957,7 @@ export default function Editor() {
         <div className="flex flex-col lg:flex-row h-full min-h-[calc(100vh-4rem)]">
 
           {/* Sidebar */}
-          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-10">
+          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-10 max-h-[50vh] lg:max-h-none overflow-hidden">
             <div className="p-3 border-b border-white/10">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="font-semibold text-base flex items-center gap-2">
@@ -1074,18 +1104,26 @@ export default function Editor() {
                     <div className="space-y-1.5">
                       <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
                       <div className="grid grid-cols-5 gap-1.5">
-                        {SIMPLE_PRESETS.map((p) => (
+                        {SIMPLE_PRESETS.map((p) => {
+                          const locked = isFeatureLocked(p.type);
+                          return (
                           <Tooltip key={p.type + (p.filterName ?? "")}>
                             <TooltipTrigger asChild>
                               <motion.button
                                 whileTap={{ scale: 0.97 }}
                                 className={cn(
-                                  "flex flex-col items-center gap-1 p-1.5 rounded-lg border transition-all text-center",
-                                  enhancementType === p.type && !selectedFilter
+                                  "flex flex-col items-center gap-1 p-1.5 rounded-lg border transition-all text-center relative",
+                                  locked
+                                    ? "border-zinc-800 bg-zinc-900/30 opacity-60 cursor-not-allowed"
+                                    : enhancementType === p.type && !selectedFilter
                                     ? "border-teal-500 bg-teal-500/10 shadow-lg shadow-teal-500/10"
                                     : "border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-zinc-700",
                                 )}
                                 onClick={() => {
+                                  if (locked) {
+                                    toast({ title: `${tierLabel(p.type)} feature`, description: `Upgrade to ${tierLabel(p.type)} to unlock ${p.label}.`, variant: "destructive" });
+                                    return;
+                                  }
                                   pushUndo();
                                   setEnhancementType(p.type);
                                   setSelectedFilter(null);
@@ -1097,18 +1135,25 @@ export default function Editor() {
                                   else setFilters(DEFAULT_FILTERS);
                                 }}
                               >
+                                {locked && (
+                                  <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500/90 flex items-center justify-center z-10">
+                                    <Lock className="w-2.5 h-2.5 text-zinc-900" />
+                                  </div>
+                                )}
                                 <div className={cn(
                                   "w-8 h-8 rounded-md flex items-center justify-center shrink-0 transition-colors [&_svg]:w-4 [&_svg]:h-4",
-                                  enhancementType === p.type && !selectedFilter ? "bg-teal-500/20 text-teal-400" : "bg-zinc-800 text-zinc-400",
+                                  locked ? "bg-zinc-800/50 text-zinc-600"
+                                  : enhancementType === p.type && !selectedFilter ? "bg-teal-500/20 text-teal-400" : "bg-zinc-800 text-zinc-400",
                                 )}>
                                   {p.icon}
                                 </div>
                                 <p className="text-[10px] font-medium leading-tight truncate w-full">{p.label}</p>
                               </motion.button>
                             </TooltipTrigger>
-                            <TooltipContent side="right" className="text-xs">{p.desc}</TooltipContent>
+                            <TooltipContent side="right" className="text-xs">{locked ? `🔒 ${tierLabel(p.type)} — Upgrade to unlock` : p.desc}</TooltipContent>
                           </Tooltip>
-                        ))}
+                        );
+                        })}
                       </div>
                     </div>
 
@@ -1132,12 +1177,19 @@ export default function Editor() {
                               <button
                                 className={cn(
                                   "text-[10px] py-0.5 px-1.5 rounded border transition-all font-medium",
+                                  isFeatureLocked("upscale_4x") ? "opacity-40 cursor-not-allowed border-zinc-700 text-zinc-600" :
                                   upscaleAfter === "upscale_4x"
                                     ? "border-teal-500 bg-teal-500/10 text-teal-300"
                                     : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
                                 )}
-                                onClick={() => setUpscaleAfter("upscale_4x")}
-                              >4x</button>
+                                onClick={() => {
+                                  if (isFeatureLocked("upscale_4x")) {
+                                    toast({ title: "Premium feature", description: "Upgrade to Premium to unlock 4x upscaling.", variant: "destructive" });
+                                    return;
+                                  }
+                                  setUpscaleAfter("upscale_4x");
+                                }}
+                              >4x{isFeatureLocked("upscale_4x") && <Lock className="w-2.5 h-2.5 inline ml-0.5" />}</button>
                             </div>
                           )}
                         </div>
@@ -1158,16 +1210,24 @@ export default function Editor() {
                         </button>
                       </div>
                       <div className="grid grid-cols-6 gap-1">
-                        {visibleFilters.map((p) => (
+                        {visibleFilters.map((p) => {
+                          const filterLocked = isFeatureLocked("filter", p.key);
+                          return (
                           <Tooltip key={p.key}>
                             <TooltipTrigger asChild>
                               <motion.button
                                 whileTap={{ scale: 0.95 }}
                                 className={cn(
                                   "relative rounded-md border transition-all overflow-hidden h-12 group",
-                                  selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
+                                  filterLocked
+                                    ? "border-zinc-800 opacity-50 cursor-not-allowed"
+                                    : selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
                                 )}
                                 onClick={() => {
+                                  if (filterLocked) {
+                                    toast({ title: "Premium filter", description: `Upgrade to Premium to unlock the ${p.name} filter.`, variant: "destructive" });
+                                    return;
+                                  }
                                   pushUndo();
                                   setSelectedFilter(p.key === "original" ? null : p.key);
                                   setFilters(p.f);
@@ -1178,7 +1238,11 @@ export default function Editor() {
                                 <div className="absolute inset-0 flex items-end p-0.5">
                                   <span className="text-[9px] font-medium text-white drop-shadow-lg leading-tight truncate">{p.name}</span>
                                 </div>
-                                {p.premium && (
+                                {filterLocked ? (
+                                  <div className="absolute top-0.5 right-0.5 w-3.5 h-3.5 rounded-full bg-amber-500/90 flex items-center justify-center">
+                                    <Lock className="w-2 h-2 text-zinc-900" />
+                                  </div>
+                                ) : p.premium && (
                                   <div className="absolute top-0.5 right-0.5">
                                     <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                                   </div>
@@ -1191,10 +1255,11 @@ export default function Editor() {
                               </motion.button>
                             </TooltipTrigger>
                             <TooltipContent side="right" className="text-xs">
-                              {p.name}{p.premium ? " (Premium)" : ""}
+                              {p.name}{filterLocked ? " 🔒 Premium" : p.premium ? " (Premium)" : ""}
                             </TooltipContent>
                           </Tooltip>
-                        ))}
+                        );
+                        })}
                       </div>
                     </div>
 
@@ -1203,6 +1268,15 @@ export default function Editor() {
                         <Separator className="bg-white/5" />
                         <div className="space-y-3">
                           <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Video Options</Label>
+                          {!canAccessBasic ? (
+                            <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                              <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+                              <div>
+                                <p className="text-xs font-medium text-amber-300">Basic+ Feature</p>
+                                <p className="text-[10px] text-zinc-400">Upgrade to Basic or Premium to access video enhancements.</p>
+                              </div>
+                            </div>
+                          ) : (
                           <div className="flex items-center justify-between p-3 rounded-lg border border-zinc-800 bg-zinc-900/50">
                             <div>
                               <p className="text-sm font-medium">AI Stabilization</p>
@@ -1210,6 +1284,7 @@ export default function Editor() {
                             </div>
                             <Switch checked={stabilize} onCheckedChange={setStabilize} />
                           </div>
+                          )}
                         </div>
                       </>
                     )}
@@ -1235,14 +1310,25 @@ export default function Editor() {
                       <div className="space-y-2">
                         <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Enhancement Type</Label>
                         <div className="grid grid-cols-2 gap-1.5">
-                          {ENHANCEMENT_TYPES.map(({ type, label, icon }) => (
+                          {ENHANCEMENT_TYPES.map(({ type, label, icon }) => {
+                            const locked = isFeatureLocked(type);
+                            return (
                             <Button key={type} variant="outline" size="sm"
-                              className={cn("justify-start gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 h-8 text-xs",
+                              className={cn("justify-start gap-2 border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 h-8 text-xs relative",
+                                locked ? "opacity-50 cursor-not-allowed" :
                                 enhancementType === type && "border-teal-500 text-teal-400 bg-teal-500/10 hover:bg-teal-500/20")}
-                              onClick={() => setEnhancementType(type)}>
+                              onClick={() => {
+                                if (locked) {
+                                  toast({ title: `${tierLabel(type)} feature`, description: `Upgrade to ${tierLabel(type)} to unlock ${label}.`, variant: "destructive" });
+                                  return;
+                                }
+                                setEnhancementType(type);
+                              }}>
                               {icon}{label}
+                              {locked && <Lock className="w-3 h-3 text-amber-400 ml-auto" />}
                             </Button>
-                          ))}
+                          );
+                          })}
                         </div>
                       </div>
 
@@ -1288,6 +1374,12 @@ export default function Editor() {
 
                     {/* Adjust (NEW — warmth, highlights, shadows, hue) */}
                     <TabsContent value="adjust" className="space-y-4 mt-0">
+                      {!canAccessPremium && (
+                        <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
+                          <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <p className="text-[10px] text-amber-300/80">Fine-tuned adjustments are a <span className="font-semibold text-amber-300">Premium</span> feature. Basic sliders available as preview.</p>
+                        </div>
+                      )}
                       <p className="text-[10px] text-zinc-600 mb-2">Fine-tune color & lighting in real time</p>
                       {([
                         { key: "brightness" as const, label: "Brightness",  icon: <Sun          className="w-3 h-3" />, min: 0,    max: 200, step: 1 },
@@ -1360,20 +1452,35 @@ export default function Editor() {
                       <div className="space-y-2">
                         <Label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
                         <div className="grid grid-cols-4 gap-1.5">
-                          {FILTER_PRESETS.map((p) => (
+                          {FILTER_PRESETS.map((p) => {
+                            const filterLocked = isFeatureLocked("filter", p.key);
+                            return (
                             <button key={p.key}
                               className={cn(
                                 "relative rounded-lg border transition-all overflow-hidden h-12",
-                                selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
+                                filterLocked
+                                  ? "border-zinc-800 opacity-50 cursor-not-allowed"
+                                  : selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
                               )}
-                              onClick={() => { pushUndo(); setFilters(p.f); setSelectedFilter(p.key === "original" ? null : p.key); }}>
+                              onClick={() => {
+                                if (filterLocked) {
+                                  toast({ title: "Premium filter", description: `Upgrade to Premium to unlock ${p.name}.`, variant: "destructive" });
+                                  return;
+                                }
+                                pushUndo(); setFilters(p.f); setSelectedFilter(p.key === "original" ? null : p.key);
+                              }}>
                               <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
                               <div className="absolute inset-0 flex items-end p-1">
                                 <span className="text-[8px] font-medium text-white drop-shadow-lg">{p.name}</span>
                               </div>
-                              {p.premium && <div className="absolute top-0.5 right-0.5"><div className="w-1.5 h-1.5 rounded-full bg-amber-400" /></div>}
+                              {filterLocked ? (
+                                <div className="absolute top-0.5 right-0.5 w-3.5 h-3.5 rounded-full bg-amber-500/90 flex items-center justify-center">
+                                  <Lock className="w-2 h-2 text-zinc-900" />
+                                </div>
+                              ) : p.premium && <div className="absolute top-0.5 right-0.5"><div className="w-1.5 h-1.5 rounded-full bg-amber-400" /></div>}
                             </button>
-                          ))}
+                          );
+                          })}
                         </div>
                       </div>
                       <Separator className="bg-white/5" />

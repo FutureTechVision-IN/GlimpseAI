@@ -490,4 +490,142 @@ router.get("/admin/ai-pool", requireAuth, requireAdmin, async (_req, res): Promi
   res.json(stats);
 });
 
+// ─── AI Intelligence Recommendations ───────────────────────
+// Analyzes system state and returns actionable recommendations
+// sorted by severity: critical → warning → info
+router.get("/admin/ai-recommendations", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  const recommendations: {
+    id: string;
+    severity: "critical" | "warning" | "info";
+    category: "architecture" | "api" | "enhancement" | "performance" | "feature";
+    title: string;
+    description: string;
+    action?: string;
+  }[] = [];
+
+  // 1. Check API key health
+  const poolStats = aiProvider.getPoolStats();
+  const totalKeys = poolStats.length;
+  const healthyKeys = poolStats.filter((k: any) => k.status === "healthy").length;
+  const exhaustedKeys = poolStats.filter((k: any) => k.status === "daily_limit" || k.status === "circuit_open").length;
+
+  if (healthyKeys === 0 && totalKeys > 0) {
+    recommendations.push({
+      id: "api-all-keys-exhausted",
+      severity: "critical",
+      category: "api",
+      title: "All API keys exhausted",
+      description: `All ${totalKeys} API keys are currently exhausted or rate-limited. AI-powered suggestions have fallen back to local analysis only, which has lower accuracy.`,
+      action: "Add new API keys via environment variables or wait for rate limits to reset.",
+    });
+  } else if (exhaustedKeys > totalKeys * 0.5) {
+    recommendations.push({
+      id: "api-keys-depleting",
+      severity: "warning",
+      category: "api",
+      title: "API key pool depleting",
+      description: `${exhaustedKeys} of ${totalKeys} keys are exhausted. Consider adding more keys to maintain AI suggestion quality.`,
+      action: "Add additional PROVIDER_KEYS_* or GEMINI_API_KEYS entries to .env",
+    });
+  }
+
+  // 2. Check enhancement failure rate
+  const recentJobs = await db.select().from(mediaJobsTable)
+    .orderBy(desc(mediaJobsTable.createdAt))
+    .limit(100);
+  const failedJobs = recentJobs.filter(j => j.status === "failed");
+  const failRate = recentJobs.length > 0 ? failedJobs.length / recentJobs.length : 0;
+
+  if (failRate > 0.15) {
+    recommendations.push({
+      id: "high-failure-rate",
+      severity: "critical",
+      category: "enhancement",
+      title: "High enhancement failure rate",
+      description: `${Math.round(failRate * 100)}% of recent enhancements failed (${failedJobs.length}/${recentJobs.length}). This indicates potential memory issues or corrupt uploads.`,
+      action: "Check server logs for OOM errors. Consider increasing server memory or limiting max file size.",
+    });
+  } else if (failRate > 0.05) {
+    recommendations.push({
+      id: "moderate-failure-rate",
+      severity: "warning",
+      category: "enhancement",
+      title: "Elevated failure rate",
+      description: `${Math.round(failRate * 100)}% failure rate in recent jobs. Monitor for trends.`,
+    });
+  }
+
+  // 3. Check processing performance
+  const completedJobs = recentJobs.filter(j => j.status === "completed" && j.processingTimeMs);
+  if (completedJobs.length > 0) {
+    const avgMs = completedJobs.reduce((sum, j) => sum + (j.processingTimeMs ?? 0), 0) / completedJobs.length;
+    const slowJobs = completedJobs.filter(j => (j.processingTimeMs ?? 0) > 10000);
+    if (avgMs > 8000) {
+      recommendations.push({
+        id: "slow-processing",
+        severity: "warning",
+        category: "performance",
+        title: "Slow processing times",
+        description: `Average processing time is ${(avgMs / 1000).toFixed(1)}s. ${slowJobs.length} jobs took >10s. Users may perceive this as sluggish.`,
+        action: "Consider enabling priority processing queues or scaling server resources.",
+      });
+    }
+  }
+
+  // 4. Check user quota utilization
+  const allUsers = await db.select().from(usersTable);
+  const maxedUsers = allUsers.filter(u => u.creditsUsed >= u.creditsLimit && u.role !== "admin");
+  if (maxedUsers.length > allUsers.length * 0.3) {
+    recommendations.push({
+      id: "high-quota-exhaustion",
+      severity: "warning",
+      category: "feature",
+      title: "Many users hitting quota limits",
+      description: `${maxedUsers.length} of ${allUsers.length} users (${Math.round(maxedUsers.length / allUsers.length * 100)}%) have exhausted their quota. This may indicate pricing or limits need adjustment.`,
+      action: "Consider increasing free tier limits or promoting upgrade paths more visibly.",
+    });
+  }
+
+  // 5. Enhancement type popularity — suggest features
+  const enhancementCounts: Record<string, number> = {};
+  for (const j of recentJobs) {
+    if (j.enhancementType) {
+      enhancementCounts[j.enhancementType] = (enhancementCounts[j.enhancementType] ?? 0) + 1;
+    }
+  }
+  const sorted = Object.entries(enhancementCounts).sort((a, b) => b[1] - a[1]);
+  if (sorted.length > 0) {
+    const topType = sorted[0][0];
+    const topPct = Math.round((sorted[0][1] / recentJobs.length) * 100);
+    if (topPct > 50) {
+      recommendations.push({
+        id: "dominant-enhancement",
+        severity: "info",
+        category: "feature",
+        title: `"${topType}" dominates usage at ${topPct}%`,
+        description: `Most users prefer ${topType}. Consider optimizing this pipeline further or featuring it more prominently.`,
+      });
+    }
+  }
+
+  // 6. Free users with no upgrades — conversion opportunity
+  const freeUsers = allUsers.filter(u => !u.planId && u.role !== "admin");
+  const activeFreeThatUsedQuota = freeUsers.filter(u => u.creditsUsed >= 3);
+  if (activeFreeThatUsedQuota.length > 5) {
+    recommendations.push({
+      id: "conversion-opportunity",
+      severity: "info",
+      category: "feature",
+      title: "Conversion opportunity detected",
+      description: `${activeFreeThatUsedQuota.length} free users have used 3+ credits — they're engaged but haven't upgraded. Consider targeted upgrade prompts or trial extensions.`,
+    });
+  }
+
+  // Sort: critical first, then warning, then info
+  const severityOrder = { critical: 0, warning: 1, info: 2 };
+  recommendations.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+
+  res.json({ recommendations, generatedAt: new Date().toISOString() });
+});
+
 export default router;

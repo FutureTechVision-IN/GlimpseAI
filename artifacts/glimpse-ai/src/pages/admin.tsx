@@ -1706,6 +1706,7 @@ interface AiPoolStats {
 function AiInsightsSection() {
   const [events, setEvents] = useState<AiEvt[]>([]);
   const [pool, setPool] = useState<AiPoolStats | null>(null);
+  const [recommendations, setRecommendations] = useState<any[]>([]);
   const { toast } = useToast();
   useEffect(() => {
     try {
@@ -1718,6 +1719,11 @@ function AiInsightsSection() {
       fetch("/api/admin/ai-pool", { headers: { Authorization: `Bearer ${token}` } })
         .then(r => r.ok ? r.json() : null)
         .then(d => { if (d) setPool(d); })
+        .catch(() => {});
+
+      fetch("/api/admin/ai-recommendations", { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d?.recommendations) setRecommendations(d.recommendations); })
         .catch(() => {});
     }
   }, []);
@@ -1788,6 +1794,60 @@ function AiInsightsSection() {
           </Button>
         ) : undefined}
       />
+
+      {/* Proactive AI Recommendations */}
+      {recommendations.length > 0 && (
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <BrainCircuit className="w-4 h-4 text-amber-400" />
+                Intelligence Recommendations
+              </CardTitle>
+              <Badge variant="outline" className="border-amber-500/40 text-amber-400 text-[10px]">
+                {recommendations.length} insight{recommendations.length !== 1 ? "s" : ""}
+              </Badge>
+            </div>
+            <CardDescription className="text-xs text-zinc-500">
+              Automated analysis of architecture, API health, user behavior, and enhancement performance
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {recommendations.map((rec: any) => {
+              const severityConfig = {
+                critical: { border: "border-red-500/30", bg: "bg-red-500/5", icon: <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />, badge: "border-red-500/40 text-red-400" },
+                warning: { border: "border-amber-500/30", bg: "bg-amber-500/5", icon: <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />, badge: "border-amber-500/40 text-amber-400" },
+                info: { border: "border-blue-500/30", bg: "bg-blue-500/5", icon: <TrendingUp className="w-4 h-4 text-blue-400 shrink-0" />, badge: "border-blue-500/40 text-blue-400" },
+              }[rec.severity as string] ?? { border: "border-zinc-700", bg: "bg-zinc-800", icon: null, badge: "border-zinc-600 text-zinc-400" };
+              return (
+                <div key={rec.id} className={`rounded-lg border ${severityConfig.border} ${severityConfig.bg} p-3`}>
+                  <div className="flex items-start gap-3">
+                    {severityConfig.icon}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-medium text-zinc-200">{rec.title}</span>
+                        <Badge variant="outline" className={`text-[9px] py-0 ${severityConfig.badge}`}>
+                          {rec.severity}
+                        </Badge>
+                        <Badge variant="outline" className="text-[9px] py-0 border-zinc-600 text-zinc-500">
+                          {rec.category}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-zinc-400 leading-relaxed">{rec.description}</p>
+                      {rec.action && (
+                        <p className="text-xs text-teal-400/80 mt-1.5 flex items-center gap-1">
+                          <ChevronRight className="w-3 h-3 shrink-0" />
+                          {rec.action}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
 
       {/* AI Provider Pool Health */}
       {pool && (
