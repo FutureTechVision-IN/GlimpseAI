@@ -7,3 +7,11 @@ artifacts/
 lib/
 node_modules/
 scripts/
+services/
+.glimpse/
+__pycache__/
+*.pth
+*.onnx
+*.safetensors
+.venv/
+*-BIPBABU-M-X9V3*
