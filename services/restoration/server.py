@@ -169,7 +169,7 @@ def get_codeformer():
         return _codeformer_restorer
 
     # Strategy 1: Direct CodeFormer-master integration (preferred — no file I/O)
-    cf_module_dir = Path(__file__).parent.parent / "enhancement_modules" / "CodeFormer-master"
+    cf_module_dir = Path(__file__).parent.parent.parent / "enhancement_modules" / "CodeFormer-master"
     if cf_module_dir.exists():
         try:
             # Add CodeFormer-master to sys.path so its basicsr/facelib imports work
@@ -179,6 +179,19 @@ def get_codeformer():
 
             from basicsr.utils.registry import ARCH_REGISTRY
             from basicsr.utils.download_util import load_file_from_url
+
+            # Import CodeFormer arch files directly using importlib so they
+            # register with the pip-installed basicsr's ARCH_REGISTRY without
+            # replacing the entire basicsr package (which is incomplete locally).
+            import importlib.util
+            for arch_name in ("vqgan_arch", "codeformer_arch"):
+                arch_file = cf_module_dir / "basicsr" / "archs" / f"{arch_name}.py"
+                spec = importlib.util.spec_from_file_location(
+                    f"basicsr.archs.{arch_name}", str(arch_file)
+                )
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules[f"basicsr.archs.{arch_name}"] = mod
+                spec.loader.exec_module(mod)
 
             net = ARCH_REGISTRY.get("CodeFormer")(
                 dim_embd=512, codebook_size=1024, n_head=8, n_layers=9,
@@ -756,12 +769,16 @@ def _available_capabilities() -> list[str]:
         caps.append("upscale_2x")
     if Path(MODEL_DIR / "RealESRGAN_x4plus.pth").exists():
         caps.append("upscale_4x")
-    # CodeFormer is a pip package, check import
-    try:
-        import codeformer  # noqa: F401
+    # CodeFormer: check direct module weights first, then pip package
+    cf_weights = Path(__file__).parent.parent.parent / "enhancement_modules" / "CodeFormer-master" / "weights" / "CodeFormer" / "codeformer.pth"
+    if cf_weights.exists():
         caps.append("codeformer")
-    except ImportError:
-        pass
+    else:
+        try:
+            import codeformer  # noqa: F401
+            caps.append("codeformer")
+        except ImportError:
+            pass
     if shutil.which("ffmpeg"):
         caps.append("video_restore")
     caps.append("face_analysis")
