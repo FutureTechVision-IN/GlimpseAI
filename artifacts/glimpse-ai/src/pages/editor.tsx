@@ -49,6 +49,7 @@ import {
   CheckCircle2,
   AlertCircle,
   ZoomIn,
+  ZoomOut,
   Palette,
   Film,
   Sun,
@@ -502,6 +503,11 @@ export default function Editor() {
   const [currentJobId, setCurrentJobId] = useState<number | null>(null);
   const [processStage, setProcessStage] = useState<ProcessStage>("idle");
 
+  // Image zoom
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const zoomIn = () => setZoomLevel((z) => Math.min(z + 0.25, 4));
+  const zoomOut = () => setZoomLevel((z) => Math.max(z - 0.25, 0.25));
+  const zoomReset = () => setZoomLevel(1);
   // Advanced controls
   const [transform, setTransform] = useState<TransformState>(DEFAULT_TRANSFORM);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
@@ -932,7 +938,7 @@ export default function Editor() {
 
   const resetAll = () => {
     setFile(null); setPreviewUrl(""); setBase64Data("");
-    setCurrentJobId(null); setProcessStage("idle");
+    setCurrentJobId(null); setProcessStage("idle"); setZoomLevel(1);
     setTransform(DEFAULT_TRANSFORM); setFilters(DEFAULT_FILTERS);
     setCropBox(DEFAULT_CROP); setCropEnabled(false);
     setStabilize(false); setDenoise(false);
@@ -1867,7 +1873,7 @@ export default function Editor() {
                           <div className="rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center">
                             {mediaType === "video"
                               ? <video src={previewUrl} controls className="max-w-full max-h-[40vh] object-contain" />
-                              : <img src={previewUrl} alt="Original" className="max-w-full max-h-[40vh] object-contain" />}
+                              : <img src={previewUrl} alt="Original" className="max-w-full max-h-[40vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
                           </div>
                         </div>
                         <div className="space-y-1">
@@ -1875,25 +1881,42 @@ export default function Editor() {
                           <div className="rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center">
                             {mediaType === "video"
                               ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[40vh] object-contain" />
-                              : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[40vh] object-contain" />}
+                              : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[40vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
                           </div>
                         </div>
                       </div>
                     ) : isCompleted && currentJob?.processedUrl && !showCompare ? (
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="overflow-auto max-h-[55vh] flex items-center justify-center">
                         {mediaType === "video"
                           ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[55vh] object-contain" />
-                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[55vh] object-contain" />
+                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[55vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />
                         }
                       </motion.div>
                     ) : (
                       mediaType === "video"
                         ? <video src={previewUrl} controls className="max-w-full max-h-[55vh] object-contain" />
-                        : <img src={previewUrl} alt="Original"
-                            className="max-w-full max-h-[55vh] object-contain transition-all duration-200"
-                            style={isProcessing ? { opacity: 0.5 } : previewStyle} />
+                        : <div className="overflow-auto max-h-[55vh] flex items-center justify-center">
+                            <img src={previewUrl} alt="Original"
+                              className="max-w-full max-h-[55vh] object-contain transition-all duration-200"
+                              style={{ ...(isProcessing ? { opacity: 0.5 } : previewStyle), transform: `scale(${zoomLevel})`, transformOrigin: "center" }} />
+                          </div>
                     )}
                   </div>
+
+                  {/* Zoom controls */}
+                  {mediaType !== "video" && (
+                    <div className="flex items-center justify-center gap-2 mt-1">
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-zinc-400 hover:text-white" onClick={zoomOut} disabled={zoomLevel <= 0.25}>
+                        <ZoomOut className="w-3.5 h-3.5" />
+                      </Button>
+                      <button onClick={zoomReset} className="text-[10px] text-zinc-500 hover:text-zinc-300 min-w-[40px] text-center tabular-nums">
+                        {Math.round(zoomLevel * 100)}%
+                      </button>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-zinc-400 hover:text-white" onClick={zoomIn} disabled={zoomLevel >= 4}>
+                        <ZoomIn className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  )}
 
                   {/* Bottom info bar */}
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">

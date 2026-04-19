@@ -231,9 +231,22 @@ async function callRestorationService(
 
   logger.info({ enhancementType, mode, restorationModel, serviceUrl: RESTORATION_SERVICE_URL }, "Calling restoration service");
 
+  // Downscale large images before sending to ML sidecar (CPU GFPGAN is too slow for >4MP)
+  const MAX_RESTORATION_DIM = 2048;
+  let sendBase64 = base64Data;
+  const inputBuf = Buffer.from(base64Data, "base64");
+  const meta = await sharp(inputBuf).metadata();
+  const maxDim = Math.max(meta.width ?? 0, meta.height ?? 0);
+  if (maxDim > MAX_RESTORATION_DIM) {
+    logger.info({ original: `${meta.width}x${meta.height}`, maxDim: MAX_RESTORATION_DIM }, "Downscaling image for ML inference");
+    const resized = await sharp(inputBuf)
+      .resize({ width: MAX_RESTORATION_DIM, height: MAX_RESTORATION_DIM, fit: "inside" })
+      .jpeg({ quality: 92 })
+      .toBuffer();
+    sendBase64 = resized.toString("base64");
+  }
+
   // 10-minute timeout for heavy ML models (GFPGAN, CodeFormer, Real-ESRGAN)
-  // Large images (up to 2048px) on CPU can take several minutes through
-  // face detection → GFPGAN → RealESRGAN pipeline.
   const ctrl = new AbortController();
   const timeoutId = setTimeout(() => ctrl.abort(), 10 * 60 * 1000);
 
@@ -244,7 +257,7 @@ async function callRestorationService(
       headers: { "Content-Type": "application/json" },
       signal: ctrl.signal,
       body: JSON.stringify({
-        image_base64: base64Data,
+        image_base64: sendBase64,
         mode,
         face_enhance: true,
         restoration_model: restorationModel,
@@ -757,51 +770,50 @@ export async function enhanceImage(
         pipeline = pipeline.normalize().sharpen({ sigma: 1.0 }).modulate({ brightness: 1.01 });
         break;
       }
-      // ── Local fallbacks for restoration types when sidecar is unavailable ──
+      // ── Local fallbacks for restoration types when sidecar is down ──
       case "old_photo_restore": {
-        // Aggressive local restoration: denoise → CLAHE-style normalize →
-        // sharpen → warm tint to simulate restored vintage photo
-        const stats = await analyzeImageStats(inputBuffer);
-        let restored: Buffer = inputBuffer;
-        // Step 1: Tone-map to recover dynamic range
-        if (stats.isDark || stats.isLowContrast) {
-          restored = await toneMap(restored, 22, 5);
-        }
-        pipeline = sharp(restored)
-          .normalize()
-          .median(3)           // denoise (remove grain/scratches)
-          .sharpen({ sigma: 1.8, m1: 1.5, m2: 0.5 })  // restore detail
-          .modulate({ brightness: 1.05, saturation: 1.15 })
-          .gamma(0.92)         // slight lift for faded photos
-          .tint({ r: 135, g: 128, b: 120 });  // warm tone for restored feel
+        // Denoise + CLAHE-style contrast + warmth + sharpening (mimics the Python pipeline)
+        pipeline = pipeline
+          .median(3)                                                    // scratch/noise suppression
+          .normalize()                                                  // adaptive contrast
+          .modulate({ brightness: 1.05, saturation: 1.15 })            // revive faded colors
+          .tint({ r: 135, g: 128, b: 118 })                           // slight warm tone
+          .sharpen({ sigma: 1.5, m1: 1.2, m2: 0.8 })                 // recover detail
+          .gamma(0.95);                                                 // lift shadows slightly
         break;
       }
       case "face_restore":
       case "face_restore_hd":
-      case "auto_face":
-      case "codeformer": {
-        // Local face-aware fallback: normalize → sharpen → slight portrait boost
+      case "auto_face": {
+        // Sharpening + skin tone warming + noise reduction
         pipeline = pipeline
+          .median(3)
           .normalize()
-          .sharpen({ sigma: 1.5, m1: 1.2, m2: 0.4 })
-          .modulate({ brightness: 1.03, saturation: 1.08 })
-          .gamma(0.95);
+          .modulate({ brightness: 1.02, saturation: 1.08 })
+          .sharpen({ sigma: 1.8, m1: 1.5, m2: 1.0 })
+          .gamma(0.97);
         break;
       }
       case "esrgan_upscale_2x": {
-        // Lanczos 2x upscale fallback
-        if (meta.width && meta.height) {
-          pipeline = pipeline.resize(meta.width * 2, meta.height * 2, { kernel: "lanczos3" });
-        }
-        pipeline = pipeline.sharpen({ sigma: 1.0 });
+        pipeline = pipeline
+          .resize({ width: (meta.width ?? 512) * 2, height: (meta.height ?? 512) * 2, kernel: "lanczos3" })
+          .sharpen({ sigma: 0.8, m1: 1.0, m2: 0.5 });
         break;
       }
       case "esrgan_upscale_4x": {
-        // Lanczos 4x upscale fallback
-        if (meta.width && meta.height) {
-          pipeline = pipeline.resize(meta.width * 4, meta.height * 4, { kernel: "lanczos3" });
-        }
-        pipeline = pipeline.sharpen({ sigma: 1.2 });
+        pipeline = pipeline
+          .resize({ width: (meta.width ?? 512) * 4, height: (meta.height ?? 512) * 4, kernel: "lanczos3" })
+          .sharpen({ sigma: 0.8, m1: 1.0, m2: 0.5 });
+        break;
+      }
+      case "codeformer": {
+        // Best effort local face cleanup
+        pipeline = pipeline
+          .median(3)
+          .normalize()
+          .modulate({ brightness: 1.02, saturation: 1.1 })
+          .sharpen({ sigma: 2.0, m1: 1.5, m2: 1.0 })
+          .gamma(0.96);
         break;
       }
       default: {
