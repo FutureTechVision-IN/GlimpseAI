@@ -74,6 +74,8 @@ router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res): Promise
       planId: u.planId,
       creditsUsed: u.creditsUsed,
       creditsLimit: u.creditsLimit,
+      dailyCreditsUsed: u.dailyCreditsUsed,
+      dailyLimit: u.dailyLimit,
       isSuspended: u.isSuspended,
       createdAt: u.createdAt,
     })),
@@ -99,19 +101,21 @@ router.get("/admin/users", requireAuth, requireAdmin, async (req: AuthRequest, r
   const search = params.success ? params.data.search : undefined;
   const offset = (page - 1) * limit;
 
-  let query = db.select().from(usersTable);
-  if (search) {
-    query = db.select().from(usersTable).where(
-      ilike(usersTable.email, `%${search}%`)
-    ) as typeof query;
-  }
+  // Fix: apply search filter to actual query (was previously silently ignored)
+  const users = search
+    ? await db.select().from(usersTable)
+        .where(ilike(usersTable.email, `%${search}%`))
+        .orderBy(desc(usersTable.createdAt))
+        .limit(limit)
+        .offset(offset)
+    : await db.select().from(usersTable)
+        .orderBy(desc(usersTable.createdAt))
+        .limit(limit)
+        .offset(offset);
 
-  const users = await db.select().from(usersTable)
-    .orderBy(desc(usersTable.createdAt))
-    .limit(limit)
-    .offset(offset);
-
-  const totalResult = await db.select({ c: count() }).from(usersTable);
+  const totalResult = search
+    ? await db.select({ c: count() }).from(usersTable).where(ilike(usersTable.email, `%${search}%`))
+    : await db.select({ c: count() }).from(usersTable);
   const total = totalResult[0]?.c ?? 0;
 
   res.json({
@@ -123,6 +127,8 @@ router.get("/admin/users", requireAuth, requireAdmin, async (req: AuthRequest, r
       planId: u.planId,
       creditsUsed: u.creditsUsed,
       creditsLimit: u.creditsLimit,
+      dailyCreditsUsed: u.dailyCreditsUsed,
+      dailyLimit: u.dailyLimit,
       isSuspended: u.isSuspended,
       createdAt: u.createdAt,
     })),
@@ -157,11 +163,28 @@ router.patch("/admin/users/:id/credits", requireAuth, requireAdmin, async (req: 
     return;
   }
 
-  await db.update(usersTable)
-    .set({ creditsLimit: parsed.data.credits })
-    .where(eq(usersTable.id, id));
+  const updateFields: Record<string, unknown> = { creditsLimit: parsed.data.credits };
+  // Optional daily limit adjustment
+  if (typeof (parsed.data as any).dailyLimit === "number") {
+    updateFields.dailyLimit = (parsed.data as any).dailyLimit;
+  }
 
-  res.json({ success: true, message: "Credits adjusted" });
+  const [updated] = await db.update(usersTable)
+    .set(updateFields)
+    .where(eq(usersTable.id, id))
+    .returning();
+
+  if (!updated) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  res.json({
+    success: true,
+    message: "Quota adjusted",
+    creditsLimit: updated.creditsLimit,
+    dailyLimit: updated.dailyLimit,
+  });
 });
 
 router.get("/admin/jobs", requireAuth, requireAdmin, async (req: AuthRequest, res): Promise<void> => {

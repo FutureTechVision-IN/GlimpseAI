@@ -44,6 +44,7 @@ const STANDARD_MODELS: Record<string, string> = {
   NVIDIA_NEMOTRON_3_SUPER_120B_A12B_FREE:   "nvidia/nemotron-3-super-120b-a12b:free",
   NVIDIA_NEMOTRON_3_NANO_30B_A3B_FREE:      "nvidia/nemotron-3-nano-30b-a3b:free",
   ZAI_GLM_4_5_AIR_FREE:                    "z-ai/glm-4.5-air:free",
+  OPENAI_GPT_OSS_120B_FREE:                "openai/gpt-oss-120b:free",
 };
 
 /** Combined map used when loading from env */

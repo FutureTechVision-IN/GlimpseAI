@@ -10,10 +10,19 @@ import {
   ListPresetsQueryParams,
 } from "@workspace/api-zod";
 import { enhanceImage } from "../lib/image-enhancer";
-import { aiProvider, feedbackAccumulator } from "../lib/ai-provider";
+import { aiProvider, feedbackAccumulator, type UserTier } from "../lib/ai-provider";
+import { formatApiError } from "../lib/api-errors";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+
+/** Determine user tier from their plan: paid plan → premium, no plan → free */
+function getUserTier(user: { planId: number | null }): UserTier {
+  return user.planId ? "premium" : "free";
+}
+
+/** Admins are exempt from all quota enforcement */
+const isAdmin = (req: AuthRequest) => req.userRole === "admin";
 
 /**
  * Convert a job row into a safe API response.
@@ -133,8 +142,8 @@ router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise
     user.dailyCreditsUsed = 0;
   }
 
-  // Enforce monthly limit
-  if (user.creditsUsed >= user.creditsLimit) {
+  // Enforce monthly limit (admins are exempt)
+  if (!isAdmin(req) && user.creditsUsed >= user.creditsLimit) {
     const isPaid = user.planId !== null;
     res.status(403).json({
       error: isPaid
@@ -146,10 +155,10 @@ router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise
     return;
   }
 
-  // Enforce daily limit (paid users: 20/day, free: no separate daily limit — they only get 5 total)
-  if (user.planId && user.dailyCreditsUsed >= user.dailyLimit) {
+  // Enforce daily limit — admins are exempt; free users have no separate daily limit
+  if (!isAdmin(req) && user.planId && user.dailyCreditsUsed >= user.dailyLimit) {
     res.status(403).json({
-      error: "Daily enhancement limit reached (20/day). Come back tomorrow or upgrade your plan.",
+      error: "Daily enhancement limit reached. Come back tomorrow or upgrade your plan.",
       code: "QUOTA_EXCEEDED",
       quotaType: "daily",
     });
@@ -220,9 +229,12 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     else if (rawB64.startsWith("UklGR")) mimeType = "image/webp";
 
     // Get AI guidance from LLM vision models (non-blocking, with timeout fallback)
+    // Pass user tier so free users don't consume Gemini keys
+    const [enhUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
+    const userTier = enhUser ? getUserTier(enhUser) : "free";
     let aiGuidance = null;
     try {
-      aiGuidance = await aiProvider.getEnhancementGuidance(rawB64, mimeType, enhancementType);
+      aiGuidance = await aiProvider.getEnhancementGuidance(rawB64, mimeType, enhancementType, userTier);
       if (aiGuidance) {
         logger.info({ source: aiGuidance.source, type: enhancementType }, "AI guidance acquired for enhancement");
       }
@@ -274,9 +286,28 @@ router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promis
   const mimeType = job.base64Data.startsWith("iVBOR") ? "image/png"
     : job.base64Data.startsWith("UklGR") ? "image/webp" : "image/jpeg";
 
+  // Determine user tier for tier-aware AI routing
+  const [analyzeUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
+  const userTier = analyzeUser ? getUserTier(analyzeUser) : "free";
+
   try {
-    const result = await aiProvider.analyzeImage(job.base64Data, mimeType);
+    const result = await aiProvider.analyzeImage(job.base64Data, mimeType, userTier);
     if (result) {
+      // If AI failed and we have a failure cause, format error for user/admin
+      if (result.failureCause) {
+        const apiErr = formatApiError({
+          cause: result.failureCause,
+          provider: "all",
+          userRole: req.userRole,
+        });
+        // Still return the local analysis result, but attach warning
+        res.json({
+          ...result,
+          warning: apiErr.error,
+          ...(apiErr.adminInsight ? { adminInsight: apiErr.adminInsight } : {}),
+        });
+        return;
+      }
       res.json(result);
       return;
     }

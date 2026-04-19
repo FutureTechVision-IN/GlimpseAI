@@ -4,6 +4,7 @@ import { db, usersTable, plansTable } from "@workspace/db";
 import { logger } from "./logger";
 import { providerKeyManager } from "./provider-key-manager";
 import { aiProvider } from "./ai-provider";
+import { loadSecrets } from "./key-vault";
 
 const ADMIN_ACCOUNTS = [
   {
@@ -46,6 +47,9 @@ export async function ensureInitialAdmin(): Promise<void> {
 }
 
 export async function initProviderKeys(): Promise<void> {
+  // Load encrypted secrets if available (production), otherwise rely on .env
+  loadSecrets();
+
   // Load AI provider keys (OpenRouter + Gemini) for analysis
   aiProvider.loadFromEnv();
 

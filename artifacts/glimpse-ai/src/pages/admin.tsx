@@ -349,8 +349,14 @@ function UsersSection() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
-  const [creditDialog, setCreditDialog] = useState<{ userId: number; name: string } | null>(null);
+  const [creditDialog, setCreditDialog] = useState<{
+    userId: number;
+    name: string;
+    currentMonthly: number;
+    currentDaily: number;
+  } | null>(null);
   const [creditAmount, setCreditAmount] = useState("");
+  const [dailyAmount, setDailyAmount] = useState("");
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -367,12 +373,18 @@ function UsersSection() {
   const handleCredits = async () => {
     if (!creditDialog) return;
     const credits = parseInt(creditAmount, 10);
-    if (isNaN(credits) || credits < 0) { toast({ title: "Enter a valid credit limit", variant: "destructive" }); return; }
-    await creditMutation.mutateAsync({ id: creditDialog.userId, data: { credits } });
-    toast({ title: `Credits updated for ${creditDialog.name}` });
+    const daily = parseInt(dailyAmount, 10);
+    if (isNaN(credits) || credits < 0) { toast({ title: "Enter a valid monthly credit limit", variant: "destructive" }); return; }
+    // Send both monthly and daily (backend accepts dailyLimit as an extra field)
+    await creditMutation.mutateAsync({
+      id: creditDialog.userId,
+      data: { credits, ...(isNaN(daily) ? {} : { dailyLimit: daily }) } as any,
+    });
+    toast({ title: `Quota updated for ${creditDialog.name}` });
     qc.invalidateQueries({ queryKey: getListAdminUsersQueryKey() });
     setCreditDialog(null);
     setCreditAmount("");
+    setDailyAmount("");
   };
 
   return (
@@ -395,16 +407,17 @@ function UsersSection() {
       {isLoading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-teal-500" /></div>
       ) : (
-        <Card className="bg-zinc-900 border-zinc-800">
+        <Card className="bg-zinc-900 border-zinc-800 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow className="border-zinc-800 hover:bg-transparent">
                 <TableHead className="text-zinc-500">User</TableHead>
                 <TableHead className="text-zinc-500">Role</TableHead>
                 <TableHead className="text-zinc-500">Plan</TableHead>
-                <TableHead className="text-zinc-500">Credits</TableHead>
+                <TableHead className="text-zinc-500">Monthly Quota</TableHead>
+                <TableHead className="text-zinc-500 hidden lg:table-cell">Daily Quota</TableHead>
                 <TableHead className="text-zinc-500">Status</TableHead>
-                <TableHead className="text-zinc-500">Joined</TableHead>
+                <TableHead className="text-zinc-500 hidden sm:table-cell">Joined</TableHead>
                 <TableHead className="text-zinc-500 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -413,10 +426,10 @@ function UsersSection() {
                 <TableRow key={user.id} className="border-zinc-800 hover:bg-zinc-800/40">
                   <TableCell>
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold text-teal-400">{user.name[0]}</div>
-                      <div>
-                        <div className="text-sm font-medium">{user.name}</div>
-                        <div className="text-xs text-zinc-500">{user.email}</div>
+                      <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold text-teal-400 shrink-0">{user.name[0]}</div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate max-w-[120px]">{user.name}</div>
+                        <div className="text-xs text-zinc-500 truncate max-w-[120px]">{user.email}</div>
                       </div>
                     </div>
                   </TableCell>
@@ -432,17 +445,31 @@ function UsersSection() {
                     <div className="text-sm">{user.creditsUsed} / {user.creditsLimit}</div>
                     <Progress value={user.creditsLimit > 0 ? (user.creditsUsed / user.creditsLimit) * 100 : 0} className="h-1 mt-1 w-16" />
                   </TableCell>
+                  <TableCell className="hidden lg:table-cell">
+                    {(user as any).dailyLimit ? (
+                      <>
+                        <div className="text-sm">{(user as any).dailyCreditsUsed ?? 0} / {(user as any).dailyLimit}</div>
+                        <Progress value={((user as any).dailyLimit) > 0 ? (((user as any).dailyCreditsUsed ?? 0) / (user as any).dailyLimit) * 100 : 0} className="h-1 mt-1 w-16" />
+                      </>
+                    ) : (
+                      <span className="text-xs text-zinc-600">—</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     {user.isSuspended
                       ? <span className="text-xs text-rose-400 flex items-center gap-1"><XCircle className="w-3 h-3" /> Suspended</span>
                       : <span className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Active</span>}
                   </TableCell>
-                  <TableCell className="text-xs text-zinc-500">{new Date(user.createdAt).toLocaleDateString("en-IN")}</TableCell>
+                  <TableCell className="text-xs text-zinc-500 hidden sm:table-cell">{new Date(user.createdAt).toLocaleDateString("en-IN")}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
                       <Button size="sm" variant="ghost" className="text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 text-xs h-7 px-2"
-                        onClick={() => { setCreditDialog({ userId: user.id, name: user.name }); setCreditAmount(String(user.creditsLimit)); }}>
-                        <Key className="w-3 h-3 mr-1" /> Credits
+                        onClick={() => {
+                          setCreditDialog({ userId: user.id, name: user.name, currentMonthly: user.creditsLimit, currentDaily: (user as any).dailyLimit ?? 5 });
+                          setCreditAmount(String(user.creditsLimit));
+                          setDailyAmount(String((user as any).dailyLimit ?? 5));
+                        }}>
+                        <Key className="w-3 h-3 mr-1" /> Quota
                       </Button>
                       <Button size="sm" variant="ghost"
                         className={`text-xs h-7 px-2 ${user.isSuspended ? "text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10" : "text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10"}`}
@@ -455,7 +482,7 @@ function UsersSection() {
                 </TableRow>
               ))}
               {data?.users.length === 0 && (
-                <TableRow><TableCell colSpan={7} className="text-center py-12 text-zinc-500">No users found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-center py-12 text-zinc-500">No users found</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -471,20 +498,46 @@ function UsersSection() {
         </Card>
       )}
 
-      <Dialog open={!!creditDialog} onOpenChange={open => !open && setCreditDialog(null)}>
-        <DialogContent className="bg-zinc-900 border-zinc-800">
+      {/* Quota adjustment dialog — monthly + daily */}
+      <Dialog open={!!creditDialog} onOpenChange={open => { if (!open) { setCreditDialog(null); setCreditAmount(""); setDailyAmount(""); } }}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 max-w-sm w-full">
           <DialogHeader>
-            <DialogTitle>Adjust Credit Limit</DialogTitle>
-            <DialogDescription className="text-zinc-400">Set the monthly credit limit for {creditDialog?.name}</DialogDescription>
+            <DialogTitle>Adjust Quota</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Manually override usage limits for <span className="text-white font-medium">{creditDialog?.name}</span>.
+              Admins are exempt from these limits themselves.
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 py-2">
-            <Label>Credit limit (per month)</Label>
-            <Input type="number" value={creditAmount} onChange={e => setCreditAmount(e.target.value)} className="bg-zinc-800 border-zinc-700" placeholder="e.g. 50" />
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-sm text-zinc-300">Monthly credit limit</Label>
+              <Input
+                type="number"
+                min={0}
+                value={creditAmount}
+                onChange={e => setCreditAmount(e.target.value)}
+                className="bg-zinc-800 border-zinc-700"
+                placeholder="e.g. 600"
+              />
+              <p className="text-xs text-zinc-500">Current: {creditDialog?.currentMonthly ?? "—"} credits/month</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm text-zinc-300">Daily credit limit</Label>
+              <Input
+                type="number"
+                min={0}
+                value={dailyAmount}
+                onChange={e => setDailyAmount(e.target.value)}
+                className="bg-zinc-800 border-zinc-700"
+                placeholder="e.g. 20"
+              />
+              <p className="text-xs text-zinc-500">Current: {creditDialog?.currentDaily ?? "—"} credits/day</p>
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" className="border-zinc-700" onClick={() => setCreditDialog(null)}>Cancel</Button>
+            <Button variant="outline" className="border-zinc-700" onClick={() => { setCreditDialog(null); setCreditAmount(""); setDailyAmount(""); }}>Cancel</Button>
             <Button className="bg-teal-600 hover:bg-teal-500" onClick={handleCredits} disabled={creditMutation.isPending}>
-              {creditMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
+              {creditMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1923,6 +1976,7 @@ const navItems: { id: AdminSection; label: string; icon: React.ElementType; badg
 
 export default function Admin() {
   const [section, setSection] = useState<AdminSection>("overview");
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
 
@@ -1931,51 +1985,91 @@ export default function Admin() {
     navigate("/");
   };
 
+  const AdminNav = ({ onNavClick }: { onNavClick?: () => void }) => (
+    <>
+      <div className="p-5 border-b border-zinc-800">
+        <div className="flex items-center gap-2">
+          <Shield className="w-5 h-5 text-teal-400" />
+          <span className="font-semibold text-sm">Admin Console</span>
+        </div>
+        <p className="text-xs text-zinc-500 mt-1 truncate">{user?.email}</p>
+      </div>
+      <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+        {navItems.map(item => (
+          <button
+            key={item.id}
+            onClick={() => { setSection(item.id); onNavClick?.(); }}
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+              section === item.id
+                ? "bg-teal-600/20 text-teal-300 font-medium"
+                : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+            }`}
+          >
+            <item.icon className="w-4 h-4 shrink-0" />
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-zinc-800 space-y-1">
+        <button onClick={() => { navigate("/dashboard"); onNavClick?.(); }} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors">
+          <LayoutDashboard className="w-4 h-4" /> Back to Dashboard
+        </button>
+        <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-rose-400 hover:bg-rose-500/10 transition-colors">
+          <LogOut className="w-4 h-4" /> Sign Out
+        </button>
+      </div>
+    </>
+  );
+
   return (
     <div className="min-h-screen bg-black flex">
-      {/* Sidebar */}
-      <aside className="w-60 shrink-0 border-r border-zinc-800 bg-zinc-950 flex flex-col">
-        <div className="p-5 border-b border-zinc-800">
-          <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-teal-400" />
-            <span className="font-semibold text-sm">Admin Console</span>
-          </div>
-          <p className="text-xs text-zinc-500 mt-1 truncate">{user?.email}</p>
-        </div>
+      {/* Desktop sidebar (md+) */}
+      <aside className="w-60 shrink-0 border-r border-zinc-800 bg-zinc-950 flex-col hidden md:flex">
+        <AdminNav />
+      </aside>
 
-        <nav className="flex-1 p-3 space-y-1">
-          {navItems.map(item => (
-            <button
-              key={item.id}
-              onClick={() => setSection(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
-                section === item.id
-                  ? "bg-teal-600/20 text-teal-300 font-medium"
-                  : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-              }`}
-            >
-              <item.icon className="w-4 h-4 shrink-0" />
-              {item.label}
-            </button>
-          ))}
-        </nav>
+      {/* Mobile drawer overlay */}
+      {drawerOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
+          onClick={() => setDrawerOpen(false)}
+          aria-hidden="true"
+        />
+      )}
 
-        <div className="p-3 border-t border-zinc-800 space-y-1">
-          <button onClick={() => navigate("/dashboard")} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors">
-            <LayoutDashboard className="w-4 h-4" /> Back to Dashboard
-          </button>
-          <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-rose-400 hover:bg-rose-500/10 transition-colors">
-            <LogOut className="w-4 h-4" /> Sign Out
-          </button>
-        </div>
+      {/* Mobile sliding drawer */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-zinc-950 border-r border-zinc-800 flex flex-col transition-transform duration-300 ease-in-out md:hidden ${drawerOpen ? "translate-x-0" : "-translate-x-full"}`}
+        aria-label="Admin navigation"
+      >
+        <button
+          onClick={() => setDrawerOpen(false)}
+          className="absolute top-4 right-4 text-zinc-400 hover:text-white p-1 rounded hover:bg-zinc-800 transition-colors"
+          aria-label="Close menu"
+        >
+          <span className="text-lg leading-none">×</span>
+        </button>
+        <AdminNav onNavClick={() => setDrawerOpen(false)} />
       </aside>
 
       {/* Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Topbar */}
-        <header className="h-14 border-b border-zinc-800 px-6 flex items-center justify-between bg-zinc-950/50 backdrop-blur shrink-0">
-          <div className="flex items-center gap-2 text-sm text-zinc-400">
-            {navItems.find(n => n.id === section)?.label}
+        <header className="h-14 border-b border-zinc-800 px-4 sm:px-6 flex items-center justify-between bg-zinc-950/50 backdrop-blur shrink-0">
+          <div className="flex items-center gap-3">
+            {/* Mobile hamburger */}
+            <button
+              onClick={() => setDrawerOpen(true)}
+              className="md:hidden text-zinc-400 hover:text-white p-1 rounded hover:bg-zinc-800 transition-colors"
+              aria-label="Open admin navigation"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <span className="text-sm text-zinc-400">
+              {navItems.find(n => n.id === section)?.label}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -1985,7 +2079,7 @@ export default function Admin() {
 
         {/* Page content */}
         <ScrollArea className="flex-1">
-          <div className="p-8 max-w-[1200px] mx-auto">
+          <div className="p-4 sm:p-6 lg:p-8 max-w-[1200px] mx-auto">
             {section === "overview" && <Overview />}
             {section === "users" && <UsersSection />}
             {section === "jobs" && <JobsSection />}

@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { type ApiFailureCause } from "./api-errors";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,6 +16,8 @@ interface ProviderKey {
   label: string;           // human-readable key label for diagnostics
 }
 
+export type UserTier = "free" | "premium";
+
 export interface AnalysisResult {
   description: string;
   suggestedEnhancement: string;
@@ -22,6 +25,8 @@ export interface AnalysisResult {
   detectedSubjects: string[];
   confidence: number;
   analysisSource: "local" | "openrouter" | "gemini";  // which engine produced this
+  /** Set when AI call failed — only populated with cause info, never raw key data */
+  failureCause?: ApiFailureCause;
 }
 
 /**
@@ -108,6 +113,8 @@ const OPENROUTER_VISION_MODELS = [
   "bytedance/seedance-2.0",              // video+image capable
   "alibaba/wan-2.7",                     // video enhancement model
   // Standard tier — proven free-tier models
+  "openai/gpt-oss-120b:free",            // large free model
+  "nvidia/nemotron-3-super-120b-a12b:free", // 120b vision-language
   "nvidia/nemotron-nano-12b-v2-vl:free", // vision-language, confirmed available
   "google/gemma-4-31b-it:free",          // gemma 4 with image support
   "google/gemma-4-26b-a4b-it:free",      // smaller gemma 4 variant
@@ -190,11 +197,20 @@ class AIProviderService {
     logger.info({ openrouterKeys: orCount, geminiKeys: gemCount }, "AI provider keys loaded");
   }
 
-  /** Round-robin with smart circuit breaker — skips daily-limited and cooled-down keys */
-  private getNextKey(preferProvider?: "openrouter" | "gemini"): ProviderKey | null {
+  /**
+   * Round-robin with smart circuit breaker and tier-aware filtering.
+   *
+   * Tier logic:
+   *   - "free" users  → OpenRouter keys ONLY (no Gemini fallback)
+   *   - "premium"     → OpenRouter first, Gemini as last resort
+   *   - undefined     → legacy: all keys available (backward compat)
+   */
+  private getNextKey(preferProvider?: "openrouter" | "gemini", userTier?: UserTier): ProviderKey | null {
     const now = Date.now();
     const available = this.keys.filter(k => {
       if (preferProvider && k.provider !== preferProvider) return false;
+      // Tier restriction: free users never get Gemini keys
+      if (userTier === "free" && k.provider === "gemini") return false;
       // Skip daily-limited keys until cooldown expires
       if (k.dailyLimitHit && now < k.cooldownUntil) return false;
       // Reset transient circuit-breaker cooldowns
@@ -206,11 +222,26 @@ class AIProviderService {
       return true;
     });
     if (available.length === 0) {
-      if (preferProvider) return this.getNextKey(); // widen search
+      // Widen search: drop provider preference but keep tier restriction
+      if (preferProvider) return this.getNextKey(undefined, userTier);
       return null;
     }
     this.roundRobinIndex = (this.roundRobinIndex + 1) % available.length;
     return available[this.roundRobinIndex];
+  }
+
+  /** Check if any keys are available for a given tier (used for error classification) */
+  hasAvailableKeys(userTier?: UserTier): { openrouter: boolean; gemini: boolean } {
+    const now = Date.now();
+    const isAvailable = (k: ProviderKey) => {
+      if (k.dailyLimitHit && now < k.cooldownUntil) return false;
+      if (k.failCount >= this.MAX_FAILURES && now < k.cooldownUntil) return false;
+      return true;
+    };
+    return {
+      openrouter: this.keys.some(k => k.provider === "openrouter" && isAvailable(k)),
+      gemini: userTier !== "free" && this.keys.some(k => k.provider === "gemini" && isAvailable(k)),
+    };
   }
 
   /** Mark key failed — distinguishes daily cap from transient failures */
@@ -388,36 +419,47 @@ class AIProviderService {
 
   // ---------------------------------------------------------------------------
   // Main entry — local analysis first (high confidence), then AI enrichment
+  // userTier controls which provider pools are available.
   // ---------------------------------------------------------------------------
-  async analyzeImage(base64Data: string, mimeType: string): Promise<AnalysisResult | null> {
+  async analyzeImage(base64Data: string, mimeType: string, userTier?: UserTier): Promise<AnalysisResult | null> {
     // 1. Always run local analysis first — produces 0.75–0.92 confidence regardless of API status
     const localResult = await this.localAnalyzeImage(base64Data, mimeType);
 
     // 2. Try to enrich with AI vision (better description, detects unseen context)
     const thumb = await this.createAnalysisThumbnail(base64Data, mimeType);
-    const aiResult = await this.tryOpenRouterAnalysis(thumb.data, thumb.mime) ||
-                     await this.tryGeminiAnalysis(thumb.data, thumb.mime);
+    const aiResult = await this.tryOpenRouterAnalysis(thumb.data, thumb.mime, userTier);
 
-    if (aiResult) {
+    // 3. Gemini fallback — only for premium users
+    const geminiResult = !aiResult && userTier !== "free"
+      ? await this.tryGeminiAnalysis(thumb.data, thumb.mime)
+      : null;
+
+    const bestAi = aiResult ?? geminiResult;
+
+    if (bestAi) {
       // Merge: use AI description but keep local confidence if it's higher
       return {
-        ...aiResult,
-        confidence: Math.max(aiResult.confidence, localResult.confidence - 0.05),
-        analysisSource: aiResult.analysisSource,
+        ...bestAi,
+        confidence: Math.max(bestAi.confidence, localResult.confidence - 0.05),
+        analysisSource: bestAi.analysisSource,
         // If AI doesn't detect subjects, use local
-        detectedSubjects: aiResult.detectedSubjects.length > 0 ? aiResult.detectedSubjects : localResult.detectedSubjects,
+        detectedSubjects: bestAi.detectedSubjects.length > 0 ? bestAi.detectedSubjects : localResult.detectedSubjects,
       };
     }
 
-    // 3. Return local analysis — confident result even without API
+    // 4. Return local analysis — confident result even without API
+    // Attach failure cause if all API keys are exhausted
+    if (!this.hasAvailableKeys(userTier).openrouter) {
+      localResult.failureCause = userTier === "free" ? "TIER_RESTRICTED" : "ALL_KEYS_EXHAUSTED";
+    }
     return localResult;
   }
 
   // ---------------------------------------------------------------------------
   // OpenRouter — tries vision models in priority order
   // ---------------------------------------------------------------------------
-  private async tryOpenRouterAnalysis(base64Data: string, mimeType: string): Promise<AnalysisResult | null> {
-    const pk = this.getNextKey("openrouter");
+  private async tryOpenRouterAnalysis(base64Data: string, mimeType: string, userTier?: UserTier): Promise<AnalysisResult | null> {
+    const pk = this.getNextKey("openrouter", userTier);
     if (!pk) return null;
 
     const baseUrl = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
@@ -545,6 +587,7 @@ class AIProviderService {
     base64Data: string,
     mimeType: string,
     enhancementType: string,
+    userTier?: UserTier,
   ): Promise<AIEnhancementGuidance | null> {
     const thumb = await this.createAnalysisThumbnail(base64Data, mimeType);
 
@@ -566,9 +609,9 @@ Rules:
 - vignetteStrength: 0-0.4 (0 = none)
 - Be aggressive but tasteful. Each value should create a VISIBLE difference.`;
 
-    // Try OpenRouter first, then Gemini
-    const result = await this.tryOpenRouterGuidance(thumb.data, thumb.mime, prompt)
-      ?? await this.tryGeminiGuidance(thumb.data, thumb.mime, prompt);
+    // Try OpenRouter first, then Gemini (premium only)
+    const result = await this.tryOpenRouterGuidance(thumb.data, thumb.mime, prompt, userTier)
+      ?? (userTier !== "free" ? await this.tryGeminiGuidance(thumb.data, thumb.mime, prompt) : null);
 
     if (result) {
       logger.info({
@@ -584,8 +627,8 @@ Rules:
     return null;
   }
 
-  private async tryOpenRouterGuidance(base64Data: string, mimeType: string, prompt: string): Promise<AIEnhancementGuidance | null> {
-    const pk = this.getNextKey("openrouter");
+  private async tryOpenRouterGuidance(base64Data: string, mimeType: string, prompt: string, userTier?: UserTier): Promise<AIEnhancementGuidance | null> {
+    const pk = this.getNextKey("openrouter", userTier);
     if (!pk) return null;
 
     const baseUrl = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
