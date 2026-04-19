@@ -545,6 +545,20 @@ export default function Editor() {
   // AI Power-Up panel (below image)
   const [showPowerUp, setShowPowerUp] = useState(false);
 
+  // Real-time progress tracking
+  const [processingStartTime, setProcessingStartTime] = useState<number | null>(null);
+  const [progressPct, setProgressPct] = useState(0);
+  const ESTIMATED_MS: Record<string, number> = {
+    auto: 8000, portrait: 8000, filter: 6000, color: 7000,
+    upscale: 14000, upscale_4x: 22000, face_restore: 45000,
+    codeformer: 60000, hybrid: 90000, auto_face: 55000,
+    lighting_enhance: 8000, color_grade_cinematic: 8000,
+    color_grade_warm: 7000, color_grade_cool: 7000,
+    esrgan_upscale_2x: 32000, esrgan_upscale_4x: 50000,
+    old_photo_restore: 28000, skin_retouch: 10000, beauty: 10000,
+    blur_background: 12000, stabilize: 35000, video_restore: 60000,
+  };
+
   // Combo enhancement: upscale after primary enhancement
   const [upscaleAfter, setUpscaleAfter] = useState<"upscale" | "upscale_4x" | null>(null);
   const upscaleChainRef = useRef(false); // tracks whether we're in chained upscale step
@@ -950,6 +964,26 @@ export default function Editor() {
     setUpscaleAfter(null); upscaleChainRef.current = false;
   };
 
+  // Drive progress percentage from elapsed time while processing
+  useEffect(() => {
+    if (processStage === "processing") {
+      const t0 = Date.now();
+      setProcessingStartTime(t0);
+      setProgressPct(5);
+      const estimated = ESTIMATED_MS[enhancementType] ?? 15000;
+      const timer = setInterval(() => {
+        const elapsed = Date.now() - t0;
+        setProgressPct(Math.min(94, Math.round((elapsed / estimated) * 89 + 5)));
+      }, 300);
+      return () => clearInterval(timer);
+    } else {
+      setProcessingStartTime(null);
+      if (processStage === "completed") setProgressPct(100);
+      else setProgressPct(0);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processStage, enhancementType]);
+
   const isProcessing = processStage === "uploading" || processStage === "processing";
   const isCompleted = processStage === "completed";
   const hasEdits = transform.rotation !== 0 || transform.flipH || transform.flipV
@@ -992,10 +1026,10 @@ export default function Editor() {
       <TooltipProvider delayDuration={200}>
         {showOnboarding && <OnboardingWalkthrough onComplete={completeOnboarding} />}
 
-        <div className="flex flex-col lg:flex-row h-full min-h-[calc(100vh-4rem)]">
+        <div className="flex flex-col lg:flex-row h-[calc(100vh-4rem)] overflow-hidden">
 
           {/* Sidebar */}
-          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-10 max-h-[50vh] lg:max-h-none overflow-hidden">
+          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-10 h-[40vh] lg:h-full overflow-hidden">
             <div className="p-3 border-b border-white/10">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="font-semibold text-base flex items-center gap-2">
@@ -1140,7 +1174,7 @@ export default function Editor() {
                 {editorMode === "simple" && (
                   <div className="space-y-3">
                     <div className="space-y-1.5">
-                      <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
+                      <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">AI Enhancements</Label>
                       <div className="grid grid-cols-5 gap-1.5">
                         {SIMPLE_PRESETS.map((p) => {
                           const locked = isFeatureLocked(p.type);
@@ -1242,7 +1276,7 @@ export default function Editor() {
 
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
+                        <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5"><Palette className="w-3 h-3" />Filter Gallery</Label>
                         <button onClick={() => setShowAllFilters(!showAllFilters)} className="text-[11px] text-teal-500 hover:text-teal-400">
                           {showAllFilters ? "Less" : `All ${FILTER_PRESETS.length}`}
                         </button>
@@ -1699,7 +1733,12 @@ export default function Editor() {
                     {processStage === "failed"    && <AlertCircle  className="w-3.5 h-3.5" />}
                     <span className="text-xs">{processStage === "processing" && currentJob?.errorMessage ? currentJob.errorMessage : stageInfo.label}</span>
                     {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">{upscaleAfter ? "step 1/3" : "step 1/2"}</span>}
-                    {processStage === "processing" && <span className="text-xs text-zinc-500 ml-auto">{upscaleChainRef.current ? (upscaleAfter ? "step 3/3 — upscaling" : "step 2/2") : (upscaleAfter ? "step 2/3 — enhancing" : "step 2/2")}</span>}
+                    {processStage === "processing" && (
+                      <div className="ml-auto flex items-center gap-2">
+                        <span className="text-xs text-teal-400 tabular-nums font-medium">{progressPct}%</span>
+                        <span className="text-xs text-zinc-500">{upscaleChainRef.current ? (upscaleAfter ? "step 3/3" : "step 2/2") : (upscaleAfter ? "step 2/3" : "step 2/2")}</span>
+                      </div>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1717,8 +1756,8 @@ export default function Editor() {
           </aside>
 
           {/* Main Preview */}
-          <main className="flex-1 bg-zinc-900 relative flex flex-col">
-            <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+          <main className="flex-1 bg-zinc-900 relative flex flex-col h-full overflow-hidden">
+            <div className="flex-1 flex items-center justify-center p-4 min-h-0 overflow-hidden">
               {!file ? (
                 <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full">
                   <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-all cursor-pointer relative overflow-hidden group">
@@ -1743,7 +1782,7 @@ export default function Editor() {
                   </Card>
                 </motion.div>
               ) : (
-                <div className="relative w-full h-full flex flex-col items-center justify-center gap-3">
+                <div className="relative w-full h-full flex flex-col items-center justify-center gap-2 overflow-hidden">
                   {/* Top toolbar */}
                   <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between p-2">
                     <div className="flex items-center gap-2">
@@ -1816,7 +1855,7 @@ export default function Editor() {
                   </div>
 
                   {/* Image preview */}
-                  <div className="relative max-w-[calc(100%-2rem)] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
+                  <div className="relative max-w-[calc(100%-2rem)] max-h-[calc(100%-9rem)] flex-1 min-h-0 rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
                     <AnimatePresence>
                       {isProcessing && (
                         <motion.div
@@ -1830,13 +1869,14 @@ export default function Editor() {
                             <Sparkles className="w-12 h-12 text-teal-500 mb-4" />
                           </motion.div>
                           <p className="text-lg font-semibold">{processStage === "uploading" ? "Uploading..." : (upscaleChainRef.current ? "Upscaling Image..." : "Applying AI Magic...")}</p>
-                          <p className="text-sm text-zinc-400 mt-1">This may take a few moments</p>
-                          <div className="mt-4 w-48 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                          <p className="text-sm text-zinc-400 mt-1">
+                            {processStage === "processing" ? `Enhancement ${progressPct}%` : "Preparing..."}
+                          </p>
+                          <div className="mt-4 w-48 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                             <motion.div
-                              className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 rounded-full"
-                              animate={{ x: ["-100%", "100%"] }}
-                              transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
-                              style={{ width: "60%" }}
+                              className="h-full bg-gradient-to-r from-teal-500 to-cyan-400 rounded-full"
+                              animate={{ width: `${processStage === "uploading" ? 15 : progressPct}%` }}
+                              transition={{ duration: 0.4, ease: "easeOut" }}
                             />
                           </div>
                         </motion.div>
@@ -1869,37 +1909,37 @@ export default function Editor() {
                     </AnimatePresence>
 
                     {splitCompare && isCompleted && currentJob?.processedUrl ? (
-                      <div className="grid grid-cols-2 gap-3 w-full">
-                        <div className="space-y-1">
-                          <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Original</span>
-                          <div className="rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center">
+                      <div className="grid grid-cols-2 gap-3 w-full h-full">
+                        <div className="space-y-1 flex flex-col min-h-0">
+                          <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider shrink-0">Original</span>
+                          <div className="flex-1 min-h-0 rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center">
                             {mediaType === "video"
-                              ? <video src={previewUrl} controls className="max-w-full max-h-[40vh] object-contain" />
-                              : <img src={previewUrl} alt="Original" className="max-w-full max-h-[40vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
+                              ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
+                              : <img src={previewUrl} alt="Original" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
                           </div>
                         </div>
-                        <div className="space-y-1">
-                          <span className="text-[10px] font-medium text-teal-400 uppercase tracking-wider">Enhanced</span>
-                          <div className="rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center">
+                        <div className="space-y-1 flex flex-col min-h-0">
+                          <span className="text-[10px] font-medium text-teal-400 uppercase tracking-wider shrink-0">Enhanced</span>
+                          <div className="flex-1 min-h-0 rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center">
                             {mediaType === "video"
-                              ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[40vh] object-contain" />
-                              : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[40vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
+                              ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
+                              : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
                           </div>
                         </div>
                       </div>
                     ) : isCompleted && currentJob?.processedUrl && !showCompare ? (
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="overflow-auto max-h-[55vh] flex items-center justify-center">
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="overflow-auto w-full h-full flex items-center justify-center">
                         {mediaType === "video"
-                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[55vh] object-contain" />
-                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[55vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />
+                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
+                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />
                         }
                       </motion.div>
                     ) : (
                       mediaType === "video"
-                        ? <video src={previewUrl} controls className="max-w-full max-h-[55vh] object-contain" />
-                        : <div className="overflow-auto max-h-[55vh] flex items-center justify-center">
+                        ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
+                        : <div className="overflow-auto w-full h-full flex items-center justify-center">
                             <img src={previewUrl} alt="Original"
-                              className="max-w-full max-h-[55vh] object-contain transition-all duration-200"
+                              className="max-w-full max-h-full object-contain transition-all duration-200"
                               style={{ ...(isProcessing ? { opacity: 0.5 } : previewStyle), transform: `scale(${zoomLevel})`, transformOrigin: "center" }} />
                           </div>
                     )}
