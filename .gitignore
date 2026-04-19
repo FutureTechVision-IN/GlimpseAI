@@ -3,6 +3,8 @@
 .DS_Store
 .env
 .env.*
+# Source code directories (not part of gh-pages static build)
+.github/
 artifacts/
 lib/
 node_modules/
