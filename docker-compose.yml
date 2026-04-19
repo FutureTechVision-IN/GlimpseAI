@@ -60,11 +60,21 @@ services:
     environment:
       RESTORATION_PORT: 7860
       GPU_ID: "0"
+      # Enable PyTorch optimizations
+      TORCH_CUDNN_V8_API_ENABLED: "1"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
     volumes:
       - ./services/restoration/models:/app/models
       - ./services/restoration/gfpgan/weights:/app/gfpgan/weights
     ports:
       - "7860:7860"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         reservations:

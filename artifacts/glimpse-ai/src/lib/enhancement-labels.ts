@@ -38,6 +38,7 @@ const ENHANCEMENT_META: Record<string, EnhancementMeta> = {
   face_restore: { label: "Face Restore", shortLabel: "Face AI", color: "text-emerald-400", bgColor: "bg-emerald-500/10", borderColor: "border-emerald-500/30", category: "restoration" },
   face_restore_hd: { label: "Face Restore HD", shortLabel: "Face HD", color: "text-emerald-300", bgColor: "bg-emerald-500/10", borderColor: "border-emerald-500/30", category: "restoration" },
   codeformer: { label: "CodeFormer", shortLabel: "CF", color: "text-emerald-200", bgColor: "bg-emerald-500/10", borderColor: "border-emerald-500/30", category: "restoration" },
+  hybrid: { label: "Hybrid Restore", shortLabel: "Hybrid", color: "text-emerald-100", bgColor: "bg-emerald-500/10", borderColor: "border-emerald-500/30", category: "restoration" },
   auto_face: { label: "Auto Face AI", shortLabel: "Auto Face", color: "text-green-400", bgColor: "bg-green-500/10", borderColor: "border-green-500/30", category: "restoration" },
   esrgan_upscale_2x: { label: "ESRGAN 2×", shortLabel: "SR 2×", color: "text-cyan-400", bgColor: "bg-cyan-500/10", borderColor: "border-cyan-500/30", category: "restoration" },
   esrgan_upscale_4x: { label: "ESRGAN 4×", shortLabel: "SR 4×", color: "text-cyan-300", bgColor: "bg-cyan-500/10", borderColor: "border-cyan-500/30", category: "restoration" },

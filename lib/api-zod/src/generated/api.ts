@@ -217,6 +217,7 @@ export const EnhanceMediaBody = zod.object({
     "face_restore",
     "face_restore_hd",
     "codeformer",
+    "hybrid",
     "auto_face",
     "esrgan_upscale_2x",
     "esrgan_upscale_4x",

@@ -33,6 +33,7 @@ export const EnhanceMediaBodyEnhancementType = {
   face_restore: "face_restore",
   face_restore_hd: "face_restore_hd",
   codeformer: "codeformer",
+  hybrid: "hybrid",
   auto_face: "auto_face",
   esrgan_upscale_2x: "esrgan_upscale_2x",
   esrgan_upscale_4x: "esrgan_upscale_4x",

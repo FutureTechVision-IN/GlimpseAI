@@ -9,7 +9,7 @@ import {
   ListMediaJobsQueryParams,
   ListPresetsQueryParams,
 } from "@workspace/api-zod";
-import { enhanceImage, callVideoRestoration } from "../lib/image-enhancer";
+import { enhanceImage, callVideoRestoration, callBatchRestoration } from "../lib/image-enhancer";
 import { aiProvider, feedbackAccumulator, type UserTier } from "../lib/ai-provider";
 import { formatApiError } from "../lib/api-errors";
 import { checkTierAccess, resolvePlanSlug } from "../lib/tier-config";
@@ -559,6 +559,116 @@ router.post("/media/feedback", requireAuth, async (req, res): Promise<void> => {
   }
   feedbackAccumulator.record(enhancement, action as "applied" | "dismissed");
   res.json({ ok: true, stats: feedbackAccumulator.getStats()[enhancement] });
+});
+
+// ─── Batch Enhancement ─────────────────────────────────────────
+// POST /media/enhance-batch — process multiple images in one call (premium only)
+router.post("/media/enhance-batch", requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const { jobIds, enhancementType, settings } = req.body as {
+    jobIds?: number[];
+    enhancementType?: string;
+    settings?: Record<string, unknown>;
+  };
+
+  if (!jobIds || !Array.isArray(jobIds) || jobIds.length === 0) {
+    res.status(400).json({ error: "jobIds array is required" });
+    return;
+  }
+  if (jobIds.length > 10) {
+    res.status(400).json({ error: "Maximum 10 images per batch" });
+    return;
+  }
+  if (!enhancementType) {
+    res.status(400).json({ error: "enhancementType is required" });
+    return;
+  }
+
+  // Tier check
+  if (!isAdmin(req)) {
+    const [batchUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
+    if (!batchUser?.planId) {
+      res.status(403).json({ error: "Batch processing requires a paid plan.", code: "TIER_RESTRICTED" });
+      return;
+    }
+  }
+
+  // Fetch all jobs
+  const jobs = [];
+  for (const id of jobIds) {
+    const [job] = await db.select().from(mediaJobsTable)
+      .where(and(eq(mediaJobsTable.id, id), eq(mediaJobsTable.userId, req.userId!)));
+    if (!job || !job.base64Data) {
+      res.status(404).json({ error: `Job ${id} not found or has no image data` });
+      return;
+    }
+    jobs.push(job);
+  }
+
+  const startTime = Date.now();
+
+  // Mark all as processing
+  for (const job of jobs) {
+    await db.update(mediaJobsTable)
+      .set({ status: "processing", enhancementType })
+      .where(eq(mediaJobsTable.id, job.id));
+  }
+
+  // Debit credits
+  await db.update(usersTable)
+    .set({
+      creditsUsed: sql`${usersTable.creditsUsed} + ${jobs.length}`,
+      dailyCreditsUsed: sql`${usersTable.dailyCreditsUsed} + ${jobs.length}`,
+    })
+    .where(eq(usersTable.id, req.userId!));
+
+  res.json({ status: "processing", jobIds, count: jobs.length });
+
+  // Background batch processing
+  try {
+    const modeMap: Record<string, string> = {
+      face_restore: "face_restore",
+      face_restore_hd: "face_restore_hd",
+      codeformer: "codeformer",
+      auto_face: "auto_face",
+      hybrid: "hybrid",
+      esrgan_upscale_2x: "upscale_2x",
+      esrgan_upscale_4x: "upscale_4x",
+      old_photo_restore: "old_photo",
+    };
+    const mode = modeMap[enhancementType] || enhancementType;
+
+    const images = jobs.map((job) => ({
+      base64Data: job.base64Data!,
+      mode,
+      settings,
+    }));
+
+    const results = await callBatchRestoration(images);
+
+    // Save results
+    for (let i = 0; i < jobs.length; i++) {
+      const result = results[i];
+      await db.update(mediaJobsTable).set({
+        status: "completed",
+        processedUrl: result.base64,
+        thumbnailUrl: result.base64,
+        processingTimeMs: Date.now() - startTime,
+        completedAt: new Date(),
+        errorMessage: null,
+      }).where(eq(mediaJobsTable.id, jobs[i].id));
+    }
+
+    logger.info({ jobIds, type: enhancementType, count: jobs.length, ms: Date.now() - startTime }, "Batch enhancement completed");
+  } catch (err) {
+    logger.error({ err, jobIds }, "Batch enhancement failed");
+    for (const job of jobs) {
+      await db.update(mediaJobsTable).set({
+        status: "failed",
+        processingTimeMs: Date.now() - startTime,
+        errorMessage: err instanceof Error ? err.message : "Batch enhancement failed",
+      }).where(eq(mediaJobsTable.id, job.id));
+    }
+  }
 });
 
 export default router;

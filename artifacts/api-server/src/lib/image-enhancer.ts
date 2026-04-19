@@ -168,6 +168,7 @@ const RESTORATION_TYPES = new Set([
   "face_restore_hd",
   "codeformer",
   "auto_face",
+  "hybrid",
   "esrgan_upscale_2x",
   "esrgan_upscale_4x",
   "old_photo_restore",
@@ -181,6 +182,10 @@ interface RestorationResponse {
   mode: string;
   device: string;
   restoration_backend: string;
+  pipeline_profile?: {
+    total_ms: number;
+    steps: Record<string, number>;
+  };
   face_analysis?: Array<{
     bbox: number[];
     blur_score: number;
@@ -218,6 +223,7 @@ async function callRestorationService(
     face_restore_hd: "face_restore_hd",
     codeformer: "codeformer",
     auto_face: "auto_face",
+    hybrid: "hybrid",
     esrgan_upscale_2x: "upscale_2x",
     esrgan_upscale_4x: "upscale_4x",
     old_photo_restore: "old_photo",
@@ -372,6 +378,97 @@ export async function callVideoRestoration(
     processingMs: result.processing_ms,
     sceneChanges: result.scene_changes_detected,
   };
+}
+
+/**
+ * Call restoration service batch endpoint for multi-image processing.
+ * Falls back to sequential processing if batch endpoint is unavailable.
+ */
+export async function callBatchRestoration(
+  images: Array<{ base64Data: string; mode: string; settings?: Record<string, unknown> }>,
+): Promise<Array<{ base64: string; mimeType: string; processingMs: number; backend: string; profile?: Record<string, unknown> }>> {
+  const available = await isRestorationServiceAvailable();
+  if (!available) {
+    throw new Error("Restoration service unavailable");
+  }
+
+  // Try batch endpoint first
+  try {
+    const batchPayload = images.map((img) => ({
+      image_base64: img.base64Data,
+      mode: img.mode,
+      face_enhance: true,
+      restoration_model: (img.settings?.restorationModel as string) || "auto",
+      fidelity: typeof img.settings?.fidelity === "number" ? img.settings.fidelity : 0.5,
+    }));
+
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), 20 * 60 * 1000); // 20 min for batch
+
+    let response: Response;
+    try {
+      response = await fetch(`${RESTORATION_SERVICE_URL}/restore-batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ctrl.signal,
+        body: JSON.stringify({ images: batchPayload }),
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (response.ok) {
+      const batchResult = (await response.json()) as {
+        results: Array<RestorationResponse>;
+        total_processing_ms: number;
+        images_processed: number;
+      };
+
+      logger.info({ count: batchResult.images_processed, totalMs: batchResult.total_processing_ms }, "Batch restoration complete");
+
+      return batchResult.results.map((r) => ({
+        base64: r.image_base64,
+        mimeType: r.mime_type,
+        processingMs: r.processing_ms,
+        backend: r.restoration_backend,
+        profile: r.pipeline_profile,
+      }));
+    }
+
+    // Batch endpoint returned error — fall through to sequential
+    logger.warn({ status: response.status }, "Batch endpoint failed, falling back to sequential");
+  } catch (err) {
+    logger.warn({ err }, "Batch endpoint unavailable, falling back to sequential");
+  }
+
+  // Fallback: sequential processing
+  const results = [];
+  for (const img of images) {
+    const result = await callRestorationService(img.base64Data, img.mode, img.settings);
+    results.push({
+      base64: result.base64,
+      mimeType: result.mimeType,
+      processingMs: 0,
+      backend: "sequential_fallback",
+    });
+  }
+  return results;
+}
+
+/**
+ * Fetch pipeline metrics from restoration service for monitoring.
+ */
+export async function getRestorationMetrics(): Promise<Record<string, unknown> | null> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(`${RESTORATION_SERVICE_URL}/metrics`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (res.ok) return (await res.json()) as Record<string, unknown>;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
