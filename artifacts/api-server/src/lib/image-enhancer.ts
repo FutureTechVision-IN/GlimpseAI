@@ -159,7 +159,8 @@ const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
 // AI Restoration Service Bridge (GFPGAN + CodeFormer + Real-ESRGAN)
 // ---------------------------------------------------------------------------
 
-const RESTORATION_SERVICE_URL = process.env.RESTORATION_SERVICE_URL || "http://localhost:7860";
+const RESTORATION_SERVICE_URL = process.env.RESTORATION_SERVICE_URL
+  || `http://localhost:${process.env.RESTORATION_PORT || "7860"}`;
 
 /** Set of enhancement types that route to the Python restoration sidecar. */
 const RESTORATION_TYPES = new Set([
@@ -195,7 +196,7 @@ interface RestorationResponse {
 async function isRestorationServiceAvailable(): Promise<boolean> {
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 2000);
+    const timer = setTimeout(() => ctrl.abort(), 5000);
     const res = await fetch(`${RESTORATION_SERVICE_URL}/health`, { signal: ctrl.signal });
     clearTimeout(timer);
     return res.ok;
@@ -230,9 +231,11 @@ async function callRestorationService(
 
   logger.info({ enhancementType, mode, restorationModel, serviceUrl: RESTORATION_SERVICE_URL }, "Calling restoration service");
 
-  // 5-minute timeout for heavy ML models (GFPGAN, CodeFormer, Real-ESRGAN)
+  // 10-minute timeout for heavy ML models (GFPGAN, CodeFormer, Real-ESRGAN)
+  // Large images (up to 2048px) on CPU can take several minutes through
+  // face detection → GFPGAN → RealESRGAN pipeline.
   const ctrl = new AbortController();
-  const timeoutId = setTimeout(() => ctrl.abort(), 5 * 60 * 1000);
+  const timeoutId = setTimeout(() => ctrl.abort(), 10 * 60 * 1000);
 
   let response: Response;
   try {
@@ -752,6 +755,53 @@ export async function enhanceImage(
       case "trim": {
         // For video types applied to a still frame
         pipeline = pipeline.normalize().sharpen({ sigma: 1.0 }).modulate({ brightness: 1.01 });
+        break;
+      }
+      // ── Local fallbacks for restoration types when sidecar is unavailable ──
+      case "old_photo_restore": {
+        // Aggressive local restoration: denoise → CLAHE-style normalize →
+        // sharpen → warm tint to simulate restored vintage photo
+        const stats = await analyzeImageStats(inputBuffer);
+        let restored: Buffer = inputBuffer;
+        // Step 1: Tone-map to recover dynamic range
+        if (stats.isDark || stats.isLowContrast) {
+          restored = await toneMap(restored, 22, 5);
+        }
+        pipeline = sharp(restored)
+          .normalize()
+          .median(3)           // denoise (remove grain/scratches)
+          .sharpen({ sigma: 1.8, m1: 1.5, m2: 0.5 })  // restore detail
+          .modulate({ brightness: 1.05, saturation: 1.15 })
+          .gamma(0.92)         // slight lift for faded photos
+          .tint({ r: 135, g: 128, b: 120 });  // warm tone for restored feel
+        break;
+      }
+      case "face_restore":
+      case "face_restore_hd":
+      case "auto_face":
+      case "codeformer": {
+        // Local face-aware fallback: normalize → sharpen → slight portrait boost
+        pipeline = pipeline
+          .normalize()
+          .sharpen({ sigma: 1.5, m1: 1.2, m2: 0.4 })
+          .modulate({ brightness: 1.03, saturation: 1.08 })
+          .gamma(0.95);
+        break;
+      }
+      case "esrgan_upscale_2x": {
+        // Lanczos 2x upscale fallback
+        if (meta.width && meta.height) {
+          pipeline = pipeline.resize(meta.width * 2, meta.height * 2, { kernel: "lanczos3" });
+        }
+        pipeline = pipeline.sharpen({ sigma: 1.0 });
+        break;
+      }
+      case "esrgan_upscale_4x": {
+        // Lanczos 4x upscale fallback
+        if (meta.width && meta.height) {
+          pipeline = pipeline.resize(meta.width * 4, meta.height * 4, { kernel: "lanczos3" });
+        }
+        pipeline = pipeline.sharpen({ sigma: 1.2 });
         break;
       }
       default: {

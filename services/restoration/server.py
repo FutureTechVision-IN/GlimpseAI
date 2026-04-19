@@ -15,6 +15,7 @@ Modular pipeline:
 Runs as a local service on port 7860, called by the Node.js API server.
 """
 
+import asyncio
 import base64
 import io
 import json
@@ -307,6 +308,25 @@ def decode_image(b64: str) -> np.ndarray:
     if img is None:
         raise ValueError("Failed to decode image from base64")
     return img
+
+
+# Maximum dimension (width or height) we feed into ML models.
+# Larger images are proportionally downscaled before restoration to avoid
+# CPU inference taking many minutes.  The restored output will be at most
+# MAX_INPUT_DIM × upscale_factor pixels on the long side.
+MAX_INPUT_DIM = 2048
+
+
+def cap_image_dimensions(img: np.ndarray, max_dim: int = MAX_INPUT_DIM) -> np.ndarray:
+    """Down-scale image so its longest side is at most *max_dim* pixels."""
+    h, w = img.shape[:2]
+    longest = max(h, w)
+    if longest <= max_dim:
+        return img
+    scale = max_dim / longest
+    new_w, new_h = int(w * scale), int(h * scale)
+    logger.info("Capping image from %dx%d → %dx%d for ML inference", w, h, new_w, new_h)
+    return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
 def encode_image(img: np.ndarray, quality: int = 92) -> tuple[str, str]:
@@ -711,18 +731,24 @@ async def analyze_faces_endpoint(req: RestoreRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
-    faces = detect_faces_with_landmarks(img)
-    analysis = []
-    for face in faces:
-        level = estimate_degradation_level(face["blur_score"], face["area"])
-        analysis.append({
-            **face,
-            "degradation_level": level,
-            "recommended_model": "codeformer" if level == "severe" else "gfpgan",
-        })
+    img = cap_image_dimensions(img)
+
+    def _analyze():
+        faces = detect_faces_with_landmarks(img)
+        analysis = []
+        for face in faces:
+            level = estimate_degradation_level(face["blur_score"], face["area"])
+            analysis.append({
+                **face,
+                "degradation_level": level,
+                "recommended_model": "codeformer" if level == "severe" else "gfpgan",
+            })
+        return analysis
+
+    analysis = await asyncio.to_thread(_analyze)
 
     return {
-        "faces_detected": len(faces),
+        "faces_detected": len(analysis),
         "faces": analysis,
         "device": DEVICE,
     }
@@ -733,6 +759,9 @@ async def restore_image_endpoint(req: RestoreRequest):
     """
     Image restoration endpoint.
     Modes: face_restore, face_restore_hd, codeformer, upscale_2x, upscale_4x, old_photo, auto_face
+
+    All heavy ML inference runs in a thread pool so the event loop stays
+    responsive for /health checks and concurrent requests.
     """
     start = time.time()
     try:
@@ -740,11 +769,15 @@ async def restore_image_endpoint(req: RestoreRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
-    faces_detected = 0
-    backend_used = "gfpgan"
-    face_analysis = None
+    # Cap large images to avoid multi-minute CPU inference
+    img = cap_image_dimensions(img)
 
-    try:
+    def _run_restore():
+        """Synchronous ML inference — executed in a thread."""
+        faces_detected = 0
+        backend_used = "gfpgan"
+        face_analysis = None
+
         if req.mode == "face_restore":
             if req.restoration_model == "codeformer":
                 result, faces_detected = restore_face_codeformer(img, fidelity=req.fidelity)
@@ -755,7 +788,6 @@ async def restore_image_endpoint(req: RestoreRequest):
                 result, faces_detected = restore_face_gfpgan(img, upscale=2)
 
         elif req.mode == "face_restore_hd":
-            # 4x upscale first, then face restore
             upscaled = upscale_image(img, scale=4)
             if req.restoration_model == "codeformer":
                 result, faces_detected = restore_face_codeformer(upscaled, fidelity=req.fidelity)
@@ -770,7 +802,6 @@ async def restore_image_endpoint(req: RestoreRequest):
             backend_used = "codeformer"
 
         elif req.mode == "auto_face":
-            # Full pipeline: detect faces, analyze degradation, auto-route
             faces_info = detect_faces_with_landmarks(img)
             face_analysis = [
                 {**f, "degradation_level": estimate_degradation_level(f["blur_score"], f["area"])}
@@ -796,10 +827,14 @@ async def restore_image_endpoint(req: RestoreRequest):
             )
 
         else:
-            raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
+            raise ValueError(f"Unknown mode: {req.mode}")
 
-    except HTTPException:
-        raise
+        return result, faces_detected, backend_used, face_analysis
+
+    try:
+        result, faces_detected, backend_used, face_analysis = await asyncio.to_thread(_run_restore)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Restoration failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Restoration failed: {str(e)}")
@@ -835,7 +870,8 @@ async def restore_video_endpoint(req: VideoRestoreRequest):
         raise HTTPException(status_code=400, detail=f"Invalid video base64: {e}")
 
     try:
-        output_bytes, frames, scene_changes = process_video(
+        output_bytes, frames, scene_changes = await asyncio.to_thread(
+            process_video,
             video_bytes,
             req.mode,
             req.face_enhance,
