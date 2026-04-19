@@ -584,10 +584,11 @@ export default function Editor() {
           pollCountRef.current = 0;
           return false;
         }
-        // Exponential backoff: 2s → 4s → 8s → 15s max, cap at 150 polls (~15min)
+        // Fast initial polls (1s) to catch quick Sharp enhancements, then backoff
         pollCountRef.current += 1;
         if (pollCountRef.current > 150) return false;
-        return Math.min(2000 * Math.pow(1.5, Math.min(pollCountRef.current - 1, 6)), 15000);
+        if (pollCountRef.current <= 3) return 1000; // First 3 polls: 1s
+        return Math.min(2000 * Math.pow(1.4, Math.min(pollCountRef.current - 4, 7)), 12000);
       },
     },
   });
@@ -1688,7 +1689,7 @@ export default function Editor() {
                     {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                     {processStage === "completed" && <CheckCircle2 className="w-3.5 h-3.5" />}
                     {processStage === "failed"    && <AlertCircle  className="w-3.5 h-3.5" />}
-                    <span className="text-xs">{stageInfo.label}</span>
+                    <span className="text-xs">{processStage === "processing" && currentJob?.errorMessage ? currentJob.errorMessage : stageInfo.label}</span>
                     {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">{upscaleAfter ? "step 1/3" : "step 1/2"}</span>}
                     {processStage === "processing" && <span className="text-xs text-zinc-500 ml-auto">{upscaleChainRef.current ? (upscaleAfter ? "step 3/3 — upscaling" : "step 2/2") : (upscaleAfter ? "step 2/3 — enhancing" : "step 2/2")}</span>}
                   </motion.div>

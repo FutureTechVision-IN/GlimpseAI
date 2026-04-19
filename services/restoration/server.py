@@ -601,7 +601,7 @@ def process_video(
                 "-framerate", str(fps),
                 "-i", f"{out_dir}/frame_%06d.png",
                 "-c:v", "libx264",
-                "-preset", "medium",
+                "-preset", "fast",
                 "-crf", "18",
                 "-pix_fmt", "yuv420p",
                 "-vf", f"scale={out_w}:{out_h}",
@@ -651,6 +651,22 @@ async def lifespan(app: FastAPI):
                 Path(MODEL_DIR / "RealESRGAN_x2plus.pth").exists(),
                 Path(MODEL_DIR / "RealESRGAN_x4plus.pth").exists())
     logger.info("Capabilities: %s", caps)
+
+    # ── Eagerly preload models at startup so first request is fast ──
+    preload_start = time.time()
+    try:
+        if Path(MODEL_DIR / "RealESRGAN_x2plus.pth").exists():
+            get_realesrgan(2)
+        if Path(MODEL_DIR / "RealESRGAN_x4plus.pth").exists():
+            get_realesrgan(4)
+        if Path(MODEL_DIR / "GFPGANv1.4.pth").exists():
+            get_gfpgan()
+        get_codeformer()
+        get_face_detector()
+        logger.info("All models preloaded in %.1fs", time.time() - preload_start)
+    except Exception as e:
+        logger.warning("Model preload partially failed: %s (will lazy-load on demand)", e)
+
     yield
     logger.info("Restoration service shutting down")
 
@@ -791,7 +807,9 @@ async def restore_image_endpoint(req: RestoreRequest):
     b64, mime = encode_image(result)
     elapsed_ms = int((time.time() - start) * 1000)
 
-    logger.info("Restored: mode=%s, backend=%s, faces=%d, time=%dms", req.mode, backend_used, faces_detected, elapsed_ms)
+    logger.info("Restored: mode=%s, backend=%s, faces=%d, time=%dms, input=%dx%d",
+                req.mode, backend_used, faces_detected, elapsed_ms,
+                img.shape[1], img.shape[0])
     return RestoreResponse(
         image_base64=b64,
         mime_type=mime,

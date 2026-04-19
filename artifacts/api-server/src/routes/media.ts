@@ -239,6 +239,10 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
   res.json(jobToResponse(processing));
 
   // ── Background: real image/video enhancement ──
+  // Helper: update job progress message (non-blocking, swallows errors)
+  const setProgress = (msg: string) =>
+    db.update(mediaJobsTable).set({ errorMessage: msg }).where(eq(mediaJobsTable.id, jobId)).catch(() => {});
+
   try {
     const rawB64 = job.base64Data;
 
@@ -249,6 +253,7 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
       const temporalConsistency = (settings as Record<string, unknown>)?.temporalConsistency !== false;
       const restorationModel = (settings as Record<string, unknown>)?.restorationModel as string || "gfpgan";
 
+      setProgress("Sending to video restoration pipeline…");
       const result = await callVideoRestoration(rawB64, videoMode, faceEnhance, 300, temporalConsistency, restorationModel);
 
       await db.update(mediaJobsTable).set({
@@ -257,6 +262,7 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
         thumbnailUrl: result.base64,
         processingTimeMs: Date.now() - startTime,
         completedAt: new Date(),
+        errorMessage: null,
       }).where(eq(mediaJobsTable.id, jobId));
 
       logger.info({ jobId, type: enhancementType, frames: result.framesProcessed, scenes: result.sceneChanges, ms: result.processingMs }, "Video restoration completed");
@@ -268,31 +274,42 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     if (rawB64.startsWith("iVBOR")) mimeType = "image/png";
     else if (rawB64.startsWith("UklGR")) mimeType = "image/webp";
 
+    const perf: Record<string, number> = {};
+    const mark = (step: string) => { perf[step] = Date.now() - startTime; };
+
     // Get AI guidance from LLM vision models (non-blocking, 15s timeout fallback)
     // Pass user tier so free users don't consume Gemini keys
     const [enhUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
     const userTier = enhUser ? getUserTier(enhUser) : "free";
     let aiGuidance = null;
+    mark("guidance_start");
     try {
+      setProgress("Acquiring AI guidance…");
       // Race: AI guidance vs 15s timeout — never block enhancement for slow API keys
       const guidancePromise = aiProvider.getEnhancementGuidance(rawB64, mimeType, enhancementType, userTier);
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000));
       aiGuidance = await Promise.race([guidancePromise, timeoutPromise]);
+      mark("guidance_done");
       if (aiGuidance) {
         logger.info({ source: aiGuidance.source, type: enhancementType }, "AI guidance acquired for enhancement");
       } else {
         logger.info({ type: enhancementType }, "AI guidance unavailable or timed out — proceeding with local heuristics");
       }
     } catch (guidanceErr) {
+      mark("guidance_done");
       logger.warn({ err: guidanceErr }, "AI guidance failed — proceeding without");
     }
 
+    mark("enhance_start");
+    setProgress("Enhancing image…");
     const result = await enhanceImage(rawB64, mimeType, {
       enhancementType,
       settings: settings as Record<string, unknown> | undefined,
       aiGuidance,
     });
+    mark("enhance_done");
 
+    setProgress("Saving result…");
     // Store raw base64 in DB (no prefix — jobToResponse adds it)
     await db.update(mediaJobsTable).set({
       status: "completed",
@@ -300,14 +317,17 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
       thumbnailUrl: result.base64,
       processingTimeMs: Date.now() - startTime,
       completedAt: new Date(),
+      errorMessage: null,
     }).where(eq(mediaJobsTable.id, jobId));
+    mark("db_save");
 
-    logger.info({ jobId, type: enhancementType, ms: Date.now() - startTime }, "Enhancement completed");
+    logger.info({ jobId, type: enhancementType, ms: Date.now() - startTime, perf }, "Enhancement completed");
   } catch (err) {
     logger.error({ err, jobId }, "Enhancement failed");
     await db.update(mediaJobsTable).set({
       status: "failed",
       processingTimeMs: Date.now() - startTime,
+      errorMessage: err instanceof Error ? err.message : "Enhancement failed",
     }).where(eq(mediaJobsTable.id, jobId));
   }
 });

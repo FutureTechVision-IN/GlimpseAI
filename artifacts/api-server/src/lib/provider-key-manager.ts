@@ -2,6 +2,14 @@ import { logger } from "./logger";
 import { db, apiKeysTable, apiKeyDailyUsageTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
+// Fetch with manual AbortController to avoid Node.js undici "Headers Timeout Error"
+function fetchWithTimeout(url: string, init: RequestInit & { timeout?: number }): Promise<Response> {
+  const { timeout = 15000, ...fetchInit } = init;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  return fetch(url, { ...fetchInit, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 // =============================================================================
 // ProviderKeyManager — DB-backed key management with tier routing
 // =============================================================================
@@ -275,7 +283,7 @@ class ProviderKeyManager {
       let resp: Response;
 
       if (entry.provider === "openrouter") {
-        resp = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+        resp = await fetchWithTimeout(`${OPENROUTER_BASE}/chat/completions`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${entry.key}`,
@@ -288,10 +296,10 @@ class ProviderKeyManager {
             messages: [{ role: "user", content: "hi" }],
             max_tokens: 1,
           }),
-          signal: AbortSignal.timeout(15000),
+          timeout: 10000,
         });
       } else if (entry.provider === "nvidia") {
-        resp = await fetch(`${NVIDIA_BASE}/chat/completions`, {
+        resp = await fetchWithTimeout(`${NVIDIA_BASE}/chat/completions`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${entry.key}`,
@@ -302,18 +310,18 @@ class ProviderKeyManager {
             messages: [{ role: "user", content: "hi" }],
             max_tokens: 1,
           }),
-          signal: AbortSignal.timeout(15000),
+          timeout: 10000,
         });
       } else {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${entry.key}`;
-        resp = await fetch(url, {
+        resp = await fetchWithTimeout(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: "hi" }] }],
             generationConfig: { maxOutputTokens: 1 },
           }),
-          signal: AbortSignal.timeout(15000),
+          timeout: 10000,
         });
       }
 

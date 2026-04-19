@@ -2,6 +2,18 @@ import { logger } from "./logger";
 import { type ApiFailureCause } from "./api-errors";
 
 // ---------------------------------------------------------------------------
+// Fetch timeout helper — avoids Node.js undici "Headers Timeout Error" that
+// occurs with AbortSignal.timeout().  Uses AbortController + setTimeout which
+// gives a clean abort without socket-level race conditions.
+// ---------------------------------------------------------------------------
+function fetchWithTimeout(url: string, init: RequestInit & { timeout?: number }): Promise<Response> {
+  const { timeout = 12000, ...fetchInit } = init;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  return fetch(url, { ...fetchInit, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -508,7 +520,7 @@ class AIProviderService {
       // Skip text-only models for vision tasks
       if (TEXT_ONLY_MODELS.has(model)) continue;
       try {
-        const response = await fetch(`${baseUrl}/chat/completions`, {
+        const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -528,7 +540,7 @@ class AIProviderService {
             max_tokens: 250,
             temperature: 0.1,
           }),
-          signal: AbortSignal.timeout(12000),
+          timeout: 8000,
         });
 
         if (!response.ok) {
@@ -554,9 +566,10 @@ class AIProviderService {
           };
         }
         break; // Got response but couldn't parse — don't retry same key
-      } catch (e) {
-        logger.debug({ err: e, model }, "OpenRouter analysis error");
-        this.markFailed(pk);
+      } catch (e: any) {
+        const isTimeout = e?.name === "AbortError" || e?.code === "UND_ERR_HEADERS_TIMEOUT";
+        logger.debug({ err: e, model, isTimeout }, "OpenRouter analysis error");
+        if (!isTimeout) this.markFailed(pk);
         break;
       }
     }
@@ -574,7 +587,7 @@ class AIProviderService {
     for (const model of ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]) {
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${pk.key}`;
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -584,7 +597,7 @@ class AIProviderService {
             ]}],
             generationConfig: { maxOutputTokens: 250, temperature: 0.1 },
           }),
-          signal: AbortSignal.timeout(12000),
+          timeout: 8000,
         });
 
         if (!response.ok) {
@@ -611,9 +624,10 @@ class AIProviderService {
           };
         }
         break;
-      } catch (e) {
-        logger.debug({ err: e, model }, "Gemini analysis error");
-        this.markFailed(pk);
+      } catch (e: any) {
+        const isTimeout = e?.name === "AbortError" || e?.code === "UND_ERR_HEADERS_TIMEOUT";
+        logger.debug({ err: e, model, isTimeout }, "Gemini analysis error");
+        if (!isTimeout) this.markFailed(pk);
         break;
       }
     }
@@ -630,7 +644,7 @@ class AIProviderService {
 
     for (const model of NVIDIA_VISION_MODELS) {
       try {
-        const response = await fetch(`${NVIDIA_BASE}/chat/completions`, {
+        const response = await fetchWithTimeout(`${NVIDIA_BASE}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -648,7 +662,7 @@ class AIProviderService {
             max_tokens: 250,
             temperature: 0.1,
           }),
-          signal: AbortSignal.timeout(15000),
+          timeout: 10000,
         });
 
         if (!response.ok) {
@@ -674,9 +688,10 @@ class AIProviderService {
           };
         }
         break;
-      } catch (e) {
-        logger.debug({ err: e, model }, "NVIDIA analysis error");
-        this.markFailed(pk);
+      } catch (e: any) {
+        const isTimeout = e?.name === "AbortError" || e?.code === "UND_ERR_HEADERS_TIMEOUT";
+        logger.debug({ err: e, model, isTimeout }, "NVIDIA analysis error");
+        if (!isTimeout) this.markFailed(pk);
         break;
       }
     }
@@ -740,7 +755,7 @@ Rules:
     for (const model of OPENROUTER_VISION_MODELS) {
       if (TEXT_ONLY_MODELS.has(model)) continue;
       try {
-        const response = await fetch(`${baseUrl}/chat/completions`, {
+        const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -760,7 +775,7 @@ Rules:
             max_tokens: 300,
             temperature: 0.15,
           }),
-          signal: AbortSignal.timeout(15000),
+          timeout: 10000,
         });
 
         if (!response.ok) {
@@ -779,9 +794,10 @@ Rules:
           return this.sanitizeGuidance(p, "openrouter");
         }
         break;
-      } catch (e) {
-        logger.debug({ err: e, model }, "OpenRouter guidance error");
-        this.markFailed(pk);
+      } catch (e: any) {
+        const isTimeout = e?.name === "AbortError" || e?.code === "UND_ERR_HEADERS_TIMEOUT";
+        logger.debug({ err: e, model, isTimeout }, "OpenRouter guidance error");
+        if (!isTimeout) this.markFailed(pk);
         break;
       }
     }
@@ -794,7 +810,7 @@ Rules:
 
     for (const model of NVIDIA_VISION_MODELS) {
       try {
-        const response = await fetch(`${NVIDIA_BASE}/chat/completions`, {
+        const response = await fetchWithTimeout(`${NVIDIA_BASE}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -812,7 +828,7 @@ Rules:
             max_tokens: 300,
             temperature: 0.15,
           }),
-          signal: AbortSignal.timeout(15000),
+          timeout: 10000,
         });
 
         if (!response.ok) {
@@ -831,9 +847,10 @@ Rules:
           return this.sanitizeGuidance(p, "nvidia");
         }
         break;
-      } catch (e) {
-        logger.debug({ err: e, model }, "NVIDIA guidance error");
-        this.markFailed(pk);
+      } catch (e: any) {
+        const isTimeout = e?.name === "AbortError" || e?.code === "UND_ERR_HEADERS_TIMEOUT";
+        logger.debug({ err: e, model, isTimeout }, "NVIDIA guidance error");
+        if (!isTimeout) this.markFailed(pk);
         break;
       }
     }
@@ -847,7 +864,7 @@ Rules:
     for (const model of ["gemini-2.0-flash", "gemini-1.5-flash"]) {
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${pk.key}`;
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -857,7 +874,7 @@ Rules:
             ]}],
             generationConfig: { maxOutputTokens: 300, temperature: 0.15 },
           }),
-          signal: AbortSignal.timeout(15000),
+          timeout: 10000,
         });
 
         if (!response.ok) {
@@ -876,9 +893,10 @@ Rules:
           return this.sanitizeGuidance(p, "gemini");
         }
         break;
-      } catch (e) {
-        logger.debug({ err: e, model }, "Gemini guidance error");
-        this.markFailed(pk);
+      } catch (e: any) {
+        const isTimeout = e?.name === "AbortError" || e?.code === "UND_ERR_HEADERS_TIMEOUT";
+        logger.debug({ err: e, model, isTimeout }, "Gemini guidance error");
+        if (!isTimeout) this.markFailed(pk);
         break;
       }
     }
