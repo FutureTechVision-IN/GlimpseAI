@@ -268,15 +268,20 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     if (rawB64.startsWith("iVBOR")) mimeType = "image/png";
     else if (rawB64.startsWith("UklGR")) mimeType = "image/webp";
 
-    // Get AI guidance from LLM vision models (non-blocking, with timeout fallback)
+    // Get AI guidance from LLM vision models (non-blocking, 15s timeout fallback)
     // Pass user tier so free users don't consume Gemini keys
     const [enhUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
     const userTier = enhUser ? getUserTier(enhUser) : "free";
     let aiGuidance = null;
     try {
-      aiGuidance = await aiProvider.getEnhancementGuidance(rawB64, mimeType, enhancementType, userTier);
+      // Race: AI guidance vs 15s timeout — never block enhancement for slow API keys
+      const guidancePromise = aiProvider.getEnhancementGuidance(rawB64, mimeType, enhancementType, userTier);
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000));
+      aiGuidance = await Promise.race([guidancePromise, timeoutPromise]);
       if (aiGuidance) {
         logger.info({ source: aiGuidance.source, type: enhancementType }, "AI guidance acquired for enhancement");
+      } else {
+        logger.info({ type: enhancementType }, "AI guidance unavailable or timed out — proceeding with local heuristics");
       }
     } catch (guidanceErr) {
       logger.warn({ err: guidanceErr }, "AI guidance failed — proceeding without");
@@ -375,22 +380,75 @@ router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promis
 });
 
 // ─── List jobs ────────────────────────────────────────────────
+// Select only lightweight columns — skip base64Data, processedUrl, originalUrl blobs
+// that can be multi-MB each, causing 20+ second query times.
+const listColumns = {
+  id: mediaJobsTable.id,
+  userId: mediaJobsTable.userId,
+  mediaType: mediaJobsTable.mediaType,
+  status: mediaJobsTable.status,
+  filename: mediaJobsTable.filename,
+  thumbnailUrl: mediaJobsTable.thumbnailUrl,
+  enhancementType: mediaJobsTable.enhancementType,
+  presetId: mediaJobsTable.presetId,
+  errorMessage: mediaJobsTable.errorMessage,
+  processingTimeMs: mediaJobsTable.processingTimeMs,
+  fileSize: mediaJobsTable.fileSize,
+  createdAt: mediaJobsTable.createdAt,
+  completedAt: mediaJobsTable.completedAt,
+};
+
 router.get("/media/jobs", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const params = ListMediaJobsQueryParams.safeParse(req.query);
   const status = params.success ? params.data.status : undefined;
 
   let jobs;
   if (status && status !== "all") {
-    jobs = await db.select().from(mediaJobsTable)
+    jobs = await db.select(listColumns).from(mediaJobsTable)
       .where(and(eq(mediaJobsTable.userId, req.userId!), eq(mediaJobsTable.status, status)))
-      .orderBy(desc(mediaJobsTable.createdAt));
+      .orderBy(desc(mediaJobsTable.createdAt))
+      .limit(50);
   } else {
-    jobs = await db.select().from(mediaJobsTable)
+    jobs = await db.select(listColumns).from(mediaJobsTable)
       .where(eq(mediaJobsTable.userId, req.userId!))
-      .orderBy(desc(mediaJobsTable.createdAt));
+      .orderBy(desc(mediaJobsTable.createdAt))
+      .limit(50);
   }
 
-  res.json(jobs.map(jobToListResponse));
+  // jobToListResponse expects full row shape — map lightweight rows directly
+  res.json(jobs.map(j => {
+    const guessMime = (b64: string | null): string => {
+      if (!b64) return "image/jpeg";
+      if (b64.startsWith("data:")) return "image/jpeg";
+      if (b64.startsWith("/9j/")) return "image/jpeg";
+      if (b64.startsWith("iVBOR")) return "image/png";
+      if (b64.startsWith("R0lGO")) return "image/gif";
+      if (b64.startsWith("UklGR")) return "image/webp";
+      return "image/jpeg";
+    };
+    const toDataUri = (b64: string | null): string | null => {
+      if (!b64) return null;
+      if (b64.startsWith("data:")) return b64;
+      return `data:${guessMime(b64)};base64,${b64}`;
+    };
+    return {
+      id: j.id,
+      userId: j.userId,
+      mediaType: j.mediaType,
+      status: j.status,
+      filename: j.filename,
+      originalUrl: null,
+      processedUrl: null,
+      thumbnailUrl: toDataUri(j.thumbnailUrl),
+      enhancementType: j.enhancementType,
+      presetId: j.presetId,
+      errorMessage: j.errorMessage,
+      processingTimeMs: j.processingTimeMs,
+      fileSize: j.fileSize,
+      createdAt: j.createdAt,
+      completedAt: j.completedAt,
+    };
+  }));
 });
 
 // ─── Get single job ───────────────────────────────────────────

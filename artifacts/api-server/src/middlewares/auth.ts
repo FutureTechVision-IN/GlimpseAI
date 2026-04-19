@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
-const JWT_SECRET = process.env.SESSION_SECRET || "glimpse-ai-secret-key";
+const JWT_SECRET = process.env.SESSION_SECRET || "glimpse-ai-local-dev-secret";
 
 export interface AuthRequest extends Request {
   userId?: number;

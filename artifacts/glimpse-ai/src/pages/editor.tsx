@@ -573,17 +573,29 @@ export default function Editor() {
   const uploadMedia = useUploadMedia();
   const analyzeMedia = useAnalyzeMedia();
   const { data: presets } = useListPresets({ type: mediaType });
+  const pollCountRef = useRef(0);
   const { data: currentJob } = useGetMediaJob(currentJobId as number, {
     query: {
       enabled: !!currentJobId,
       queryKey: ["mediaJob", currentJobId],
       refetchInterval: (query) => {
         const s = query.state.data?.status;
-        if (s === "completed" || s === "failed") return false;
-        return 2000;
+        if (s === "completed" || s === "failed") {
+          pollCountRef.current = 0;
+          return false;
+        }
+        // Exponential backoff: 2s → 4s → 8s → 15s max, cap at 150 polls (~15min)
+        pollCountRef.current += 1;
+        if (pollCountRef.current > 150) return false;
+        return Math.min(2000 * Math.pow(1.5, Math.min(pollCountRef.current - 1, 6)), 15000);
       },
     },
   });
+
+  // Reset poll count when a new job starts
+  useEffect(() => {
+    if (currentJobId) pollCountRef.current = 0;
+  }, [currentJobId]);
 
   // Track the uploaded job ID for AI analysis (set after upload, before enhance)
   const uploadedJobIdRef = useRef<number | null>(null);

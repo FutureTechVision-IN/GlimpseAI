@@ -230,17 +230,27 @@ async function callRestorationService(
 
   logger.info({ enhancementType, mode, restorationModel, serviceUrl: RESTORATION_SERVICE_URL }, "Calling restoration service");
 
-  const response = await fetch(`${RESTORATION_SERVICE_URL}/restore`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image_base64: base64Data,
-      mode,
-      face_enhance: true,
-      restoration_model: restorationModel,
-      fidelity,
-    }),
-  });
+  // 5-minute timeout for heavy ML models (GFPGAN, CodeFormer, Real-ESRGAN)
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 5 * 60 * 1000);
+
+  let response: Response;
+  try {
+    response = await fetch(`${RESTORATION_SERVICE_URL}/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        image_base64: base64Data,
+        mode,
+        face_enhance: true,
+        restoration_model: restorationModel,
+        fidelity,
+      }),
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     const errBody = await response.text();
@@ -274,18 +284,28 @@ export async function callVideoRestoration(
 ): Promise<{ base64: string; mimeType: string; framesProcessed: number; processingMs: number; sceneChanges: number }> {
   logger.info({ mode, faceEnhance, maxFrames, temporalConsistency, restorationModel }, "Calling video restoration service");
 
-  const response = await fetch(`${RESTORATION_SERVICE_URL}/restore-video`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      video_base64: videoBase64,
-      mode,
-      face_enhance: faceEnhance,
-      max_frames: maxFrames,
-      temporal_consistency: temporalConsistency,
-      restoration_model: restorationModel,
-    }),
-  });
+  // 10-minute timeout for video processing (frame-by-frame ML)
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 10 * 60 * 1000);
+
+  let response: Response;
+  try {
+    response = await fetch(`${RESTORATION_SERVICE_URL}/restore-video`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        video_base64: videoBase64,
+        mode,
+        face_enhance: faceEnhance,
+        max_frames: maxFrames,
+        temporal_consistency: temporalConsistency,
+        restoration_model: restorationModel,
+      }),
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     const errBody = await response.text();

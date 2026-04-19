@@ -27,6 +27,24 @@ export async function ensureInitialAdmin(): Promise<void> {
       .where(eq(usersTable.email, account.email));
 
     if (existing) {
+      // Validate the stored hash still matches the expected password.
+      // If the hash is corrupt, was set by a different password, or the
+      // env-var password changed, re-hash so login always works.
+      const hashValid = await bcrypt.compare(account.password, existing.passwordHash);
+      if (!hashValid) {
+        const newHash = await bcrypt.hash(account.password, 10);
+        await db.update(usersTable)
+          .set({ passwordHash: newHash, isSuspended: false, role: "admin" })
+          .where(eq(usersTable.id, existing.id));
+        logger.warn({ email: account.email }, "Admin password hash was stale — re-hashed");
+      }
+      // Ensure role + limits are correct even if row exists
+      if (existing.role !== "admin" || existing.isSuspended || existing.creditsLimit < 999999) {
+        await db.update(usersTable)
+          .set({ role: "admin", isSuspended: false, creditsLimit: 999999 })
+          .where(eq(usersTable.id, existing.id));
+        logger.info({ email: account.email }, "Admin account flags corrected");
+      }
       continue;
     }
 
@@ -43,6 +61,53 @@ export async function ensureInitialAdmin(): Promise<void> {
     });
 
     logger.info({ email: account.email }, "Bootstrapped admin user");
+  }
+}
+
+/**
+ * Validate that every admin account can actually log in.
+ * Runs after ensureInitialAdmin() to catch any remaining issues.
+ */
+export async function validateAdminLogins(): Promise<void> {
+  let allOk = true;
+  for (const account of ADMIN_ACCOUNTS) {
+    const [user] = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.email, account.email));
+
+    if (!user) {
+      logger.error({ email: account.email }, "Admin account MISSING from database");
+      allOk = false;
+      continue;
+    }
+
+    const canLogin = await bcrypt.compare(account.password, user.passwordHash);
+    if (!canLogin) {
+      logger.error({ email: account.email }, "Admin login validation FAILED — hash mismatch");
+      allOk = false;
+      continue;
+    }
+
+    if (user.isSuspended) {
+      logger.error({ email: account.email }, "Admin account is SUSPENDED");
+      allOk = false;
+      continue;
+    }
+
+    if (user.role !== "admin") {
+      logger.error({ email: account.email, role: user.role }, "Admin account has wrong ROLE");
+      allOk = false;
+      continue;
+    }
+
+    logger.info({ email: account.email, userId: user.id }, "Admin login validated ✓");
+  }
+
+  if (allOk) {
+    logger.info(`All ${ADMIN_ACCOUNTS.length} admin accounts validated successfully`);
+  } else {
+    logger.error("Some admin accounts failed validation — check logs above");
   }
 }
 

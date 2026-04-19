@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { ensureInitialAdmin, ensureDefaultPlans, initProviderKeys } from "./lib/bootstrap";
+import { ensureInitialAdmin, ensureDefaultPlans, initProviderKeys, validateAdminLogins } from "./lib/bootstrap";
 
 const rawPort = process.env["PORT"];
 
@@ -18,6 +18,7 @@ if (Number.isNaN(port) || port <= 0) {
 
 async function start() {
   await ensureInitialAdmin();
+  await validateAdminLogins();
   await ensureDefaultPlans();
   
   await initProviderKeys().catch((err) =>
