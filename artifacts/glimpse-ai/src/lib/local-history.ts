@@ -22,10 +22,14 @@ export interface LocalHistoryItem {
   dataUri: string;
   /** Thumbnail data-URI (smaller, for grid preview) */
   thumbnailUri: string;
+  /** Thumbnail of the original image (for side-by-side comparison) */
+  originalThumbnailUri?: string;
   /** MIME type */
   mimeType: string;
   /** When the enhancement was created */
   createdAt: string;
+  /** Processing time in milliseconds */
+  processingTimeMs?: number;
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -66,9 +70,13 @@ function createThumbnail(dataUri: string, maxWidth = 300): Promise<string> {
 export async function saveToHistory(item: Omit<LocalHistoryItem, "id" | "thumbnailUri" | "createdAt">): Promise<void> {
   const db = await openDB();
   const thumbnailUri = await createThumbnail(item.dataUri);
+  const originalThumbnailUri = item.originalThumbnailUri
+    ? await createThumbnail(item.originalThumbnailUri)
+    : undefined;
   const entry: Omit<LocalHistoryItem, "id"> = {
     ...item,
     thumbnailUri,
+    originalThumbnailUri,
     createdAt: new Date().toISOString(),
   };
 

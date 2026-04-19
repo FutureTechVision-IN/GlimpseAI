@@ -30,3 +30,20 @@ Thumbs.db
 # Key validation logs (may contain secrets)
 .key-validation-logs/
 backup.sql
+
+# ML model weights (use Git LFS or download at deploy time)
+*.pth
+*.onnx
+*.safetensors
+services/restoration/models/
+services/restoration/gfpgan/weights/
+
+# Python virtual environments
+.venv/
+__pycache__/
+
+# Runtime state
+.glimpse/
+
+# Conflict backup files from merge/rebase tools
+*-BIPBABU-M-X9V3*

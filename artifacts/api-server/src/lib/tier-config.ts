@@ -41,6 +41,10 @@ const PREMIUM_EXTRAS = [
   "upscale", "upscale_4x",
   "posture",
   "stabilize", "trim",
+  // AI Restoration (GFPGAN + Real-ESRGAN)
+  "face_restore", "face_restore_hd",
+  "esrgan_upscale_2x", "esrgan_upscale_4x",
+  "old_photo_restore", "video_restore",
 ];
 
 const TIER_MAP: Record<PlanSlug, TierCapabilities> = {
@@ -117,6 +121,18 @@ export function checkTierAccess(
     }
     if (enhancementType === "stabilize" || enhancementType === "trim") {
       return "Video editing requires a Basic or Premium plan.";
+    }
+    if (enhancementType === "face_restore" || enhancementType === "face_restore_hd") {
+      return "AI Face Restoration is a Premium feature. Upgrade to Premium to restore faces with GFPGAN.";
+    }
+    if (enhancementType === "esrgan_upscale_2x" || enhancementType === "esrgan_upscale_4x") {
+      return "AI Super-Resolution (Real-ESRGAN) is a Premium feature. Upgrade to Premium.";
+    }
+    if (enhancementType === "old_photo_restore") {
+      return "Old Photo Restoration is a Premium feature. Upgrade to Premium.";
+    }
+    if (enhancementType === "video_restore") {
+      return "AI Video Restoration is a Premium feature. Upgrade to Premium.";
     }
     return `${enhancementType} requires a higher-tier plan.`;
   }

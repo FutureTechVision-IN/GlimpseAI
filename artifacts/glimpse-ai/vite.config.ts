@@ -30,6 +30,9 @@ const apiProxyTarget = process.env.API_PROXY_TARGET;
 
 export default defineConfig({
   base: basePath,
+  // Store the dep-optimization cache on local disk so it is never blocked
+  // by OneDrive cloud-placeholder I/O, which causes Vite to hang on startup.
+  cacheDir: "/tmp/vite-cache/glimpse-ai",
   plugins: [
     react(),
     tailwindcss(),
@@ -62,6 +65,7 @@ export default defineConfig({
   },
   server: {
     port,
+    strictPort: true,   // fail loudly instead of silently using port+1
     host: "0.0.0.0",
     allowedHosts: true,
     proxy: apiProxyTarget

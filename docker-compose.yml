@@ -52,5 +52,22 @@ services:
     ports:
       - "${WEB_PORT:-5173}:${WEB_PORT:-5173}"
 
+  restoration:
+    build:
+      context: services/restoration
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      RESTORATION_PORT: 7860
+    volumes:
+      - ./services/restoration/models:/app/models
+    ports:
+      - "7860:7860"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
 volumes:
   postgres-data:

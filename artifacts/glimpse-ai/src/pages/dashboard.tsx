@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { motion } from "framer-motion";
 import { useAuth } from "../lib/auth-context";
 import { useGetUserUsage, useListMediaJobs } from "@workspace/api-client-react";
@@ -9,8 +9,10 @@ import { Button } from "@/components/ui/button";
 import {
   Wand2, Image as ImageIcon, Video, Clock, ArrowRight, Zap,
   CheckCircle2, XCircle, Loader2, Shield, Sparkles, Camera, Film,
-  TrendingUp, Crown,
+  TrendingUp, Crown, BarChart3,
 } from "lucide-react";
+import { getEnhancementMeta, formatProcessingTime } from "@/lib/enhancement-labels";
+import { cn } from "@/lib/utils";
 import AiChatWidget from "../components/ai-chat-widget";
 
 function getGreeting() {
@@ -32,6 +34,20 @@ export default function Dashboard() {
   const dailyLimit = usage?.dailyLimit || 1;
   const dailyPercent = Math.min((dailyUsed / dailyLimit) * 100, 100);
   const isFreeUser = !user?.planId;
+
+  // Enhancement analytics — aggregate usage by type
+  const enhancementAnalytics = useMemo(() => {
+    if (!recentJobs?.length) return [];
+    const counts: Record<string, number> = {};
+    for (const job of recentJobs) {
+      const type = job.enhancementType || "auto";
+      counts[type] = (counts[type] || 0) + 1;
+    }
+    return Object.entries(counts)
+      .map(([type, count]) => ({ type, count, meta: getEnhancementMeta(type) }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+  }, [recentJobs]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -348,8 +364,22 @@ export default function Dashboard() {
                       <div>
                         <div className="font-medium text-sm text-zinc-200">{job.filename}</div>
                         <div className="text-[11px] text-zinc-500 flex items-center gap-2 mt-0.5">
-                          <span className="capitalize px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400">{job.enhancementType}</span>
+                          {(() => {
+                            const meta = getEnhancementMeta(job.enhancementType);
+                            return (
+                              <span className={cn("px-1.5 py-0.5 rounded border text-[10px] font-semibold", meta.bgColor, meta.color, meta.borderColor)}>
+                                {meta.shortLabel}
+                                {meta.category === "restoration" && <span className="ml-1 text-[8px] opacity-70">AI</span>}
+                              </span>
+                            );
+                          })()}
                           <span>{new Date(job.createdAt).toLocaleDateString()}</span>
+                          {job.processingTimeMs && (
+                            <span className="flex items-center gap-0.5 text-zinc-600">
+                              <Clock className="w-2.5 h-2.5" />
+                              {formatProcessingTime(job.processingTimeMs)}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -370,6 +400,44 @@ export default function Dashboard() {
             </div>
           </Card>
         </motion.div>
+
+        {/* Enhancement Analytics */}
+        {!isLoadingJobs && enhancementAnalytics.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.45 }}
+            className="space-y-4"
+          >
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-zinc-500" />
+              Enhancement Usage
+            </h2>
+            <Card className="bg-gradient-to-br from-zinc-900/80 to-zinc-950 border-zinc-800/60 backdrop-blur-sm">
+              <CardContent className="p-5">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                  {enhancementAnalytics.map(({ type, count, meta }) => {
+                    const maxCount = enhancementAnalytics[0]?.count || 1;
+                    const barPercent = Math.round((count / maxCount) * 100);
+                    return (
+                      <div key={type} className={cn("relative rounded-xl p-3 border", meta.bgColor, meta.borderColor)}>
+                        <div className="text-2xl font-bold text-white">{count}</div>
+                        <div className={cn("text-[11px] font-medium mt-0.5", meta.color)}>{meta.label}</div>
+                        <div className="mt-2 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                          <div className={cn("h-full rounded-full transition-all", meta.color.replace("text-", "bg-"))} style={{ width: `${barPercent}%` }} />
+                        </div>
+                        {meta.category === "restoration" && (
+                          <span className="absolute top-2 right-2 text-[8px] font-bold uppercase text-emerald-400 bg-emerald-500/15 px-1 py-0.5 rounded">AI</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-zinc-600 mt-3">Based on {recentJobs?.length || 0} total enhancements this billing period</p>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
       </div>
       <AiChatWidget context="dashboard" />
     </Layout>

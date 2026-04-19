@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Layout from "../components/layout";
 import { Card } from "@/components/ui/card";
-import { Image as ImageIcon, Download, Trash2, Trash, HardDrive, Info, AlertTriangle } from "lucide-react";
+import { Image as ImageIcon, Download, Trash2, Trash, HardDrive, Info, AlertTriangle, Clock, ArrowLeftRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -11,11 +11,54 @@ import {
   clearHistory,
   LocalHistoryItem,
 } from "@/lib/local-history";
+import { getEnhancementMeta, formatProcessingTime } from "@/lib/enhancement-labels";
 import { Link } from "wouter";
+
+function CompareDialog({ item, onClose }: { item: LocalHistoryItem; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative w-full max-w-4xl mx-4 bg-zinc-950 border border-zinc-800 rounded-2xl p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors">
+          <X className="w-5 h-5" />
+        </button>
+        <h3 className="text-lg font-semibold mb-1">Side-by-Side Comparison</h3>
+        <p className="text-sm text-zinc-500 mb-4">{item.filename}</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Original</span>
+            <div className="aspect-square rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+              {item.originalThumbnailUri ? (
+                <img src={item.originalThumbnailUri} alt="Original" className="w-full h-full object-contain" />
+              ) : (
+                <div className="text-center text-zinc-600 p-4">
+                  <ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-xs">Original not available</p>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Enhanced</span>
+            <div className="aspect-square rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+              <img src={item.thumbnailUri} alt="Enhanced" className="w-full h-full object-contain" />
+            </div>
+          </div>
+        </div>
+        {item.processingTimeMs && (
+          <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500">
+            <Clock className="w-3 h-3" />
+            Processed in {formatProcessingTime(item.processingTimeMs)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function History() {
   const [items, setItems] = useState<LocalHistoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [compareItem, setCompareItem] = useState<LocalHistoryItem | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -113,7 +156,9 @@ export default function History() {
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-            {items.map(item => (
+            {items.map(item => {
+              const meta = getEnhancementMeta(item.enhancementType);
+              return (
               <Card
                 key={item.id}
                 className="group overflow-hidden border-zinc-800 bg-zinc-950 hover:border-zinc-700 transition-all"
@@ -127,6 +172,15 @@ export default function History() {
 
                   {/* Hover overlay */}
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                    <Button
+                      size="icon"
+                      variant="secondary"
+                      title="Compare"
+                      onClick={() => setCompareItem(item)}
+                      className="w-8 h-8 rounded-full bg-white/20 hover:bg-teal-500 text-white backdrop-blur"
+                    >
+                      <ArrowLeftRight className="w-4 h-4" />
+                    </Button>
                     <Button
                       size="icon"
                       variant="secondary"
@@ -147,26 +201,44 @@ export default function History() {
                     </Button>
                   </div>
 
-                  {/* Type badge */}
-                  <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/60 backdrop-blur text-[10px] font-medium uppercase tracking-wider text-zinc-300">
-                    Photo
+                  {/* Enhancement type badge */}
+                  <div className={cn(
+                    "absolute top-2 left-2 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border backdrop-blur",
+                    meta.bgColor, meta.color, meta.borderColor
+                  )}>
+                    {meta.shortLabel}
                   </div>
+
+                  {/* Category indicator */}
+                  {meta.category === "restoration" && (
+                    <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/30 text-[9px] font-bold text-emerald-400 uppercase">
+                      AI
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-3">
                   <div className="truncate text-sm font-medium" title={item.filename}>{item.filename}</div>
-                  <div className="flex items-center justify-between mt-1">
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-zinc-700 text-zinc-500 capitalize">
-                      {item.enhancementType}
+                  <div className="flex items-center justify-between mt-1.5">
+                    <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 border", meta.borderColor, meta.color)}>
+                      {meta.label}
                     </Badge>
-                    <span className="text-xs text-zinc-600">{new Date(item.createdAt).toLocaleDateString()}</span>
+                    <span className="text-[10px] text-zinc-600">{new Date(item.createdAt).toLocaleDateString()}</span>
                   </div>
+                  {item.processingTimeMs && (
+                    <div className="flex items-center gap-1 mt-1.5 text-[10px] text-zinc-500">
+                      <Clock className="w-2.5 h-2.5" />
+                      {formatProcessingTime(item.processingTimeMs)}
+                    </div>
+                  )}
                 </div>
               </Card>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
+      {compareItem && <CompareDialog item={compareItem} onClose={() => setCompareItem(null)} />}
     </Layout>
   );
 }

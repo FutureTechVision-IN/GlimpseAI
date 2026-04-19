@@ -30,4 +30,10 @@ export const EnhanceMediaBodyEnhancementType = {
   color_grade_warm: "color_grade_warm",
   color_grade_cool: "color_grade_cool",
   skin_retouch: "skin_retouch",
+  face_restore: "face_restore",
+  face_restore_hd: "face_restore_hd",
+  esrgan_upscale_2x: "esrgan_upscale_2x",
+  esrgan_upscale_4x: "esrgan_upscale_4x",
+  old_photo_restore: "old_photo_restore",
+  video_restore: "video_restore",
 } as const;
