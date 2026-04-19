@@ -8,7 +8,7 @@ import { z } from "zod/v4";
  */
 export const apiKeysTable = pgTable("api_keys", {
   id: serial("id").primaryKey(),
-  provider: text("provider").notNull(), // "openrouter" | "gemini"
+  provider: text("provider").notNull(), // "openrouter" | "gemini" | "nvidia"
   model: text("model").notNull(), // "stepfun/step-3.5-flash:free" or "gemini-2.0-flash"
   keyHash: text("key_hash").notNull(), // last 8 chars for identification (never full key)
   keyPrefix: text("key_prefix").notNull(), // first 12 chars for display

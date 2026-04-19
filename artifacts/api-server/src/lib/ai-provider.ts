@@ -7,7 +7,7 @@ import { type ApiFailureCause } from "./api-errors";
 
 interface ProviderKey {
   key: string;
-  provider: "openrouter" | "gemini";
+  provider: "openrouter" | "gemini" | "nvidia";
   model: string;
   failCount: number;
   lastUsed: number;
@@ -24,7 +24,7 @@ export interface AnalysisResult {
   suggestedFilter: string | null;
   detectedSubjects: string[];
   confidence: number;
-  analysisSource: "local" | "openrouter" | "gemini";  // which engine produced this
+  analysisSource: "local" | "openrouter" | "gemini" | "nvidia";  // which engine produced this
   /** Set when AI call failed — only populated with cause info, never raw key data */
   failureCause?: ApiFailureCause;
 }
@@ -46,7 +46,7 @@ export interface AIEnhancementGuidance {
   gammaCorrection: number | null; // 0.7 – 1.5
   vignetteStrength: number | null; // 0 – 0.4
   description: string;           // human-readable explanation
-  source: "openrouter" | "gemini" | "local";
+  source: "openrouter" | "gemini" | "nvidia" | "local";
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +127,22 @@ const TEXT_ONLY_MODELS = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
+// NVIDIA direct API — separate from OpenRouter, uses nvapi- keys
+// ---------------------------------------------------------------------------
+const NVIDIA_BASE = "https://integrate.api.nvidia.com/v1";
+
+/** Vision-capable NVIDIA models (support image_url in messages) */
+const NVIDIA_VISION_MODELS = [
+  "moonshotai/kimi-k2.5",               // native multimodal agentic model
+];
+
+/** Text-only NVIDIA models (used for text guidance, not vision analysis) */
+const NVIDIA_TEXT_ONLY_MODELS = new Set([
+  "minimaxai/minimax-m2.5",
+  "nvidia/nemotron-3-super-120b-a12b",
+]);
+
+// ---------------------------------------------------------------------------
 // SRE-core: APIKeyPoolManager with round-robin + smart circuit breaker
 // ---------------------------------------------------------------------------
 
@@ -194,7 +210,29 @@ class AIProviderService {
 
     const orCount = this.keys.filter(k => k.provider === "openrouter").length;
     const gemCount = this.keys.filter(k => k.provider === "gemini").length;
-    logger.info({ openrouterKeys: orCount, geminiKeys: gemCount }, "AI provider keys loaded");
+
+    // NVIDIA direct API keys — env format: NVIDIA_API_KEY=nvapi-xxx
+    // Single key shared across all NVIDIA-hosted models
+    const nvidiaKey = (process.env.NVIDIA_API_KEY ?? "").trim();
+    if (nvidiaKey && nvidiaKey.startsWith("nvapi-")) {
+      const allNvidiaModels = [...NVIDIA_VISION_MODELS, ...Array.from(NVIDIA_TEXT_ONLY_MODELS)];
+      let nvidiaIdx = 0;
+      for (const model of allNvidiaModels) {
+        this.keys.push({
+          key: nvidiaKey,
+          provider: "nvidia",
+          model,
+          failCount: 0,
+          lastUsed: 0,
+          cooldownUntil: 0,
+          dailyLimitHit: false,
+          label: `nvidia-${++nvidiaIdx}`,
+        });
+      }
+    }
+    const nvCount = this.keys.filter(k => k.provider === "nvidia").length;
+
+    logger.info({ openrouterKeys: orCount, geminiKeys: gemCount, nvidiaKeys: nvCount }, "AI provider keys loaded");
   }
 
   /**
@@ -205,7 +243,7 @@ class AIProviderService {
    *   - "premium"     → OpenRouter first, Gemini as last resort
    *   - undefined     → legacy: all keys available (backward compat)
    */
-  private getNextKey(preferProvider?: "openrouter" | "gemini", userTier?: UserTier): ProviderKey | null {
+  private getNextKey(preferProvider?: "openrouter" | "gemini" | "nvidia", userTier?: UserTier): ProviderKey | null {
     const now = Date.now();
     const available = this.keys.filter(k => {
       if (preferProvider && k.provider !== preferProvider) return false;
@@ -241,6 +279,7 @@ class AIProviderService {
     return {
       openrouter: this.keys.some(k => k.provider === "openrouter" && isAvailable(k)),
       gemini: userTier !== "free" && this.keys.some(k => k.provider === "gemini" && isAvailable(k)),
+      nvidia: this.keys.some(k => k.provider === "nvidia" && isAvailable(k)),
     };
   }
 
@@ -427,7 +466,8 @@ class AIProviderService {
 
     // 2. Try to enrich with AI vision (better description, detects unseen context)
     const thumb = await this.createAnalysisThumbnail(base64Data, mimeType);
-    const aiResult = await this.tryOpenRouterAnalysis(thumb.data, thumb.mime, userTier);
+    const aiResult = await this.tryOpenRouterAnalysis(thumb.data, thumb.mime, userTier)
+      ?? await this.tryNvidiaAnalysis(thumb.data, thumb.mime);
 
     // 3. Gemini fallback — only for premium users
     const geminiResult = !aiResult && userTier !== "free"
@@ -581,6 +621,69 @@ class AIProviderService {
   }
 
   // ---------------------------------------------------------------------------
+  // NVIDIA direct — OpenAI-compatible endpoint at integrate.api.nvidia.com
+  // Only kimi-k2.5 supports vision; other NVIDIA models are text-only.
+  // ---------------------------------------------------------------------------
+  private async tryNvidiaAnalysis(base64Data: string, mimeType: string): Promise<AnalysisResult | null> {
+    const pk = this.getNextKey("nvidia");
+    if (!pk) return null;
+
+    for (const model of NVIDIA_VISION_MODELS) {
+      try {
+        const response = await fetch(`${NVIDIA_BASE}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${pk.key}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Data}` } },
+                { type: "text", text: 'Analyze this image. Return JSON only — no markdown, no explanation:\n{"description":"one sentence about the photo","suggestedEnhancement":"auto|portrait|color|lighting|upscale|beauty|skin|color_grade_cinematic|color_grade_warm|color_grade_cool|blur_background|skin_retouch|lighting_enhance","suggestedFilter":"cinematic|vivid|film|vintage|moody|goldenhour|dramatic|airy|null","detectedSubjects":["face","landscape",...],"confidence":0.0-1.0}' },
+              ],
+            }],
+            max_tokens: 250,
+            temperature: 0.1,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => "");
+          this.markFailed(pk, errBody);
+          break;
+        }
+
+        const data = await response.json() as any;
+        const content: string = data?.choices?.[0]?.message?.content ?? "";
+        this.markSuccess(pk);
+
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          return {
+            description: parsed.description || "Image uploaded",
+            suggestedEnhancement: parsed.suggestedEnhancement || "auto",
+            suggestedFilter: parsed.suggestedFilter || null,
+            detectedSubjects: Array.isArray(parsed.detectedSubjects) ? parsed.detectedSubjects : [],
+            confidence: Math.min(1, Math.max(0.5, parsed.confidence || 0.75)),
+            analysisSource: "nvidia",
+          };
+        }
+        break;
+      } catch (e) {
+        logger.debug({ err: e, model }, "NVIDIA analysis error");
+        this.markFailed(pk);
+        break;
+      }
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
   // AI-Guided Enhancement — asks LLM for specific numerical processing params
   // ---------------------------------------------------------------------------
   async getEnhancementGuidance(
@@ -609,8 +712,9 @@ Rules:
 - vignetteStrength: 0-0.4 (0 = none)
 - Be aggressive but tasteful. Each value should create a VISIBLE difference.`;
 
-    // Try OpenRouter first, then Gemini (premium only)
+    // Try OpenRouter first, then NVIDIA direct, then Gemini (premium only)
     const result = await this.tryOpenRouterGuidance(thumb.data, thumb.mime, prompt, userTier)
+      ?? await this.tryNvidiaGuidance(thumb.data, thumb.mime, prompt)
       ?? (userTier !== "free" ? await this.tryGeminiGuidance(thumb.data, thumb.mime, prompt) : null);
 
     if (result) {
@@ -684,6 +788,58 @@ Rules:
     return null;
   }
 
+  private async tryNvidiaGuidance(base64Data: string, mimeType: string, prompt: string): Promise<AIEnhancementGuidance | null> {
+    const pk = this.getNextKey("nvidia");
+    if (!pk) return null;
+
+    for (const model of NVIDIA_VISION_MODELS) {
+      try {
+        const response = await fetch(`${NVIDIA_BASE}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${pk.key}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Data}` } },
+                { type: "text", text: prompt },
+              ],
+            }],
+            max_tokens: 300,
+            temperature: 0.15,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => "");
+          this.markFailed(pk, errBody);
+          break;
+        }
+
+        const data = await response.json() as any;
+        const content: string = data?.choices?.[0]?.message?.content ?? "";
+        this.markSuccess(pk);
+
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const p = JSON.parse(jsonMatch[0]);
+          return this.sanitizeGuidance(p, "nvidia");
+        }
+        break;
+      } catch (e) {
+        logger.debug({ err: e, model }, "NVIDIA guidance error");
+        this.markFailed(pk);
+        break;
+      }
+    }
+    return null;
+  }
+
   private async tryGeminiGuidance(base64Data: string, mimeType: string, prompt: string): Promise<AIEnhancementGuidance | null> {
     const pk = this.getNextKey("gemini");
     if (!pk) return null;
@@ -730,7 +886,7 @@ Rules:
   }
 
   /** Clamp and validate AI-returned parameters to safe ranges */
-  private sanitizeGuidance(raw: any, source: "openrouter" | "gemini"): AIEnhancementGuidance {
+  private sanitizeGuidance(raw: any, source: "openrouter" | "gemini" | "nvidia"): AIEnhancementGuidance {
     const clamp = (v: unknown, min: number, max: number, def: number | null): number | null => {
       if (v === null || v === undefined) return def;
       const n = Number(v);
@@ -765,6 +921,7 @@ Rules:
       byProvider: {
         openrouter: this.keys.filter(k => k.provider === "openrouter").length,
         gemini: this.keys.filter(k => k.provider === "gemini").length,
+        nvidia: this.keys.filter(k => k.provider === "nvidia").length,
       },
       keys: this.keys.map(k => ({
         label: k.label,
