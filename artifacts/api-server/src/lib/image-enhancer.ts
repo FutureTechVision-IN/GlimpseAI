@@ -231,8 +231,10 @@ async function callRestorationService(
 
   logger.info({ enhancementType, mode, restorationModel, serviceUrl: RESTORATION_SERVICE_URL }, "Calling restoration service");
 
-  // Downscale large images before sending to ML sidecar (CPU GFPGAN is too slow for >4MP)
-  const MAX_RESTORATION_DIM = 2048;
+  // Downscale large images before sending to ML sidecar.
+  // 1024px matches the Python MAX_ML_DIM cap; anything larger gets re-capped server-side.
+  // Keeping this at 1024 reduces upload payload size and speeds up inference ~4x.
+  const MAX_RESTORATION_DIM = 1024;
   let sendBase64 = base64Data;
   const inputBuf = Buffer.from(base64Data, "base64");
   const meta = await sharp(inputBuf).metadata();
@@ -246,9 +248,26 @@ async function callRestorationService(
     sendBase64 = resized.toString("base64");
   }
 
-  // 10-minute timeout for heavy ML models (GFPGAN, CodeFormer, Real-ESRGAN)
+  // 15-minute timeout — GFPGAN/ESRGAN on CPU can take 5-10 min for complex images.
+  // Use undici dispatcher with matching headersTimeout to prevent "Headers Timeout Error".
+  // The default undici headersTimeout is 5 min which is insufficient for heavy ML inference.
   const ctrl = new AbortController();
-  const timeoutId = setTimeout(() => ctrl.abort(), 10 * 60 * 1000);
+  const TIMEOUT_MS = 15 * 60 * 1000; // 15 min
+  const timeoutId = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+
+  // Build undici Agent with elevated headersTimeout (must match or exceed AbortController timeout).
+  let dispatcher: unknown | undefined;
+  try {
+    // undici is bundled with Node.js 18+; dynamic import avoids compile-time dependency.
+    const undici = await import("undici");
+    dispatcher = new undici.Agent({
+      headersTimeout: TIMEOUT_MS,
+      bodyTimeout: TIMEOUT_MS,
+      connectTimeout: 10_000, // 10 s connect timeout
+    });
+  } catch {
+    // undici not available (unlikely in Node 18+) — fall back to default dispatcher
+  }
 
   let response: Response;
   try {
@@ -263,7 +282,8 @@ async function callRestorationService(
         restoration_model: restorationModel,
         fidelity,
       }),
-    });
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit);
   } finally {
     clearTimeout(timeoutId);
   }

@@ -105,11 +105,14 @@ def _get_realesrgan_upsampler(scale: int = 4):
         raise RuntimeError(f"RealESRGAN model not found at {model_path}")
 
     # Use CPU for tile-based processing; avoids MPS/CUDA op-support gaps
+    # tile=256 for CPU: processes image in chunks to avoid OOM on large inputs.
+    # tile=0 (disabled) only makes sense on GPU with large VRAM.
+    tile_size = 0 if DEVICE == "cuda" else 256
     upsampler = RealESRGANer(
         scale=scale,
         model_path=model_path,
         model=model,
-        tile=0,
+        tile=tile_size,
         tile_pad=10,
         pre_pad=0,
         half=(DEVICE == "cuda"),
@@ -322,6 +325,8 @@ def restore_face_gfpgan(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, 
     Run GFPGAN face restoration.
     Returns (restored_image, num_faces_detected).
     If no face detected, returns original with face_count=0.
+    weight=0.9: 90% restored + 10% original = strong, visible enhancement.
+    (weight=0.5 was 50/50 blend — caused subtle/minimal visual difference)
     """
     restorer = get_gfpgan()
 
@@ -330,7 +335,7 @@ def restore_face_gfpgan(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, 
         has_aligned=False,
         only_center_face=False,
         paste_back=True,
-        weight=0.5,
+        weight=0.9,  # was 0.5 — raised to 0.9 for strong visible restoration
     )
 
     if restored_img is None:
@@ -436,34 +441,37 @@ def restore_old_photo(img: np.ndarray, restoration_model: str = "auto", fidelity
     """
     Old photo restoration pipeline:
     1. Denoise + scratch suppression (bilateral + median)
-    2. Adaptive histogram equalization (CLAHE)
-    3. Real-ESRGAN 2x upscale for texture recovery
-    4. Face restoration (auto-selected model)
+    2. Adaptive histogram equalization (CLAHE) — strong clipLimit for old photos
+    3. Face restoration via GFPGAN (GFPGAN already runs RealESRGAN x2 on the
+       background internally via its bg_upsampler — no separate pre-upscale needed).
+
+    NOTE: Removed the ESRGAN pre-upscale step that was here previously.
+    That step caused double background upscaling (ESRGAN ran on background twice:
+    once explicitly before GFPGAN, then again inside GFPGAN's bg_upsampler).
+    GFPGAN with bg_upsampler=RealESRGAN_x2 already handles the full pipeline.
     """
-    # Step 1: Denoise — bilateral filter preserves edges, median removes scratches
-    denoised = cv2.bilateralFilter(img, 9, 75, 75)
+    # Step 1: Aggressive denoise — old photos have heavy grain and scratches
+    denoised = cv2.bilateralFilter(img, 9, 100, 75)  # sigmaColor 75→100 for stronger smoothing
     denoised = cv2.medianBlur(denoised, 3)
 
-    # Step 2: CLAHE for adaptive contrast
+    # Step 2: CLAHE — clipLimit 3.5 (was 2.0) for more visible contrast recovery
     lab = cv2.cvtColor(denoised, cv2.COLOR_BGR2LAB)
     l_channel, a_channel, b_channel = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))  # was 2.0
     l_channel = clahe.apply(l_channel)
     enhanced = cv2.merge([l_channel, a_channel, b_channel])
     enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
-    # Step 3: Real-ESRGAN 2x upscale for texture recovery
-    upscaled = upscale_image(enhanced, scale=2)
-
-    # Step 4: Face restoration (auto-select or specified)
+    # Step 3: Face restoration — GFPGAN internally applies RealESRGAN to background.
+    # Output is 2x the original size with restored faces + enhanced background.
     if restoration_model == "codeformer":
-        restored, face_count = restore_face_codeformer(upscaled, fidelity=fidelity)
+        restored, face_count = restore_face_codeformer(enhanced, fidelity=fidelity)
         backend = "codeformer"
     elif restoration_model == "gfpgan":
-        restored, face_count = restore_face_gfpgan(upscaled, upscale=2)
+        restored, face_count = restore_face_gfpgan(enhanced, upscale=2)
         backend = "gfpgan"
     else:
-        restored, face_count, backend = restore_face_auto(upscaled, fidelity=fidelity)
+        restored, face_count, backend = restore_face_auto(enhanced, fidelity=fidelity)
 
     return restored, face_count, backend
 
@@ -729,7 +737,9 @@ async def analyze_faces_endpoint(req: RestoreRequest):
     }
 
 
-MAX_ML_DIM = 2048  # Cap images before ML inference to avoid CPU timeouts
+# 1024px cap: sufficient for GFPGAN face detection accuracy and significantly
+# faster than 2048px on CPU (4x fewer pixels = ~4x faster inference).
+MAX_ML_DIM = 1024  # was 2048
 
 
 def _cap_image_for_ml(img: np.ndarray) -> np.ndarray:
@@ -764,14 +774,18 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
             result, faces_detected = restore_face_gfpgan(img, upscale=2)
 
     elif req_mode == "face_restore_hd":
-        upscaled = upscale_image(img, scale=4)
+        # HD pipeline: GFPGAN face restore (2x) → ESRGAN 2x = 4x total output.
+        # Previous pipeline was ESRGAN 4x → GFPGAN 2x = 8x (caused OOM + timeouts).
         if req_restoration_model == "codeformer":
-            result, faces_detected = restore_face_codeformer(upscaled, fidelity=req_fidelity)
+            face_restored, faces_detected = restore_face_codeformer(img, fidelity=req_fidelity)
             backend_used = "codeformer"
         elif req_restoration_model == "auto":
-            result, faces_detected, backend_used = restore_face_auto(upscaled, fidelity=req_fidelity)
+            face_restored, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
         else:
-            result, faces_detected = restore_face_gfpgan(upscaled, upscale=1)
+            face_restored, faces_detected = restore_face_gfpgan(img, upscale=2)
+            backend_used = "gfpgan"
+        # Second pass: ESRGAN 2x for overall sharpness and texture on the face-restored image
+        result = upscale_image(face_restored, scale=2)
 
     elif req_mode == "codeformer":
         result, faces_detected = restore_face_codeformer(img, fidelity=req_fidelity)
@@ -893,4 +907,16 @@ async def restore_video_endpoint(req: VideoRestoreRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=PORT,
+        log_level="info",
+        # httptools avoids h11's strict header-size limit which causes
+        # "Headers Timeout Error" when receiving large base64-encoded images.
+        http="httptools",
+        # Keep connections alive for up to 10 min — ML inference can take minutes.
+        timeout_keep_alive=600,
+        # Single worker to keep all ML models loaded in one process.
+        workers=1,
+    )
