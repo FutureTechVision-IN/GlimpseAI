@@ -1000,3 +1000,35 @@ export async function enhanceImage(
 
   return { base64: outBase64, mimeType: outputMime };
 }
+
+/**
+ * Batch restoration: sends multiple images to the restoration sidecar in sequence.
+ * Falls back to local Sharp processing if the sidecar is unreachable.
+ */
+export async function callBatchRestoration(
+  images: Array<{ base64Data: string; mode: string; settings?: Record<string, unknown> }>,
+): Promise<Array<{ base64: string; mimeType: string }>> {
+  const available = await isRestorationServiceAvailable();
+  const results: Array<{ base64: string; mimeType: string }> = [];
+
+  for (const img of images) {
+    try {
+      if (available && RESTORATION_TYPES.has(img.mode)) {
+        const result = await callRestorationService(img.base64Data, img.mode, img.settings);
+        results.push(result);
+      } else {
+        // Fallback to local Sharp enhancement
+        const result = await enhanceImage(img.base64Data, "image/jpeg", {
+          enhancementType: img.mode,
+          settings: img.settings,
+        });
+        results.push(result);
+      }
+    } catch (err) {
+      logger.error({ mode: img.mode, err }, "Batch restoration item failed — using original");
+      results.push({ base64: img.base64Data, mimeType: "image/jpeg" });
+    }
+  }
+
+  return results;
+}
