@@ -49,6 +49,28 @@ export default function Dashboard() {
       .slice(0, 6);
   }, [recentJobs]);
 
+  // Detailed stats
+  const detailedStats = useMemo(() => {
+    if (!recentJobs?.length) return null;
+    const completed = recentJobs.filter(j => j.status === "completed").length;
+    const failed = recentJobs.filter(j => j.status === "failed").length;
+    const total = recentJobs.length;
+    const successRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const processingTimes = recentJobs
+      .filter(j => j.processingTimeMs && j.processingTimeMs > 0)
+      .map(j => j.processingTimeMs as number);
+    const avgProcessingTime = processingTimes.length > 0
+      ? Math.round(processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length)
+      : 0;
+    // Category breakdown
+    const byCategory: Record<string, number> = {};
+    for (const job of recentJobs) {
+      const meta = getEnhancementMeta(job.enhancementType);
+      byCategory[meta.category] = (byCategory[meta.category] || 0) + 1;
+    }
+    return { completed, failed, total, successRate, avgProcessingTime, byCategory };
+  }, [recentJobs]);
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "completed": return <CheckCircle2 className="w-4 h-4 text-emerald-400" />;
@@ -436,6 +458,77 @@ export default function Dashboard() {
                 <p className="text-[11px] text-zinc-600 mt-3">Based on {recentJobs?.length || 0} total enhancements this billing period</p>
               </CardContent>
             </Card>
+          </motion.div>
+        )}
+
+        {/* Detailed Usage Analytics */}
+        {!isLoadingJobs && detailedStats && detailedStats.total > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.5 }}
+            className="space-y-4"
+          >
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-zinc-500" />
+              Performance Analytics
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Success Rate */}
+              <Card className="bg-gradient-to-br from-zinc-900/80 to-zinc-950 border-zinc-800/60">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Success Rate</span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="text-3xl font-bold text-white">{detailedStats.successRate}%</div>
+                  <div className="flex items-center gap-3 mt-2 text-[11px] text-zinc-500">
+                    <span className="text-emerald-400">{detailedStats.completed} passed</span>
+                    <span>·</span>
+                    <span className="text-red-400">{detailedStats.failed} failed</span>
+                    <span>·</span>
+                    <span>{detailedStats.total} total</span>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Avg Processing Time */}
+              <Card className="bg-gradient-to-br from-zinc-900/80 to-zinc-950 border-zinc-800/60">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Avg. Processing</span>
+                    <Clock className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <div className="text-3xl font-bold text-white">{formatProcessingTime(detailedStats.avgProcessingTime)}</div>
+                  <p className="text-[11px] text-zinc-500 mt-2">Average per enhancement</p>
+                </CardContent>
+              </Card>
+
+              {/* Category Breakdown */}
+              <Card className="bg-gradient-to-br from-zinc-900/80 to-zinc-950 border-zinc-800/60">
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">By Category</span>
+                    <BarChart3 className="w-4 h-4 text-purple-400" />
+                  </div>
+                  <div className="space-y-2 mt-1">
+                    {Object.entries(detailedStats.byCategory).sort(([,a],[,b]) => b - a).map(([cat, count]) => {
+                      const pct = Math.round((count / detailedStats.total) * 100);
+                      const catColors: Record<string, string> = { basic: "bg-teal-500", restoration: "bg-emerald-500", video: "bg-purple-500", filter: "bg-violet-500" };
+                      return (
+                        <div key={cat} className="flex items-center gap-2">
+                          <span className="text-[11px] text-zinc-400 w-20 capitalize">{cat}</span>
+                          <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className={cn("h-full rounded-full", catColors[cat] || "bg-zinc-500")} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="text-[10px] text-zinc-500 w-8 text-right">{count}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </motion.div>
         )}
       </div>

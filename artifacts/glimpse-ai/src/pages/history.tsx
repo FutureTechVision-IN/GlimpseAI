@@ -225,6 +225,18 @@ export default function History() {
                     </Badge>
                     <span className="text-[10px] text-zinc-600">{new Date(item.createdAt).toLocaleDateString()}</span>
                   </div>
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                    <span className={cn(
+                      "text-[9px] font-semibold uppercase px-1 py-0.5 rounded border",
+                      meta.category === "restoration" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/30"
+                      : meta.category === "video" ? "text-purple-400 bg-purple-500/10 border-purple-500/30"
+                      : meta.category === "filter" ? "text-violet-400 bg-violet-500/10 border-violet-500/30"
+                      : "text-teal-400 bg-teal-500/10 border-teal-500/30"
+                    )}>
+                      {meta.category}
+                    </span>
+                    <span className="text-[9px] text-zinc-600">{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
                   {item.processingTimeMs && (
                     <div className="flex items-center gap-1 mt-1.5 text-[10px] text-zinc-500">
                       <Clock className="w-2.5 h-2.5" />

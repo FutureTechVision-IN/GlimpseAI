@@ -67,6 +67,8 @@ import {
   Contrast,
   CircleDot,
   ScanEye,
+  ScanFace,
+  ImageUp,
   Undo2,
   MessageSquare,
   Send,
@@ -76,6 +78,7 @@ import {
   Clock,
   Gauge,
   Lock,
+  ArrowLeftRight,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
@@ -196,6 +199,12 @@ const SIMPLE_PRESETS: { type: EnhanceMediaBodyEnhancementType; label: string; de
   { type: "skin_retouch",           label: "Skin Retouch",     desc: "Smooth skin with natural detail",     icon: <Paintbrush   className="w-5 h-5" /> },
   { type: "upscale",                label: "2x Upscale",       desc: "Double resolution with AI",           icon: <ZoomIn       className="w-5 h-5" /> },
   { type: "upscale_4x",             label: "4x Upscale",       desc: "Quadruple resolution (pro)",          icon: <Layers       className="w-5 h-5" /> },
+  { type: "face_restore",            label: "Face Restore",     desc: "GFPGAN AI face restoration",          icon: <ScanFace     className="w-5 h-5" /> },
+  { type: "codeformer",              label: "CodeFormer",       desc: "CodeFormer face restoration",         icon: <ScanEye      className="w-5 h-5" /> },
+  { type: "auto_face",               label: "Auto Face AI",     desc: "Auto-select best face model",         icon: <Sparkles     className="w-5 h-5" /> },
+  { type: "old_photo_restore",       label: "Old Photo Fix",    desc: "Restore old/damaged photos",          icon: <ImageUp      className="w-5 h-5" /> },
+  { type: "esrgan_upscale_2x",       label: "ESRGAN 2x",        desc: "Real-ESRGAN super-resolution 2×",     icon: <ZoomIn       className="w-5 h-5" /> },
+  { type: "esrgan_upscale_4x",       label: "ESRGAN 4x",        desc: "Real-ESRGAN super-resolution 4×",     icon: <Layers       className="w-5 h-5" /> },
 ];
 
 const STAGE_INFO: Record<ProcessStage, { label: string; colorClass: string }> = {
@@ -451,7 +460,8 @@ export default function Editor() {
   const planSlug: string | null = (user as any)?.planSlug ?? null;
   const isAdmin = user?.role === "admin";
   // Premium-only features
-  const PREMIUM_FEATURES = new Set(["upscale_4x", "posture"]);
+  const PREMIUM_FEATURES = new Set(["upscale_4x", "posture", "codeformer", "auto_face", "face_restore_hd", "esrgan_upscale_4x"]);
+  const RESTORATION_FEATURES = new Set(["face_restore", "codeformer", "auto_face", "old_photo_restore", "esrgan_upscale_2x", "esrgan_upscale_4x", "face_restore_hd"]);
   const BASIC_PLUS_FEATURES = new Set(["stabilize", "trim"]);
   const PREMIUM_FILTER_KEYS = new Set([
     "airy", "teal_orange", "pastel", "noir_color", "cross_process",
@@ -511,6 +521,7 @@ export default function Editor() {
   const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+  const [splitCompare, setSplitCompare] = useState(false);
 
   // Undo stack
   const [undoStack, setUndoStack] = useState<EditorSnapshot[]>([]);
@@ -947,6 +958,12 @@ export default function Editor() {
     { type: "color_grade_cool",       label: "Cool",        icon: <Droplets    className="w-3 h-3" /> },
     { type: "filter",                 label: "Filter",      icon: <Camera      className="w-3 h-3" /> },
     { type: "background",             label: "Background",  icon: <Mountain    className="w-3 h-3" /> },
+    { type: "face_restore",            label: "Face AI",     icon: <ScanFace    className="w-3 h-3" /> },
+    { type: "codeformer",              label: "CodeFmr",     icon: <ScanEye     className="w-3 h-3" /> },
+    { type: "auto_face",               label: "Auto Face",   icon: <Sparkles    className="w-3 h-3" /> },
+    { type: "old_photo_restore",       label: "Old Photo",   icon: <ImageUp     className="w-3 h-3" /> },
+    { type: "esrgan_upscale_2x",       label: "SR 2×",       icon: <ZoomIn      className="w-3 h-3" /> },
+    { type: "esrgan_upscale_4x",       label: "SR 4×",       icon: <Layers      className="w-3 h-3" /> },
   ];
 
   return (
@@ -1736,6 +1753,14 @@ export default function Editor() {
                           <Eye className="w-3.5 h-3.5 mr-1.5" />Hold to compare
                         </Button>
                       )}
+                      {isCompleted && currentJob?.processedUrl && (
+                        <Button variant="outline" size="sm"
+                          className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", splitCompare && "border-teal-500 text-teal-300")}
+                          onClick={() => setSplitCompare(!splitCompare)}
+                        >
+                          <ArrowLeftRight className="w-3.5 h-3.5 mr-1.5" />Side-by-Side
+                        </Button>
+                      )}
                     </div>
                     {isCompleted && currentJob?.processedUrl ? (
                       <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
@@ -1822,7 +1847,26 @@ export default function Editor() {
                       )}
                     </AnimatePresence>
 
-                    {isCompleted && currentJob?.processedUrl && !showCompare ? (
+                    {splitCompare && isCompleted && currentJob?.processedUrl ? (
+                      <div className="grid grid-cols-2 gap-3 w-full">
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Original</span>
+                          <div className="rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center">
+                            {mediaType === "video"
+                              ? <video src={previewUrl} controls className="max-w-full max-h-[40vh] object-contain" />
+                              : <img src={previewUrl} alt="Original" className="max-w-full max-h-[40vh] object-contain" />}
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-medium text-teal-400 uppercase tracking-wider">Enhanced</span>
+                          <div className="rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center">
+                            {mediaType === "video"
+                              ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[40vh] object-contain" />
+                              : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[40vh] object-contain" />}
+                          </div>
+                        </div>
+                      </div>
+                    ) : isCompleted && currentJob?.processedUrl && !showCompare ? (
                       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                         {mediaType === "video"
                           ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[55vh] object-contain" />
