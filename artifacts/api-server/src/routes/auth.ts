@@ -1,10 +1,17 @@
 import { Router, IRouter } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { db, usersTable } from "@workspace/db";
+import { db, usersTable, plansTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { generateToken, requireAuth, AuthRequest } from "../middlewares/auth";
 import { RegisterBody, LoginBody, ForgotPasswordBody, ResetPasswordBody } from "@workspace/api-zod";
+
+/** Resolve the plan slug for a user, joining the plans table when needed */
+async function getUserPlanSlug(planId: number | null): Promise<string | null> {
+  if (!planId) return null;
+  const [plan] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, planId));
+  return plan?.slug ?? null;
+}
 
 const router: IRouter = Router();
 
@@ -40,6 +47,7 @@ router.post("/auth/register", async (req, res): Promise<void> => {
       email: user.email,
       role: user.role,
       planId: user.planId,
+      planSlug: null,
       creditsUsed: user.creditsUsed,
       creditsLimit: user.creditsLimit,
       isSuspended: user.isSuspended,
@@ -75,6 +83,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   }
 
   const token = generateToken(user.id, user.role);
+  const planSlug = await getUserPlanSlug(user.planId);
   res.json({
     user: {
       id: user.id,
@@ -82,6 +91,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
       email: user.email,
       role: user.role,
       planId: user.planId,
+      planSlug,
       creditsUsed: user.creditsUsed,
       creditsLimit: user.creditsLimit,
       isSuspended: user.isSuspended,
@@ -101,12 +111,14 @@ router.get("/auth/me", requireAuth, async (req: AuthRequest, res): Promise<void>
     res.status(404).json({ error: "User not found" });
     return;
   }
+  const planSlug = await getUserPlanSlug(user.planId);
   res.json({
     id: user.id,
     name: user.name,
     email: user.email,
     role: user.role,
     planId: user.planId,
+    planSlug,
     creditsUsed: user.creditsUsed,
     creditsLimit: user.creditsLimit,
     isSuspended: user.isSuspended,

@@ -39,10 +39,11 @@ router.get("/users/usage", requireAuth, async (req: AuthRequest, res): Promise<v
   }
 
   let planName: string | null = null;
+  let planSlug: string | null = null;
   let planExpiry: string | null = null;
   if (user.planId) {
     const [plan] = await db.select().from(plansTable).where(eq(plansTable.id, user.planId));
-    if (plan) planName = plan.name;
+    if (plan) { planName = plan.name; planSlug = plan.slug; }
     if (user.planExpiresAt) planExpiry = user.planExpiresAt.toISOString();
   }
 
@@ -61,6 +62,7 @@ router.get("/users/usage", requireAuth, async (req: AuthRequest, res): Promise<v
     dailyLimit: user.dailyLimit,
     dailyRemaining: Math.max(0, user.dailyLimit - user.dailyCreditsUsed),
     planName,
+    planSlug,
     planExpiry,
     photoCount: photoCountResult[0]?.c ?? 0,
     videoCount: videoCountResult[0]?.c ?? 0,

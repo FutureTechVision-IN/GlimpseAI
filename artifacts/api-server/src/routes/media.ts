@@ -1,5 +1,5 @@
 import { Router, IRouter } from "express";
-import { db, mediaJobsTable, usersTable, presetsTable } from "@workspace/db";
+import { db, mediaJobsTable, usersTable, presetsTable, plansTable } from "@workspace/db";
 import { eq, and, desc, count } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { requireAuth, AuthRequest } from "../middlewares/auth";
@@ -12,6 +12,7 @@ import {
 import { enhanceImage } from "../lib/image-enhancer";
 import { aiProvider, feedbackAccumulator, type UserTier } from "../lib/ai-provider";
 import { formatApiError } from "../lib/api-errors";
+import { checkTierAccess, resolvePlanSlug } from "../lib/tier-config";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -199,6 +200,23 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
   if (!job.base64Data) {
     res.status(400).json({ error: "No image data available for this job" });
     return;
+  }
+
+  // ── Tier-based feature gating ──
+  if (!isAdmin(req)) {
+    const [enhUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
+    let planSlug: string | null = null;
+    if (enhUser?.planId) {
+      const [plan] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, enhUser.planId));
+      planSlug = plan?.slug ?? null;
+    }
+    const tierSlug = resolvePlanSlug(planSlug, false);
+    const filterName = (settings as Record<string, unknown> | undefined)?.filterName as string | undefined;
+    const tierError = checkTierAccess(tierSlug, enhancementType, filterName);
+    if (tierError) {
+      res.status(403).json({ error: tierError, code: "TIER_RESTRICTED" });
+      return;
+    }
   }
 
   const startTime = Date.now();
