@@ -59,8 +59,10 @@ services:
     restart: unless-stopped
     environment:
       RESTORATION_PORT: 7860
+      GPU_ID: "0"
     volumes:
       - ./services/restoration/models:/app/models
+      - ./services/restoration/gfpgan/weights:/app/gfpgan/weights
     ports:
       - "7860:7860"
     deploy:

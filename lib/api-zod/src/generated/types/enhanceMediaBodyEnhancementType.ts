@@ -32,6 +32,8 @@ export const EnhanceMediaBodyEnhancementType = {
   skin_retouch: "skin_retouch",
   face_restore: "face_restore",
   face_restore_hd: "face_restore_hd",
+  codeformer: "codeformer",
+  auto_face: "auto_face",
   esrgan_upscale_2x: "esrgan_upscale_2x",
   esrgan_upscale_4x: "esrgan_upscale_4x",
   old_photo_restore: "old_photo_restore",

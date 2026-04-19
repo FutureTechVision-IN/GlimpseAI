@@ -9,7 +9,7 @@ import {
   ListMediaJobsQueryParams,
   ListPresetsQueryParams,
 } from "@workspace/api-zod";
-import { enhanceImage } from "../lib/image-enhancer";
+import { enhanceImage, callVideoRestoration } from "../lib/image-enhancer";
 import { aiProvider, feedbackAccumulator, type UserTier } from "../lib/ai-provider";
 import { formatApiError } from "../lib/api-errors";
 import { checkTierAccess, resolvePlanSlug } from "../lib/tier-config";
@@ -238,10 +238,32 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
   const [processing] = await db.select().from(mediaJobsTable).where(eq(mediaJobsTable.id, jobId));
   res.json(jobToResponse(processing));
 
-  // ── Background: real image enhancement ──
+  // ── Background: real image/video enhancement ──
   try {
-    // Detect mime type for sharp
     const rawB64 = job.base64Data;
+
+    // ── Video Restoration (separate pipeline) ──
+    if (enhancementType === "video_restore") {
+      const videoMode = (settings as Record<string, unknown>)?.videoMode as string || "upscale_2x";
+      const faceEnhance = (settings as Record<string, unknown>)?.faceEnhance !== false;
+      const temporalConsistency = (settings as Record<string, unknown>)?.temporalConsistency !== false;
+      const restorationModel = (settings as Record<string, unknown>)?.restorationModel as string || "gfpgan";
+
+      const result = await callVideoRestoration(rawB64, videoMode, faceEnhance, 300, temporalConsistency, restorationModel);
+
+      await db.update(mediaJobsTable).set({
+        status: "completed",
+        processedUrl: result.base64,
+        thumbnailUrl: result.base64,
+        processingTimeMs: Date.now() - startTime,
+        completedAt: new Date(),
+      }).where(eq(mediaJobsTable.id, jobId));
+
+      logger.info({ jobId, type: enhancementType, frames: result.framesProcessed, scenes: result.sceneChanges, ms: result.processingMs }, "Video restoration completed");
+      return;
+    }
+
+    // ── Image Enhancement (sharp + AI restoration sidecar) ──
     let mimeType = "image/jpeg";
     if (rawB64.startsWith("iVBOR")) mimeType = "image/png";
     else if (rawB64.startsWith("UklGR")) mimeType = "image/webp";

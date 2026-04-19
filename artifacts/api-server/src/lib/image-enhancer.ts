@@ -155,6 +155,169 @@ const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
   chrome: (p) => p.modulate({ saturation: 0.3, brightness: 1.08 }).normalize().sharpen({ sigma: 1.5, m1: 1.8, m2: 0.9 }).gamma(1.0),
 };
 
+// ---------------------------------------------------------------------------
+// AI Restoration Service Bridge (GFPGAN + CodeFormer + Real-ESRGAN)
+// ---------------------------------------------------------------------------
+
+const RESTORATION_SERVICE_URL = process.env.RESTORATION_SERVICE_URL || "http://localhost:7860";
+
+/** Set of enhancement types that route to the Python restoration sidecar. */
+const RESTORATION_TYPES = new Set([
+  "face_restore",
+  "face_restore_hd",
+  "codeformer",
+  "auto_face",
+  "esrgan_upscale_2x",
+  "esrgan_upscale_4x",
+  "old_photo_restore",
+]);
+
+interface RestorationResponse {
+  image_base64: string;
+  mime_type: string;
+  processing_ms: number;
+  faces_detected: number;
+  mode: string;
+  device: string;
+  restoration_backend: string;
+  face_analysis?: Array<{
+    bbox: number[];
+    blur_score: number;
+    degradation_level: string;
+    recommended_model: string;
+  }>;
+}
+
+/**
+ * Check whether the restoration sidecar is reachable.
+ * Returns false if unreachable (caller should fall back to local processing).
+ */
+async function isRestorationServiceAvailable(): Promise<boolean> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 2000);
+    const res = await fetch(`${RESTORATION_SERVICE_URL}/health`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Map enhancement type to restoration service mode and call the Python sidecar.
+ */
+async function callRestorationService(
+  base64Data: string,
+  enhancementType: string,
+  settings?: Record<string, unknown>,
+): Promise<{ base64: string; mimeType: string }> {
+  const modeMap: Record<string, string> = {
+    face_restore: "face_restore",
+    face_restore_hd: "face_restore_hd",
+    codeformer: "codeformer",
+    auto_face: "auto_face",
+    esrgan_upscale_2x: "upscale_2x",
+    esrgan_upscale_4x: "upscale_4x",
+    old_photo_restore: "old_photo",
+  };
+
+  const mode = modeMap[enhancementType];
+  if (!mode) throw new Error(`Unknown restoration type: ${enhancementType}`);
+
+  const restorationModel = (settings?.restorationModel as string) || "auto";
+  const fidelity = typeof settings?.fidelity === "number" ? settings.fidelity : 0.5;
+
+  logger.info({ enhancementType, mode, restorationModel, serviceUrl: RESTORATION_SERVICE_URL }, "Calling restoration service");
+
+  const response = await fetch(`${RESTORATION_SERVICE_URL}/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image_base64: base64Data,
+      mode,
+      face_enhance: true,
+      restoration_model: restorationModel,
+      fidelity,
+    }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    logger.error({ status: response.status, body: errBody }, "Restoration service error");
+    throw new Error(`Restoration service failed (${response.status}): ${errBody}`);
+  }
+
+  const result = (await response.json()) as RestorationResponse;
+
+  logger.info({
+    mode: result.mode,
+    backend: result.restoration_backend,
+    faces: result.faces_detected,
+    processingMs: result.processing_ms,
+    device: result.device,
+  }, "Restoration complete");
+
+  return { base64: result.image_base64, mimeType: result.mime_type };
+}
+
+/**
+ * Call the restoration service for video processing.
+ */
+export async function callVideoRestoration(
+  videoBase64: string,
+  mode: string = "upscale_2x",
+  faceEnhance: boolean = true,
+  maxFrames: number = 300,
+  temporalConsistency: boolean = true,
+  restorationModel: string = "gfpgan",
+): Promise<{ base64: string; mimeType: string; framesProcessed: number; processingMs: number; sceneChanges: number }> {
+  logger.info({ mode, faceEnhance, maxFrames, temporalConsistency, restorationModel }, "Calling video restoration service");
+
+  const response = await fetch(`${RESTORATION_SERVICE_URL}/restore-video`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      video_base64: videoBase64,
+      mode,
+      face_enhance: faceEnhance,
+      max_frames: maxFrames,
+      temporal_consistency: temporalConsistency,
+      restoration_model: restorationModel,
+    }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    logger.error({ status: response.status, body: errBody }, "Video restoration service error");
+    throw new Error(`Video restoration service failed (${response.status}): ${errBody}`);
+  }
+
+  const result = (await response.json()) as {
+    video_base64: string;
+    mime_type: string;
+    processing_ms: number;
+    frames_processed: number;
+    mode: string;
+    scene_changes_detected: number;
+  };
+
+  logger.info({
+    mode: result.mode,
+    framesProcessed: result.frames_processed,
+    sceneChanges: result.scene_changes_detected,
+    processingMs: result.processing_ms,
+  }, "Video restoration complete");
+
+  return {
+    base64: result.video_base64,
+    mimeType: result.mime_type,
+    framesProcessed: result.frames_processed,
+    processingMs: result.processing_ms,
+    sceneChanges: result.scene_changes_detected,
+  };
+}
+
 /**
  * Real image enhancement using sharp (libvips).
  * Accepts raw base64 (no prefix), returns raw base64 (no prefix).
@@ -164,10 +327,21 @@ export async function enhanceImage(
   mimeType: string,
   options: EnhanceOptions,
 ): Promise<{ base64: string; mimeType: string }> {
+  const type = options.enhancementType;
+
+  // Route restoration types to the Python sidecar
+  if (RESTORATION_TYPES.has(type)) {
+    const available = await isRestorationServiceAvailable();
+    if (!available) {
+      logger.warn({ type }, "Restoration service unreachable — falling back to local sharp processing");
+    } else {
+      return callRestorationService(base64Data, type, options.settings as Record<string, unknown>);
+    }
+  }
+
   const inputBuffer = Buffer.from(base64Data, "base64");
   let pipeline = sharp(inputBuffer);
   const meta = await sharp(inputBuffer).metadata();
-  const type = options.enhancementType;
   const s = options.settings ?? {};
 
   logger.info({ type, width: meta.width, height: meta.height, format: meta.format }, "Enhancing image");

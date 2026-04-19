@@ -41,8 +41,9 @@ const PREMIUM_EXTRAS = [
   "upscale", "upscale_4x",
   "posture",
   "stabilize", "trim",
-  // AI Restoration (GFPGAN + Real-ESRGAN)
+  // AI Restoration (GFPGAN + CodeFormer + Real-ESRGAN)
   "face_restore", "face_restore_hd",
+  "codeformer", "auto_face",
   "esrgan_upscale_2x", "esrgan_upscale_4x",
   "old_photo_restore", "video_restore",
 ];
@@ -124,6 +125,12 @@ export function checkTierAccess(
     }
     if (enhancementType === "face_restore" || enhancementType === "face_restore_hd") {
       return "AI Face Restoration is a Premium feature. Upgrade to Premium to restore faces with GFPGAN.";
+    }
+    if (enhancementType === "codeformer") {
+      return "CodeFormer face restoration is a Premium feature. Upgrade to Premium for superior degraded face recovery.";
+    }
+    if (enhancementType === "auto_face") {
+      return "Auto Face Restoration is a Premium feature. Upgrade to Premium for AI-powered face analysis and restoration.";
     }
     if (enhancementType === "esrgan_upscale_2x" || enhancementType === "esrgan_upscale_4x") {
       return "AI Super-Resolution (Real-ESRGAN) is a Premium feature. Upgrade to Premium.";

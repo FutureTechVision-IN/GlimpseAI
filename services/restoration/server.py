@@ -1,25 +1,39 @@
 """
-GlimpseAI Restoration Service
-FastAPI sidecar wrapping GFPGAN + Real-ESRGAN for AI-powered image/video restoration.
+GlimpseAI Restoration Service — Generative-Refinement Hybrid Architecture
+
+FastAPI sidecar wrapping:
+  • GFPGAN   — blind face restoration (BFR) with facial priors
+  • CodeFormer — codebook-lookup transformer for heavily degraded faces
+  • Real-ESRGAN — background & texture super-resolution
+
+Modular pipeline:
+  1. Landmark detection & face alignment (facexlib)
+  2. Restoration routing (GFPGAN for standard faces, CodeFormer for heavy degradation)
+  3. Real-ESRGAN background upscaling
+  4. Temporal consistency for video (scene-change detection, optical-flow blending)
+
 Runs as a local service on port 7860, called by the Node.js API server.
 """
 
 import base64
 import io
+import json
 import logging
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from enum import Enum
 from pathlib import Path
 from contextlib import asynccontextmanager
+from typing import Optional
 
 # ─── Compatibility patch for torchvision ≥0.17 + basicsr ─────────────────────
 # basicsr imports from torchvision.transforms.functional_tensor which was removed.
 # Redirect to the correct module before any ML imports.
-import importlib
 import torchvision.transforms.functional as _tvf
 
 _compat_module = type(sys)("torchvision.transforms.functional_tensor")
@@ -37,46 +51,41 @@ from pydantic import BaseModel, Field
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 MODEL_DIR = Path(__file__).parent / "models"
+WEIGHTS_DIR = Path(__file__).parent / "gfpgan" / "weights"
 PORT = int(os.getenv("RESTORATION_PORT", "7860"))
 
-# Device selection: MPS (Apple Silicon) > CUDA > CPU
-if torch.backends.mps.is_available():
-    DEVICE = "mps"
-elif torch.cuda.is_available():
+# Device selection: CUDA > MPS > CPU
+# GFPGAN/CodeFormer run on CPU for stability (MPS has unsupported ops).
+# Real-ESRGAN can use GPU for background tiles.
+if torch.cuda.is_available():
     DEVICE = "cuda"
+    GPU_DEVICE = torch.device("cuda", int(os.getenv("GPU_ID", "0")))
+elif torch.backends.mps.is_available():
+    DEVICE = "mps"
+    GPU_DEVICE = torch.device("mps")
 else:
     DEVICE = "cpu"
+    GPU_DEVICE = torch.device("cpu")
+
+# Face models always run on CPU to avoid MPS/CUDA op-support issues
+FACE_DEVICE = torch.device("cpu")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("restoration")
 
 # ─── Global model holders (lazy-loaded) ──────────────────────────────────────
 _gfpgan_restorer = None
+_codeformer_restorer = None
 _realesrgan_x2 = None
 _realesrgan_x4 = None
+_face_detector = None
 
 
-def get_gfpgan():
-    """Lazy-load GFPGAN face restorer."""
-    global _gfpgan_restorer
-    if _gfpgan_restorer is None:
-        from gfpgan import GFPGANer
-        model_path = str(MODEL_DIR / "GFPGANv1.4.pth")
-        if not Path(model_path).exists():
-            raise RuntimeError(f"GFPGAN model not found at {model_path}")
-
-        # Use CPU for GFPGAN if MPS (some ops not supported on MPS)
-        bg_upsampler = _get_realesrgan_upsampler(scale=2)
-        _gfpgan_restorer = GFPGANer(
-            model_path=model_path,
-            upscale=2,
-            arch="clean",
-            channel_multiplier=2,
-            bg_upsampler=bg_upsampler,
-            device=torch.device("cpu"),  # GFPGAN uses CPU for stability on MPS
-        )
-        logger.info("GFPGAN model loaded (device=cpu, bg_upsampler=RealESRGAN)")
-    return _gfpgan_restorer
+class RestorationModel(str, Enum):
+    """Selectable face restoration backend."""
+    GFPGAN = "gfpgan"
+    CODEFORMER = "codeformer"
+    AUTO = "auto"  # auto-select based on degradation level
 
 
 def _get_realesrgan_upsampler(scale: int = 4):
@@ -94,7 +103,7 @@ def _get_realesrgan_upsampler(scale: int = 4):
     if not Path(model_path).exists():
         raise RuntimeError(f"RealESRGAN model not found at {model_path}")
 
-    # Use CPU for stability; MPS has sporadic issues with some ops
+    # Use CPU for tile-based processing; avoids MPS/CUDA op-support gaps
     upsampler = RealESRGANer(
         scale=scale,
         model_path=model_path,
@@ -102,8 +111,8 @@ def _get_realesrgan_upsampler(scale: int = 4):
         tile=0,
         tile_pad=10,
         pre_pad=0,
-        half=False,
-        device=torch.device("cpu"),
+        half=(DEVICE == "cuda"),
+        device=FACE_DEVICE,
     )
     return upsampler
 
@@ -123,14 +132,134 @@ def get_realesrgan(scale: int = 4):
         return _realesrgan_x4
 
 
+def get_gfpgan():
+    """Lazy-load GFPGAN face restorer."""
+    global _gfpgan_restorer
+    if _gfpgan_restorer is None:
+        from gfpgan import GFPGANer
+        model_path = str(MODEL_DIR / "GFPGANv1.4.pth")
+        if not Path(model_path).exists():
+            raise RuntimeError(f"GFPGAN model not found at {model_path}")
+
+        bg_upsampler = _get_realesrgan_upsampler(scale=2)
+        _gfpgan_restorer = GFPGANer(
+            model_path=model_path,
+            upscale=2,
+            arch="clean",
+            channel_multiplier=2,
+            bg_upsampler=bg_upsampler,
+            device=FACE_DEVICE,
+        )
+        logger.info("GFPGAN model loaded (device=%s, bg_upsampler=RealESRGAN)", FACE_DEVICE)
+    return _gfpgan_restorer
+
+
+def get_codeformer():
+    """Lazy-load CodeFormer face restorer (superior for heavily degraded faces)."""
+    global _codeformer_restorer
+    if _codeformer_restorer is None:
+        try:
+            from codeformer import CodeFormer
+            _codeformer_restorer = CodeFormer(upscale=2, device=str(FACE_DEVICE))
+            logger.info("CodeFormer model loaded (device=%s)", FACE_DEVICE)
+        except ImportError:
+            logger.warning("codeformer-pip not installed — CodeFormer unavailable, falling back to GFPGAN")
+            _codeformer_restorer = "unavailable"
+        except Exception as e:
+            logger.warning("CodeFormer load failed: %s — falling back to GFPGAN", e)
+            _codeformer_restorer = "unavailable"
+    return _codeformer_restorer
+
+
+# ─── Face Detection & Landmark Analysis ───────────────────────────────────────
+
+def get_face_detector():
+    """Lazy-load facexlib face detector for landmark analysis."""
+    global _face_detector
+    if _face_detector is None:
+        try:
+            from facexlib.detection import init_detection_model
+            _face_detector = init_detection_model("retinaface_resnet50", device=str(FACE_DEVICE))
+            logger.info("Face detector loaded (retinaface_resnet50)")
+        except Exception as e:
+            logger.warning("Face detector init failed: %s", e)
+            _face_detector = "unavailable"
+    return _face_detector
+
+
+def detect_faces_with_landmarks(img: np.ndarray) -> list[dict]:
+    """
+    Detect faces and extract bounding boxes + 5-point landmarks.
+    Returns list of {bbox, landmarks, confidence, area, blur_score}.
+    """
+    detector = get_face_detector()
+    if detector == "unavailable" or detector is None:
+        return []
+
+    try:
+        with torch.no_grad():
+            h, w = img.shape[:2]
+            # facexlib expects BGR
+            bboxes = detector.detect_faces(img, conf_threshold=0.5)
+
+        faces = []
+        for det in bboxes:
+            score = float(det[4])
+            x1, y1, x2, y2 = int(det[0]), int(det[1]), int(det[2]), int(det[3])
+            # Clamp to image bounds
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w, x2), min(h, y2)
+            area = (x2 - x1) * (y2 - y1)
+
+            # Extract landmarks (5 points: left_eye, right_eye, nose, mouth_left, mouth_right)
+            landmarks = None
+            if len(det) > 5:
+                landmarks = det[5:].reshape(-1, 2).tolist()
+
+            # Compute blur score for the face region (Laplacian variance)
+            face_crop = img[y1:y2, x1:x2]
+            blur_score = 0.0
+            if face_crop.size > 0:
+                gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+                blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+            faces.append({
+                "bbox": [x1, y1, x2, y2],
+                "landmarks": landmarks,
+                "confidence": score,
+                "area": area,
+                "blur_score": blur_score,
+            })
+
+        return sorted(faces, key=lambda f: f["area"], reverse=True)
+    except Exception as e:
+        logger.warning("Face detection failed: %s", e)
+        return []
+
+
+def estimate_degradation_level(blur_score: float, face_area: int) -> str:
+    """
+    Estimate face degradation level from blur score and face area.
+    Used to auto-select between GFPGAN (mild) and CodeFormer (severe).
+    """
+    if blur_score < 50 or face_area < 2500:  # < 50x50 pixels
+        return "severe"
+    elif blur_score < 200:
+        return "moderate"
+    else:
+        return "mild"
+
+
 # ─── Request/Response Models ─────────────────────────────────────────────────
 
 class RestoreRequest(BaseModel):
     """Base64-encoded image input with restoration parameters."""
     image_base64: str = Field(..., description="Base64-encoded image (no data: prefix)")
-    mode: str = Field("face_restore", description="face_restore | upscale_2x | upscale_4x | old_photo | face_restore_hd")
+    mode: str = Field("face_restore", description="face_restore | face_restore_hd | codeformer | upscale_2x | upscale_4x | old_photo | auto_face")
     scale: int = Field(2, description="Upscale factor (1, 2, or 4)")
-    face_enhance: bool = Field(True, description="Apply GFPGAN face enhancement")
+    face_enhance: bool = Field(True, description="Apply face enhancement on detected faces")
+    restoration_model: str = Field("auto", description="gfpgan | codeformer | auto")
+    fidelity: float = Field(0.5, ge=0.0, le=1.0, description="CodeFormer fidelity weight (0=quality, 1=fidelity)")
 
 class RestoreResponse(BaseModel):
     image_base64: str
@@ -139,13 +268,17 @@ class RestoreResponse(BaseModel):
     faces_detected: int
     mode: str
     device: str
+    restoration_backend: str = "gfpgan"
+    face_analysis: Optional[list[dict]] = None
 
 class VideoRestoreRequest(BaseModel):
     """Base64-encoded video input for frame-by-frame restoration."""
     video_base64: str = Field(..., description="Base64-encoded video")
     mode: str = Field("upscale_2x", description="upscale_2x | upscale_4x | face_restore")
-    face_enhance: bool = Field(True, description="Apply GFPGAN on detected face regions")
+    face_enhance: bool = Field(True, description="Apply GFPGAN/CodeFormer on detected face regions")
     max_frames: int = Field(300, description="Max frames to process (safety limit)")
+    temporal_consistency: bool = Field(True, description="Enable optical-flow temporal blending to reduce flickering")
+    restoration_model: str = Field("gfpgan", description="gfpgan | codeformer — model for face regions in video")
 
 class VideoRestoreResponse(BaseModel):
     video_base64: str
@@ -153,12 +286,15 @@ class VideoRestoreResponse(BaseModel):
     processing_ms: int
     frames_processed: int
     mode: str
+    scene_changes_detected: int = 0
 
 class HealthResponse(BaseModel):
     status: str
     device: str
+    gpu_available: bool
     models_dir: str
     models_available: dict
+    capabilities: list[str]
 
 
 # ─── Core Processing Functions ────────────────────────────────────────────────
@@ -180,7 +316,7 @@ def encode_image(img: np.ndarray, quality: int = 92) -> tuple[str, str]:
     return b64, "image/jpeg"
 
 
-def restore_face(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, int]:
+def restore_face_gfpgan(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, int]:
     """
     Run GFPGAN face restoration.
     Returns (restored_image, num_faces_detected).
@@ -188,7 +324,6 @@ def restore_face(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, int]:
     """
     restorer = get_gfpgan()
 
-    # GFPGAN expects BGR input (OpenCV format)
     _, _, restored_img = restorer.enhance(
         img,
         has_aligned=False,
@@ -201,13 +336,92 @@ def restore_face(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, int]:
         logger.warning("GFPGAN returned None — bypassing face restoration")
         return img, 0
 
-    # Count detected faces from the restorer's internal state
     try:
         face_count = len(restorer.face_helper.det_faces) if hasattr(restorer, 'face_helper') else 0
     except Exception:
         face_count = 1
 
     return restored_img, face_count
+
+
+def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarray, int]:
+    """
+    Run CodeFormer face restoration (superior for heavily degraded/blurry faces).
+    Fidelity: 0.0 = max quality (more hallucination), 1.0 = max fidelity (closer to input).
+    Falls back to GFPGAN if CodeFormer is unavailable.
+    """
+    cf = get_codeformer()
+    if cf == "unavailable" or cf is None:
+        logger.info("CodeFormer unavailable, falling back to GFPGAN")
+        return restore_face_gfpgan(img)
+
+    try:
+        from codeformer.app import inference_app
+        # Save to temp, run inference, load result
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            cv2.imwrite(f.name, img)
+            tmp_in = f.name
+
+        result_path = inference_app(
+            image=tmp_in,
+            background_enhance=True,
+            face_upsample=True,
+            upscale=2,
+            codeformer_fidelity=fidelity,
+        )
+
+        # inference_app returns the output path
+        if result_path and Path(result_path).exists():
+            result_img = cv2.imread(str(result_path), cv2.IMREAD_COLOR)
+            # Clean up
+            Path(tmp_in).unlink(missing_ok=True)
+            Path(result_path).unlink(missing_ok=True)
+            if result_img is not None:
+                # Estimate face count from detection
+                faces = detect_faces_with_landmarks(img)
+                return result_img, len(faces)
+
+        Path(tmp_in).unlink(missing_ok=True)
+        logger.warning("CodeFormer produced no output — falling back to GFPGAN")
+        return restore_face_gfpgan(img)
+
+    except Exception as e:
+        logger.warning("CodeFormer inference failed: %s — falling back to GFPGAN", e)
+        return restore_face_gfpgan(img)
+
+
+def restore_face_auto(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarray, int, str]:
+    """
+    Auto-select restoration model based on face degradation analysis.
+    - Mild degradation: GFPGAN (faster, good for reasonable-quality faces)
+    - Severe degradation: CodeFormer (better at hallucinating missing details)
+    Returns (image, face_count, backend_used).
+    """
+    faces = detect_faces_with_landmarks(img)
+
+    if not faces:
+        # No faces detected — run GFPGAN anyway (it has its own detection)
+        result, count = restore_face_gfpgan(img)
+        return result, count, "gfpgan"
+
+    # Check worst-case face degradation
+    worst_degradation = "mild"
+    for face in faces:
+        level = estimate_degradation_level(face["blur_score"], face["area"])
+        if level == "severe":
+            worst_degradation = "severe"
+            break
+        elif level == "moderate" and worst_degradation == "mild":
+            worst_degradation = "moderate"
+
+    logger.info("Auto-select: %d faces, worst degradation=%s", len(faces), worst_degradation)
+
+    if worst_degradation == "severe":
+        result, count = restore_face_codeformer(img, fidelity=fidelity)
+        return result, count, "codeformer"
+    else:
+        result, count = restore_face_gfpgan(img)
+        return result, count, "gfpgan"
 
 
 def upscale_image(img: np.ndarray, scale: int = 4) -> np.ndarray:
@@ -217,15 +431,17 @@ def upscale_image(img: np.ndarray, scale: int = 4) -> np.ndarray:
     return output
 
 
-def restore_old_photo(img: np.ndarray) -> tuple[np.ndarray, int]:
+def restore_old_photo(img: np.ndarray, restoration_model: str = "auto", fidelity: float = 0.5) -> tuple[np.ndarray, int, str]:
     """
     Old photo restoration pipeline:
-    1. Denoise + adaptive histogram equalization
-    2. Real-ESRGAN 2x upscale for texture recovery
-    3. GFPGAN face restoration (if faces detected)
+    1. Denoise + scratch suppression (bilateral + median)
+    2. Adaptive histogram equalization (CLAHE)
+    3. Real-ESRGAN 2x upscale for texture recovery
+    4. Face restoration (auto-selected model)
     """
-    # Step 1: Denoise — bilateral filter preserves edges
+    # Step 1: Denoise — bilateral filter preserves edges, median removes scratches
     denoised = cv2.bilateralFilter(img, 9, 75, 75)
+    denoised = cv2.medianBlur(denoised, 3)
 
     # Step 2: CLAHE for adaptive contrast
     lab = cv2.cvtColor(denoised, cv2.COLOR_BGR2LAB)
@@ -238,24 +454,64 @@ def restore_old_photo(img: np.ndarray) -> tuple[np.ndarray, int]:
     # Step 3: Real-ESRGAN 2x upscale for texture recovery
     upscaled = upscale_image(enhanced, scale=2)
 
-    # Step 4: GFPGAN face restoration
-    restored, face_count = restore_face(upscaled, upscale=2)
+    # Step 4: Face restoration (auto-select or specified)
+    if restoration_model == "codeformer":
+        restored, face_count = restore_face_codeformer(upscaled, fidelity=fidelity)
+        backend = "codeformer"
+    elif restoration_model == "gfpgan":
+        restored, face_count = restore_face_gfpgan(upscaled, upscale=2)
+        backend = "gfpgan"
+    else:
+        restored, face_count, backend = restore_face_auto(upscaled, fidelity=fidelity)
 
-    return restored, face_count
+    return restored, face_count, backend
 
 
-# ─── Video Processing Pipeline ────────────────────────────────────────────────
+# ─── Video Processing Pipeline (with Temporal Consistency) ────────────────────
 
-def process_video(video_bytes: bytes, mode: str, face_enhance: bool, max_frames: int) -> tuple[bytes, int]:
+def detect_scene_change(prev_frame: np.ndarray, curr_frame: np.ndarray, threshold: float = 30.0) -> bool:
+    """Detect scene changes using mean absolute difference in grayscale."""
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+    curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+    # Resize to same dimensions for comparison
+    if prev_gray.shape != curr_gray.shape:
+        curr_gray = cv2.resize(curr_gray, (prev_gray.shape[1], prev_gray.shape[0]))
+    diff = cv2.absdiff(prev_gray, curr_gray)
+    mean_diff = float(np.mean(diff))
+    return mean_diff > threshold
+
+
+def temporal_blend(prev_restored: np.ndarray, curr_restored: np.ndarray, alpha: float = 0.15) -> np.ndarray:
     """
-    Frame-by-frame video restoration pipeline:
+    Blend current frame with previous to reduce inter-frame flickering.
+    Uses weighted average: result = (1-alpha)*curr + alpha*prev
+    Only applied within the same scene (not across scene cuts).
+    """
+    if prev_restored.shape != curr_restored.shape:
+        prev_restored = cv2.resize(prev_restored, (curr_restored.shape[1], curr_restored.shape[0]))
+    return cv2.addWeighted(curr_restored, 1.0 - alpha, prev_restored, alpha, 0).astype(np.uint8)
+
+
+def process_video(
+    video_bytes: bytes,
+    mode: str,
+    face_enhance: bool,
+    max_frames: int,
+    temporal_consistency: bool = True,
+    restoration_model: str = "gfpgan",
+) -> tuple[bytes, int, int]:
+    """
+    Frame-by-frame video restoration pipeline with temporal consistency:
     1. Extract frames with ffmpeg
-    2. Process each frame (Real-ESRGAN + optional GFPGAN)
-    3. Reconstruct video with ffmpeg at original framerate
+    2. Real-ESRGAN for background enhancement on each frame
+    3. GFPGAN or CodeFormer for face regions
+    4. Temporal blending to prevent facial flickering between frames
+    5. Reconstruct video with ffmpeg at original framerate
+
+    Returns (output_bytes, frames_processed, scene_changes).
     """
     tmpdir = tempfile.mkdtemp(prefix="glimpse_video_")
     try:
-        # Write input video
         input_path = os.path.join(tmpdir, "input.mp4")
         with open(input_path, "wb") as f:
             f.write(video_bytes)
@@ -265,7 +521,6 @@ def process_video(video_bytes: bytes, mode: str, face_enhance: bool, max_frames:
             ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", input_path],
             capture_output=True, text=True, timeout=30,
         )
-        import json
         streams = json.loads(probe.stdout)
         video_stream = next((s for s in streams.get("streams", []) if s["codec_type"] == "video"), None)
         if not video_stream:
@@ -275,7 +530,7 @@ def process_video(video_bytes: bytes, mode: str, face_enhance: bool, max_frames:
         fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 else 30.0
         width = int(video_stream.get("width", 0))
         height = int(video_stream.get("height", 0))
-        logger.info(f"Video: {width}x{height} @ {fps:.2f}fps")
+        logger.info("Video: %dx%d @ %.2ffps", width, height, fps)
 
         # Extract frames as PNG
         frames_dir = os.path.join(tmpdir, "frames")
@@ -289,36 +544,54 @@ def process_video(video_bytes: bytes, mode: str, face_enhance: bool, max_frames:
         if not frame_files:
             raise ValueError("No frames extracted from video")
 
-        logger.info(f"Extracted {len(frame_files)} frames, processing...")
+        logger.info("Extracted %d frames, processing...", len(frame_files))
 
-        # Process each frame
         out_dir = os.path.join(tmpdir, "processed")
         os.makedirs(out_dir)
         scale = 4 if mode == "upscale_4x" else 2
+
+        prev_input_frame = None
+        prev_restored_frame = None
+        scene_changes = 0
 
         for i, frame_path in enumerate(frame_files):
             frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
             if frame is None:
                 continue
 
+            # Scene change detection
+            is_scene_change = False
+            if prev_input_frame is not None:
+                is_scene_change = detect_scene_change(prev_input_frame, frame)
+                if is_scene_change:
+                    scene_changes += 1
+
             # Real-ESRGAN background enhancement
             if mode in ("upscale_2x", "upscale_4x"):
                 frame = upscale_image(frame, scale=scale)
 
-            # GFPGAN face restoration (if enabled)
+            # Face restoration on each frame
             if face_enhance:
-                frame, _ = restore_face(frame)
+                if restoration_model == "codeformer":
+                    frame, _ = restore_face_codeformer(frame)
+                else:
+                    frame, _ = restore_face_gfpgan(frame)
+
+            # Temporal blending (only within same scene)
+            if temporal_consistency and prev_restored_frame is not None and not is_scene_change:
+                frame = temporal_blend(prev_restored_frame, frame, alpha=0.15)
+
+            prev_input_frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+            prev_restored_frame = frame.copy()
 
             out_path = os.path.join(out_dir, f"frame_{i:06d}.png")
             cv2.imwrite(out_path, frame)
 
             if (i + 1) % 10 == 0:
-                logger.info(f"  Processed {i + 1}/{len(frame_files)} frames")
+                logger.info("  Processed %d/%d frames", i + 1, len(frame_files))
 
         # Reconstruct video with ffmpeg
         output_path = os.path.join(tmpdir, "output.mp4")
-
-        # Get output resolution from first processed frame
         first_out = cv2.imread(os.path.join(out_dir, "frame_000000.png"))
         out_h, out_w = first_out.shape[:2] if first_out is not None else (height * scale, width * scale)
 
@@ -340,7 +613,7 @@ def process_video(video_bytes: bytes, mode: str, face_enhance: bool, max_frames:
         with open(output_path, "rb") as f:
             output_bytes = f.read()
 
-        return output_bytes, len(frame_files)
+        return output_bytes, len(frame_files), scene_changes
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -348,12 +621,36 @@ def process_video(video_bytes: bytes, mode: str, face_enhance: bool, max_frames:
 
 # ─── FastAPI App ──────────────────────────────────────────────────────────────
 
+def _available_capabilities() -> list[str]:
+    """List available restoration capabilities based on installed models."""
+    caps = []
+    if Path(MODEL_DIR / "GFPGANv1.4.pth").exists():
+        caps.extend(["face_restore", "face_restore_hd", "old_photo"])
+    if Path(MODEL_DIR / "RealESRGAN_x2plus.pth").exists():
+        caps.append("upscale_2x")
+    if Path(MODEL_DIR / "RealESRGAN_x4plus.pth").exists():
+        caps.append("upscale_4x")
+    # CodeFormer is a pip package, check import
+    try:
+        import codeformer  # noqa: F401
+        caps.append("codeformer")
+    except ImportError:
+        pass
+    if shutil.which("ffmpeg"):
+        caps.append("video_restore")
+    caps.append("face_analysis")
+    return caps
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"Restoration service starting (device={DEVICE}, models={MODEL_DIR})")
-    logger.info(f"Models available: GFPGAN={Path(MODEL_DIR / 'GFPGANv1.4.pth').exists()}, "
-                f"RealESRGAN_x2={Path(MODEL_DIR / 'RealESRGAN_x2plus.pth').exists()}, "
-                f"RealESRGAN_x4={Path(MODEL_DIR / 'RealESRGAN_x4plus.pth').exists()}")
+    caps = _available_capabilities()
+    logger.info("Restoration service starting (device=%s, gpu=%s, models=%s)", DEVICE, GPU_DEVICE, MODEL_DIR)
+    logger.info("Models: GFPGAN=%s, RealESRGAN_x2=%s, RealESRGAN_x4=%s",
+                Path(MODEL_DIR / "GFPGANv1.4.pth").exists(),
+                Path(MODEL_DIR / "RealESRGAN_x2plus.pth").exists(),
+                Path(MODEL_DIR / "RealESRGAN_x4plus.pth").exists())
+    logger.info("Capabilities: %s", caps)
     yield
     logger.info("Restoration service shutting down")
 
@@ -370,23 +667,56 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
+    caps = _available_capabilities()
     return HealthResponse(
         status="ok",
         device=DEVICE,
+        gpu_available=(DEVICE in ("cuda", "mps")),
         models_dir=str(MODEL_DIR),
         models_available={
             "gfpgan_v1.4": Path(MODEL_DIR / "GFPGANv1.4.pth").exists(),
             "realesrgan_x2": Path(MODEL_DIR / "RealESRGAN_x2plus.pth").exists(),
             "realesrgan_x4": Path(MODEL_DIR / "RealESRGAN_x4plus.pth").exists(),
+            "codeformer": "codeformer" in caps,
+            "face_detector": "face_analysis" in caps,
         },
+        capabilities=caps,
     )
+
+
+@app.post("/analyze-faces")
+async def analyze_faces_endpoint(req: RestoreRequest):
+    """
+    Detect faces and return landmark analysis without performing restoration.
+    Useful for previewing face detection before committing to a restore.
+    """
+    try:
+        img = decode_image(req.image_base64)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
+
+    faces = detect_faces_with_landmarks(img)
+    analysis = []
+    for face in faces:
+        level = estimate_degradation_level(face["blur_score"], face["area"])
+        analysis.append({
+            **face,
+            "degradation_level": level,
+            "recommended_model": "codeformer" if level == "severe" else "gfpgan",
+        })
+
+    return {
+        "faces_detected": len(faces),
+        "faces": analysis,
+        "device": DEVICE,
+    }
 
 
 @app.post("/restore", response_model=RestoreResponse)
 async def restore_image_endpoint(req: RestoreRequest):
     """
     Image restoration endpoint.
-    Modes: face_restore, face_restore_hd, upscale_2x, upscale_4x, old_photo
+    Modes: face_restore, face_restore_hd, codeformer, upscale_2x, upscale_4x, old_photo, auto_face
     """
     start = time.time()
     try:
@@ -395,28 +725,59 @@ async def restore_image_endpoint(req: RestoreRequest):
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
     faces_detected = 0
+    backend_used = "gfpgan"
+    face_analysis = None
 
     try:
         if req.mode == "face_restore":
-            result, faces_detected = restore_face(img, upscale=2)
+            if req.restoration_model == "codeformer":
+                result, faces_detected = restore_face_codeformer(img, fidelity=req.fidelity)
+                backend_used = "codeformer"
+            elif req.restoration_model == "auto":
+                result, faces_detected, backend_used = restore_face_auto(img, fidelity=req.fidelity)
+            else:
+                result, faces_detected = restore_face_gfpgan(img, upscale=2)
 
         elif req.mode == "face_restore_hd":
-            # 4x face restore: upscale first, then face restore
+            # 4x upscale first, then face restore
             upscaled = upscale_image(img, scale=4)
-            result, faces_detected = restore_face(upscaled, upscale=1)
+            if req.restoration_model == "codeformer":
+                result, faces_detected = restore_face_codeformer(upscaled, fidelity=req.fidelity)
+                backend_used = "codeformer"
+            elif req.restoration_model == "auto":
+                result, faces_detected, backend_used = restore_face_auto(upscaled, fidelity=req.fidelity)
+            else:
+                result, faces_detected = restore_face_gfpgan(upscaled, upscale=1)
+
+        elif req.mode == "codeformer":
+            result, faces_detected = restore_face_codeformer(img, fidelity=req.fidelity)
+            backend_used = "codeformer"
+
+        elif req.mode == "auto_face":
+            # Full pipeline: detect faces, analyze degradation, auto-route
+            faces_info = detect_faces_with_landmarks(img)
+            face_analysis = [
+                {**f, "degradation_level": estimate_degradation_level(f["blur_score"], f["area"])}
+                for f in faces_info
+            ]
+            result, faces_detected, backend_used = restore_face_auto(img, fidelity=req.fidelity)
 
         elif req.mode == "upscale_2x":
             result = upscale_image(img, scale=2)
             if req.face_enhance:
-                result, faces_detected = restore_face(result)
+                result, faces_detected = restore_face_gfpgan(result)
 
         elif req.mode == "upscale_4x":
             result = upscale_image(img, scale=4)
             if req.face_enhance:
-                result, faces_detected = restore_face(result)
+                result, faces_detected = restore_face_gfpgan(result)
 
         elif req.mode == "old_photo":
-            result, faces_detected = restore_old_photo(img)
+            result, faces_detected, backend_used = restore_old_photo(
+                img,
+                restoration_model=req.restoration_model,
+                fidelity=req.fidelity,
+            )
 
         else:
             raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
@@ -424,13 +785,13 @@ async def restore_image_endpoint(req: RestoreRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Restoration failed: {e}", exc_info=True)
+        logger.error("Restoration failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Restoration failed: {str(e)}")
 
     b64, mime = encode_image(result)
     elapsed_ms = int((time.time() - start) * 1000)
 
-    logger.info(f"Restored image: mode={req.mode}, faces={faces_detected}, time={elapsed_ms}ms")
+    logger.info("Restored: mode=%s, backend=%s, faces=%d, time=%dms", req.mode, backend_used, faces_detected, elapsed_ms)
     return RestoreResponse(
         image_base64=b64,
         mime_type=mime,
@@ -438,13 +799,15 @@ async def restore_image_endpoint(req: RestoreRequest):
         faces_detected=faces_detected,
         mode=req.mode,
         device=DEVICE,
+        restoration_backend=backend_used,
+        face_analysis=face_analysis,
     )
 
 
 @app.post("/restore-video", response_model=VideoRestoreResponse)
 async def restore_video_endpoint(req: VideoRestoreRequest):
     """
-    Video restoration: frame extraction → per-frame processing → reconstruction.
+    Video restoration: frame extraction → per-frame processing → temporal blending → reconstruction.
     """
     start = time.time()
 
@@ -454,21 +817,29 @@ async def restore_video_endpoint(req: VideoRestoreRequest):
         raise HTTPException(status_code=400, detail=f"Invalid video base64: {e}")
 
     try:
-        output_bytes, frames = process_video(video_bytes, req.mode, req.face_enhance, req.max_frames)
+        output_bytes, frames, scene_changes = process_video(
+            video_bytes,
+            req.mode,
+            req.face_enhance,
+            req.max_frames,
+            temporal_consistency=req.temporal_consistency,
+            restoration_model=req.restoration_model,
+        )
     except Exception as e:
-        logger.error(f"Video restoration failed: {e}", exc_info=True)
+        logger.error("Video restoration failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Video restoration failed: {str(e)}")
 
     elapsed_ms = int((time.time() - start) * 1000)
     b64_out = base64.b64encode(output_bytes).decode("utf-8")
 
-    logger.info(f"Video restored: mode={req.mode}, frames={frames}, time={elapsed_ms}ms")
+    logger.info("Video restored: mode=%s, frames=%d, scenes=%d, time=%dms", req.mode, frames, scene_changes, elapsed_ms)
     return VideoRestoreResponse(
         video_base64=b64_out,
         mime_type="video/mp4",
         processing_ms=elapsed_ms,
         frames_processed=frames,
         mode=req.mode,
+        scene_changes_detected=scene_changes,
     )
 
 
