@@ -245,7 +245,8 @@ export async function handleDemoRequest(
       const job = DEMO_JOBS.find((j) => j.id === Number(match[1])) ?? DEMO_JOBS[0];
       return ok(job);
     }
-    return ok({ items: DEMO_JOBS, total: DEMO_JOBS.length, page: 1, totalPages: 1 });
+    // The generated API client (listMediaJobs) expects MediaJob[] — plain array, not paginated wrapper.
+    return ok(DEMO_JOBS);
   }
 
   if (url === "/api/media/upload" && method === "POST") {
