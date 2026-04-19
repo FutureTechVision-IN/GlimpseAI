@@ -1,8 +1,9 @@
 # Never allow secrets on gh-pages
+*.env
+.DS_Store
 .env
 .env.*
-*.env
-node_modules/
 artifacts/
 lib/
+node_modules/
 scripts/
