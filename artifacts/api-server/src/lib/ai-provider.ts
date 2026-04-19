@@ -511,8 +511,11 @@ class AIProviderService {
   // OpenRouter — tries vision models in priority order
   // ---------------------------------------------------------------------------
   private async tryOpenRouterAnalysis(base64Data: string, mimeType: string, userTier?: UserTier): Promise<AnalysisResult | null> {
-    const pk = this.getNextKey("openrouter", userTier);
-    if (!pk) return null;
+    // Try up to 3 different keys before giving up on OpenRouter
+    const MAX_KEY_RETRIES = 3;
+    for (let attempt = 0; attempt < MAX_KEY_RETRIES; attempt++) {
+      const pk = this.getNextKey("openrouter", userTier);
+      if (!pk) return null;
 
     const baseUrl = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 
@@ -546,7 +549,7 @@ class AIProviderService {
         if (!response.ok) {
           const errBody = await response.text().catch(() => "");
           this.markFailed(pk, errBody);
-          break; // Try next key, not next model (same key hit the limit)
+          break; // Try next key via outer loop
         }
 
         const data = await response.json() as any;
@@ -565,14 +568,15 @@ class AIProviderService {
             analysisSource: "openrouter",
           };
         }
-        break; // Got response but couldn't parse — don't retry same key
+        break; // Got response but couldn't parse — try next key
       } catch (e: any) {
         const isTimeout = e?.name === "AbortError" || e?.code === "UND_ERR_HEADERS_TIMEOUT";
         logger.debug({ err: e, model, isTimeout }, "OpenRouter analysis error");
         if (!isTimeout) this.markFailed(pk);
-        break;
+        break; // Try next key via outer loop
       }
     }
+    } // end key retry loop
     return null;
   }
 
@@ -747,8 +751,11 @@ Rules:
   }
 
   private async tryOpenRouterGuidance(base64Data: string, mimeType: string, prompt: string, userTier?: UserTier): Promise<AIEnhancementGuidance | null> {
-    const pk = this.getNextKey("openrouter", userTier);
-    if (!pk) return null;
+    // Try up to 3 different keys before giving up on OpenRouter
+    const MAX_KEY_RETRIES = 3;
+    for (let attempt = 0; attempt < MAX_KEY_RETRIES; attempt++) {
+      const pk = this.getNextKey("openrouter", userTier);
+      if (!pk) return null;
 
     const baseUrl = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 
@@ -781,7 +788,7 @@ Rules:
         if (!response.ok) {
           const errBody = await response.text().catch(() => "");
           this.markFailed(pk, errBody);
-          break;
+          break; // Try next key via outer loop
         }
 
         const data = await response.json() as any;
@@ -793,14 +800,15 @@ Rules:
           const p = JSON.parse(jsonMatch[0]);
           return this.sanitizeGuidance(p, "openrouter");
         }
-        break;
+        break; // Try next key via outer loop
       } catch (e: any) {
         const isTimeout = e?.name === "AbortError" || e?.code === "UND_ERR_HEADERS_TIMEOUT";
         logger.debug({ err: e, model, isTimeout }, "OpenRouter guidance error");
         if (!isTimeout) this.markFailed(pk);
-        break;
+        break; // Try next key via outer loop
       }
     }
+    } // end key retry loop
     return null;
   }
 

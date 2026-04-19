@@ -396,46 +396,108 @@ def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.
     """
     Run CodeFormer face restoration (superior for heavily degraded/blurry faces).
     Fidelity: 0.0 = max quality (more hallucination), 1.0 = max fidelity (closer to input).
-    Falls back to GFPGAN if CodeFormer is unavailable.
+    Uses direct in-memory inference when available, falls back to pip, then GFPGAN.
     """
     cf = get_codeformer()
     if cf == "unavailable" or cf is None:
         logger.info("CodeFormer unavailable, falling back to GFPGAN")
         return restore_face_gfpgan(img)
 
-    try:
-        from codeformer.app import inference_app
-        # Save to temp, run inference, load result
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            cv2.imwrite(f.name, img)
-            tmp_in = f.name
+    # ── Direct CodeFormer-master inference (in-memory, no file I/O) ──
+    if isinstance(cf, dict) and cf.get("type") == "direct":
+        try:
+            from facelib.utils.face_restoration_helper import FaceRestoreHelper
+            from facelib.utils.misc import is_gray
+            from basicsr.utils import img2tensor, tensor2img
+            from torchvision.transforms.functional import normalize as tv_normalize
 
-        result_path = inference_app(
-            image=tmp_in,
-            background_enhance=True,
-            face_upsample=True,
-            upscale=2,
-            codeformer_fidelity=fidelity,
-        )
+            net = cf["net"]
 
-        # inference_app returns the output path
-        if result_path and Path(result_path).exists():
-            result_img = cv2.imread(str(result_path), cv2.IMREAD_COLOR)
-            # Clean up
+            face_helper = FaceRestoreHelper(
+                upscale_factor=2,
+                face_size=512,
+                crop_ratio=(1, 1),
+                det_model="retinaface_resnet50",
+                save_ext="png",
+                use_parse=True,
+                device=FACE_DEVICE,
+            )
+
+            face_helper.read_image(img)
+            num_faces = face_helper.get_face_landmarks_5(
+                only_center_face=False, resize=640, eye_dist_threshold=5,
+            )
+            logger.info("CodeFormer direct: detected %d faces", num_faces)
+
+            if num_faces == 0:
+                face_helper.clean_all()
+                logger.info("No faces detected by CodeFormer — falling back to GFPGAN")
+                return restore_face_gfpgan(img)
+
+            face_helper.align_warp_face()
+
+            # Restore each cropped face
+            for cropped_face in face_helper.cropped_faces:
+                cropped_face_t = img2tensor(cropped_face / 255.0, bgr2rgb=True, float32=True)
+                tv_normalize(cropped_face_t, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)
+                cropped_face_t = cropped_face_t.unsqueeze(0).to(FACE_DEVICE)
+
+                try:
+                    with torch.no_grad():
+                        output = net(cropped_face_t, w=fidelity, adain=True)[0]
+                        restored_face = tensor2img(output, rgb2bgr=True, min_max=(-1, 1))
+                    del output
+                    if DEVICE == "cuda":
+                        torch.cuda.empty_cache()
+                except Exception as e:
+                    logger.warning("CodeFormer inference failed for face: %s", e)
+                    restored_face = tensor2img(cropped_face_t, rgb2bgr=True, min_max=(-1, 1))
+
+                restored_face = restored_face.astype("uint8")
+                face_helper.add_restored_face(restored_face, cropped_face)
+
+            # Paste faces back — use RealESRGAN for background upsampling
+            bg_upsampler = get_realesrgan(scale=2)
+            bg_img = bg_upsampler.enhance(img, outscale=2)[0]
+            face_helper.get_inverse_affine(None)
+            restored_img = face_helper.paste_faces_to_input_image(upsample_img=bg_img)
+            face_helper.clean_all()
+
+            return restored_img, num_faces
+
+        except Exception as e:
+            logger.warning("CodeFormer direct inference failed: %s — trying pip fallback", e)
+
+    # ── Pip-based CodeFormer fallback ──
+    if isinstance(cf, dict) and cf.get("type") == "pip":
+        try:
+            from codeformer.app import inference_app
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                cv2.imwrite(f.name, img)
+                tmp_in = f.name
+
+            result_path = inference_app(
+                image=tmp_in,
+                background_enhance=True,
+                face_upsample=True,
+                upscale=2,
+                codeformer_fidelity=fidelity,
+            )
+
+            if result_path and Path(result_path).exists():
+                result_img = cv2.imread(str(result_path), cv2.IMREAD_COLOR)
+                Path(tmp_in).unlink(missing_ok=True)
+                Path(result_path).unlink(missing_ok=True)
+                if result_img is not None:
+                    faces = detect_faces_with_landmarks(img)
+                    return result_img, len(faces)
+
             Path(tmp_in).unlink(missing_ok=True)
-            Path(result_path).unlink(missing_ok=True)
-            if result_img is not None:
-                # Estimate face count from detection
-                faces = detect_faces_with_landmarks(img)
-                return result_img, len(faces)
+        except Exception as e:
+            logger.warning("CodeFormer pip inference failed: %s", e)
 
-        Path(tmp_in).unlink(missing_ok=True)
-        logger.warning("CodeFormer produced no output — falling back to GFPGAN")
-        return restore_face_gfpgan(img)
-
-    except Exception as e:
-        logger.warning("CodeFormer inference failed: %s — falling back to GFPGAN", e)
-        return restore_face_gfpgan(img)
+    logger.warning("CodeFormer all strategies failed — falling back to GFPGAN")
+    return restore_face_gfpgan(img)
 
 
 def restore_face_auto(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarray, int, str]:
@@ -604,8 +666,10 @@ def process_video(
         prev_input_frame = None
         prev_restored_frame = None
         scene_changes = 0
+        frame_times = []
 
         for i, frame_path in enumerate(frame_files):
+            frame_start = time.time()
             frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
             if frame is None:
                 continue
@@ -617,12 +681,16 @@ def process_video(
                 if is_scene_change:
                     scene_changes += 1
 
+            # Dynamic complexity: skip heavy ML for tiny frames (< 64px smallest dim)
+            h, w = frame.shape[:2]
+            skip_ml = min(h, w) < 64
+
             # Real-ESRGAN background enhancement
-            if mode in ("upscale_2x", "upscale_4x"):
+            if mode in ("upscale_2x", "upscale_4x") and not skip_ml:
                 frame = upscale_image(frame, scale=scale)
 
             # Face restoration on each frame
-            if face_enhance:
+            if face_enhance and not skip_ml:
                 if restoration_model == "codeformer":
                     frame, _ = restore_face_codeformer(frame)
                 else:
@@ -638,8 +706,15 @@ def process_video(
             out_path = os.path.join(out_dir, f"frame_{i:06d}.png")
             cv2.imwrite(out_path, frame)
 
+            frame_ms = int((time.time() - frame_start) * 1000)
+            frame_times.append(frame_ms)
+
             if (i + 1) % 10 == 0:
-                logger.info("  Processed %d/%d frames", i + 1, len(frame_files))
+                avg_ms = sum(frame_times[-10:]) / min(10, len(frame_times))
+                remaining = len(frame_files) - (i + 1)
+                eta_s = int(avg_ms * remaining / 1000)
+                logger.info("  Processed %d/%d frames (avg %dms/frame, ETA %ds)",
+                            i + 1, len(frame_files), int(avg_ms), eta_s)
 
         # Reconstruct video with ffmpeg
         output_path = os.path.join(tmpdir, "output.mp4")
