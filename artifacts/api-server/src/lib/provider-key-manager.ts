@@ -9,12 +9,12 @@ import { eq, and } from "drizzle-orm";
 export interface KeyEntry {
   id: number;
   key: string;
-  provider: "openrouter" | "gemini";
+  provider: "openrouter" | "gemini" | "nvidia";
   model: string;
   tier: "free" | "premium";
   status: "active" | "inactive" | "degraded" | "validating";
   priority: number;
-  group: "primary" | "standard" | "germany" | "gemini";
+  group: "primary" | "standard" | "germany" | "gemini" | "nvidia";
   totalCalls: number;
   totalErrors: number;
   consecutiveErrors: number;
@@ -58,6 +58,13 @@ const MODEL_GROUP: Record<string, "primary" | "standard" | "germany"> = {};
 for (const m of Object.values(PRIMARY_MODELS))  MODEL_GROUP[m] = "primary";
 for (const m of Object.values(STANDARD_MODELS)) MODEL_GROUP[m] = "standard";
 
+/** NVIDIA direct API models — keyed separately from OpenRouter with nvapi- keys */
+const NVIDIA_DIRECT_MODELS: Record<string, { visionCapable: boolean; maxTokens: number }> = {
+  "moonshotai/kimi-k2.5": { visionCapable: true, maxTokens: 16384 },
+  "minimaxai/minimax-m2.5": { visionCapable: false, maxTokens: 8192 },
+  "nvidia/nemotron-3-super-120b-a12b": { visionCapable: false, maxTokens: 16384 },
+};
+
 /** Models that support image/video analysis via vision API */
 const VISION_CAPABLE_MODELS = new Set([
   "bytedance/seedance-2.0",
@@ -70,13 +77,14 @@ const VISION_CAPABLE_MODELS = new Set([
 
 const OPENROUTER_BASE = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
 const GERMANY_OPENROUTER_BASE = process.env.GERMANY_OPENROUTER_BASE_URL ?? OPENROUTER_BASE;
+const NVIDIA_BASE = "https://integrate.api.nvidia.com/v1";
 const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_CONSECUTIVE_ERRORS = 3;
 
-/** Validates that a string looks like an OpenRouter or Gemini API key */
+/** Validates that a string looks like an OpenRouter, Gemini, or NVIDIA API key */
 function isValidKeyFormat(k: string): boolean {
   const t = k.trim();
-  return t.startsWith("sk-or-") || t.startsWith("AIza") || (t.startsWith("AQ.") && t.length > 20);
+  return t.startsWith("sk-or-") || t.startsWith("AIza") || (t.startsWith("AQ.") && t.length > 20) || t.startsWith("nvapi-");
 }
 
 class ProviderKeyManager {
@@ -129,16 +137,27 @@ class ProviderKeyManager {
       models.add("gemini-2.0-flash");
     }
 
+    // ── NVIDIA direct API keys (separate from OpenRouter) ───────────
+    // Env: NVIDIA_API_KEY=nvapi-xxx (single key used for all NVIDIA-hosted models)
+    const nvidiaKey = (process.env.NVIDIA_API_KEY ?? "").trim();
+    if (nvidiaKey && nvidiaKey.startsWith("nvapi-")) {
+      for (const modelId of Object.keys(NVIDIA_DIRECT_MODELS)) {
+        await this.upsertKey(nvidiaKey, "nvidia", modelId, "premium", "nvidia");
+        totalKeys++;
+        models.add(modelId);
+      }
+    }
+
     logger.info({ totalKeys, totalModels: models.size }, "Provider keys loaded from env");
     return { totalKeys, totalModels: models.size };
   }
 
   private async upsertKey(
     key: string,
-    provider: "openrouter" | "gemini",
+    provider: "openrouter" | "gemini" | "nvidia",
     model: string,
     tier: "free" | "premium",
-    group: "primary" | "standard" | "germany" | "gemini" = "standard",
+    group: "primary" | "standard" | "germany" | "gemini" | "nvidia" = "standard",
   ): Promise<KeyEntry> {
     const keyHash = key.slice(-8);
     const keyPrefix = key.slice(0, 12);
@@ -211,7 +230,7 @@ class ProviderKeyManager {
 
   async loadBulkKeys(
     keys: string[],
-    provider: "openrouter" | "gemini",
+    provider: "openrouter" | "gemini" | "nvidia",
     model: string,
     tier: "free" | "premium",
   ): Promise<number> {
@@ -263,6 +282,20 @@ class ProviderKeyManager {
             "Content-Type": "application/json",
             "HTTP-Referer": "https://glimpse.ai",
             "X-Title": "GlimpseAI",
+          },
+          body: JSON.stringify({
+            model: entry.model,
+            messages: [{ role: "user", content: "hi" }],
+            max_tokens: 1,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+      } else if (entry.provider === "nvidia") {
+        resp = await fetch(`${NVIDIA_BASE}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${entry.key}`,
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
             model: entry.model,
@@ -363,18 +396,19 @@ class ProviderKeyManager {
   }
 
   /**
-   * Tier-based key selection with 4-level priority cascade:
+   * Tier-based key selection with 5-level priority cascade:
    *   1. Primary OpenRouter (Seedance, WAN, Kimi, Elephant)   — all tiers
-   *   2. Standard OpenRouter (Stepfun, NVIDIA, GLM)            — all tiers
-   *   3. Germany OpenRouter keys (dedicated fallback)          — all tiers
-   *   4. Gemini                                                — premium only
+   *   2. NVIDIA direct (Kimi-K2.5, MiniMax-M2.5, Nemotron)   — all tiers
+   *   3. Standard OpenRouter (Stepfun, NVIDIA, GLM)            — all tiers
+   *   4. Germany OpenRouter keys (dedicated fallback)          — all tiers
+   *   5. Gemini                                                — premium only
    *
    * Within each level: active > degraded, then pick lowest latency.
    */
   pickKeyForTier(userTier: "free" | "premium"): KeyEntry | null {
     const all = Array.from(this.keys.values());
 
-    const tryGroup = (group: "primary" | "standard" | "germany" | "gemini"): KeyEntry | null => {
+    const tryGroup = (group: "primary" | "standard" | "germany" | "gemini" | "nvidia"): KeyEntry | null => {
       const active = all.filter((k) => k.group === group && k.status === "active");
       if (active.length > 0) return this.pickBest(active);
       // Degrade-fallback: if all keys in this group are degraded, try them anyway
@@ -385,6 +419,7 @@ class ProviderKeyManager {
 
     return (
       tryGroup("primary") ??
+      tryGroup("nvidia") ??
       tryGroup("standard") ??
       tryGroup("germany") ??
       // Gemini is reserved: premium users only, last resort
@@ -540,7 +575,7 @@ class ProviderKeyManager {
   getSafeEntries(): Array<Omit<KeyEntry, "key"> & { keyPrefix: string }> {
     return Array.from(this.keys.values())
       .sort((a, b) => {
-        const groupOrder = { primary: 0, standard: 1, germany: 2, gemini: 3 };
+        const groupOrder = { primary: 0, nvidia: 1, standard: 2, germany: 3, gemini: 4 };
         const statusOrder = { active: 0, degraded: 1, validating: 2, inactive: 3 };
         const gDiff = (groupOrder[a.group] ?? 4) - (groupOrder[b.group] ?? 4);
         if (gDiff !== 0) return gDiff;
@@ -682,6 +717,9 @@ class ProviderKeyManager {
       if (!seen.has(m)) { seen.add(m); result.push({ id: m, group: "standard", visionCapable: VISION_CAPABLE_MODELS.has(m) }); }
     }
     result.push({ id: "gemini-2.0-flash", group: "gemini", visionCapable: true });
+    for (const [modelId, meta] of Object.entries(NVIDIA_DIRECT_MODELS)) {
+      if (!seen.has(modelId)) { seen.add(modelId); result.push({ id: modelId, group: "nvidia", visionCapable: meta.visionCapable }); }
+    }
     return result;
   }
 
