@@ -547,15 +547,21 @@ export async function enhanceImage(
         // ── 4X UPSCALE (Industry: two-pass scaling for quality) ──
         const w4 = meta.width ?? 800;
         const h4 = meta.height ?? 600;
+        const maxDim = 8192;
+        const scale4 = Math.min(4, maxDim / Math.max(w4, h4));
+        const outW4 = Math.round(w4 * scale4);
+        const outH4 = Math.round(h4 * scale4);
 
         // Two-pass upscale: 2x → sharpen → 2x → sharpen (better than single 4x)
+        const midW = Math.round(w4 * Math.sqrt(scale4));
+        const midH = Math.round(h4 * Math.sqrt(scale4));
         const pass1 = await sharp(inputBuffer)
-          .resize(w4 * 2, h4 * 2, { kernel: sharp.kernel.lanczos3, fit: "fill" })
+          .resize(midW, midH, { kernel: sharp.kernel.lanczos3, fit: "fill" })
           .sharpen({ sigma: 0.7, m1: 1.0, m2: 0.3 })
           .toBuffer();
 
         pipeline = sharp(pass1)
-          .resize(w4 * 4, h4 * 4, { kernel: sharp.kernel.lanczos3, fit: "fill" })
+          .resize(outW4, outH4, { kernel: sharp.kernel.lanczos3, fit: "fill" })
           .sharpen({ sigma: 0.9, m1: 1.3, m2: 0.5 })
           .modulate({ brightness: 1.01 });
         break;
@@ -832,8 +838,11 @@ export async function enhanceImage(
         break;
       }
       case "esrgan_upscale_4x": {
+        const ew4 = meta.width ?? 512;
+        const eh4 = meta.height ?? 512;
+        const eScale4 = Math.min(4, 8192 / Math.max(ew4, eh4));
         pipeline = pipeline
-          .resize({ width: (meta.width ?? 512) * 4, height: (meta.height ?? 512) * 4, kernel: "lanczos3" })
+          .resize({ width: Math.round(ew4 * eScale4), height: Math.round(eh4 * eScale4), kernel: "lanczos3" })
           .sharpen({ sigma: 0.8, m1: 1.0, m2: 0.5 });
         break;
       }
@@ -866,14 +875,15 @@ export async function enhanceImage(
     pipeline = pipeline.modulate({ saturation: (s.saturation as number) / 100 });
   }
   if (typeof s.sharpness === "number" && (s.sharpness as number) > 100) {
-    pipeline = pipeline.sharpen({ sigma: ((s.sharpness as number) - 100) / 50 });
+    const sig = Math.min(10, Math.max(0.1, ((s.sharpness as number) - 100) / 50));
+    pipeline = pipeline.sharpen({ sigma: sig });
   }
   if (typeof s.warmth === "number" && s.warmth !== 0) {
-    const w = s.warmth as number;
+    const w = Math.max(-100, Math.min(100, s.warmth as number));
     pipeline = pipeline.tint({ r: 128 + w, g: 128, b: 128 - w });
   }
   if (typeof s.highlights === "number" && s.highlights !== 100) {
-    const hl = (s.highlights as number) / 100;
+    const hl = Math.max(0.1, (s.highlights as number) / 100);
     pipeline = pipeline.linear(hl, 0);
   }
   if (typeof s.shadows === "number" && s.shadows !== 100) {
@@ -949,7 +959,8 @@ export async function enhanceImage(
 
     // Sharpening
     if (guidance.sharpness !== null && guidance.sharpness > 0.4) {
-      pipeline = pipeline.sharpen({ sigma: guidance.sharpness, m1: guidance.sharpness * 1.2, m2: guidance.sharpness * 0.3 });
+      const gSig = Math.min(10, guidance.sharpness);
+      pipeline = pipeline.sharpen({ sigma: gSig, m1: gSig * 1.2, m2: gSig * 0.3 });
     }
 
     // Denoising
