@@ -1,5 +1,5 @@
 """
-GlimpseAI Restoration Service — Generative-Refinement Hybrid Architecture v2
+GlimpseAI Restoration Service — Generative-Refinement Hybrid Architecture
 
 FastAPI sidecar wrapping:
   • GFPGAN   — blind face restoration (BFR) with facial priors
@@ -8,12 +8,9 @@ FastAPI sidecar wrapping:
 
 Modular pipeline:
   1. Landmark detection & face alignment (facexlib)
-  2. Restoration routing (GFPGAN for standard, CodeFormer for heavy degradation)
-  3. Sequential CodeFormer→GFPGAN hybrid mode for maximum quality
-  4. Real-ESRGAN background upscaling
-  5. Concurrent video frame processing with temporal consistency
-  6. Batch image processing endpoint for multi-image jobs
-  7. Pipeline profiling metrics on every response
+  2. Restoration routing (GFPGAN for standard faces, CodeFormer for heavy degradation)
+  3. Real-ESRGAN background upscaling
+  4. Temporal consistency for video (scene-change detection, optical-flow blending)
 
 Runs as a local service on port 7860, called by the Node.js API server.
 """
@@ -30,7 +27,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -78,42 +74,12 @@ FACE_DEVICE = torch.device("cpu")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("restoration")
 
-# ─── Global model holders (lazy-loaded, cached in memory) ────────────────────
+# ─── Global model holders (lazy-loaded) ──────────────────────────────────────
 _gfpgan_restorer = None
 _codeformer_restorer = None
 _realesrgan_x2 = None
 _realesrgan_x4 = None
 _face_detector = None
-
-# Thread pool for concurrent frame processing (video pipeline)
-# Workers = CPU cores (capped at 4) to avoid memory pressure from parallel ML inference
-_frame_executor = ThreadPoolExecutor(
-    max_workers=min(4, max(1, os.cpu_count() or 2)),
-    thread_name_prefix="frame_worker",
-)
-
-
-# ─── Pipeline Profiling ──────────────────────────────────────────────────────
-class PipelineProfiler:
-    """Lightweight profiler that tracks per-step timings for diagnostics."""
-    def __init__(self):
-        self.steps: list[tuple[str, float]] = []
-        self._start = time.perf_counter()
-        self._step_start = self._start
-
-    def mark(self, step_name: str):
-        now = time.perf_counter()
-        self.steps.append((step_name, round((now - self._step_start) * 1000, 1)))
-        self._step_start = now
-
-    def total_ms(self) -> float:
-        return round((time.perf_counter() - self._start) * 1000, 1)
-
-    def to_dict(self) -> dict:
-        return {
-            "total_ms": self.total_ms(),
-            "steps": {name: ms for name, ms in self.steps},
-        }
 
 
 class RestorationModel(str, Enum):
@@ -121,7 +87,6 @@ class RestorationModel(str, Enum):
     GFPGAN = "gfpgan"
     CODEFORMER = "codeformer"
     AUTO = "auto"  # auto-select based on degradation level
-    HYBRID = "hybrid"  # sequential CodeFormer→GFPGAN for maximum quality
 
 
 def _get_realesrgan_upsampler(scale: int = 4):
@@ -194,19 +159,61 @@ def get_gfpgan():
 
 
 def get_codeformer():
-    """Lazy-load CodeFormer face restorer (superior for heavily degraded faces)."""
+    """
+    Lazy-load CodeFormer face restorer (superior for heavily degraded faces).
+    Tries direct CodeFormer-master module first (in-memory, faster),
+    falls back to codeformer-pip package.
+    """
     global _codeformer_restorer
-    if _codeformer_restorer is None:
+    if _codeformer_restorer is not None:
+        return _codeformer_restorer
+
+    # Strategy 1: Direct CodeFormer-master integration (preferred — no file I/O)
+    cf_module_dir = Path(__file__).parent.parent / "enhancement_modules" / "CodeFormer-master"
+    if cf_module_dir.exists():
         try:
-            from codeformer import CodeFormer
-            _codeformer_restorer = CodeFormer(upscale=2, device=str(FACE_DEVICE))
-            logger.info("CodeFormer model loaded (device=%s)", FACE_DEVICE)
-        except ImportError:
-            logger.warning("codeformer-pip not installed — CodeFormer unavailable, falling back to GFPGAN")
-            _codeformer_restorer = "unavailable"
+            # Add CodeFormer-master to sys.path so its basicsr/facelib imports work
+            cf_str = str(cf_module_dir)
+            if cf_str not in sys.path:
+                sys.path.insert(0, cf_str)
+
+            from basicsr.utils.registry import ARCH_REGISTRY
+            from basicsr.utils.download_util import load_file_from_url
+
+            net = ARCH_REGISTRY.get("CodeFormer")(
+                dim_embd=512, codebook_size=1024, n_head=8, n_layers=9,
+                connect_list=["32", "64", "128", "256"],
+            ).to(FACE_DEVICE)
+
+            # Try local weights first, then download
+            weights_path = cf_module_dir / "weights" / "CodeFormer" / "codeformer.pth"
+            if not weights_path.exists():
+                weights_path = Path(load_file_from_url(
+                    url="https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth",
+                    model_dir=str(cf_module_dir / "weights" / "CodeFormer"),
+                    progress=True, file_name=None,
+                ))
+
+            checkpoint = torch.load(str(weights_path), map_location=FACE_DEVICE)
+            net.load_state_dict(checkpoint.get("params_ema", checkpoint))
+            net.eval()
+            _codeformer_restorer = {"type": "direct", "net": net}
+            logger.info("CodeFormer loaded via direct module (device=%s)", FACE_DEVICE)
+            return _codeformer_restorer
         except Exception as e:
-            logger.warning("CodeFormer load failed: %s — falling back to GFPGAN", e)
-            _codeformer_restorer = "unavailable"
+            logger.warning("Direct CodeFormer load failed: %s — trying pip package", e)
+
+    # Strategy 2: codeformer-pip package (fallback)
+    try:
+        from codeformer import CodeFormer
+        _codeformer_restorer = {"type": "pip", "instance": CodeFormer(upscale=2, device=str(FACE_DEVICE))}
+        logger.info("CodeFormer loaded via pip package (device=%s)", FACE_DEVICE)
+    except ImportError:
+        logger.warning("codeformer-pip not installed — CodeFormer unavailable, falling back to GFPGAN")
+        _codeformer_restorer = "unavailable"
+    except Exception as e:
+        logger.warning("CodeFormer load failed: %s — falling back to GFPGAN", e)
+        _codeformer_restorer = "unavailable"
     return _codeformer_restorer
 
 
@@ -294,10 +301,10 @@ def estimate_degradation_level(blur_score: float, face_area: int) -> str:
 class RestoreRequest(BaseModel):
     """Base64-encoded image input with restoration parameters."""
     image_base64: str = Field(..., description="Base64-encoded image (no data: prefix)")
-    mode: str = Field("face_restore", description="face_restore | face_restore_hd | codeformer | upscale_2x | upscale_4x | old_photo | auto_face | hybrid")
+    mode: str = Field("face_restore", description="face_restore | face_restore_hd | codeformer | upscale_2x | upscale_4x | old_photo | auto_face")
     scale: int = Field(2, description="Upscale factor (1, 2, or 4)")
     face_enhance: bool = Field(True, description="Apply face enhancement on detected faces")
-    restoration_model: str = Field("auto", description="gfpgan | codeformer | auto | hybrid")
+    restoration_model: str = Field("auto", description="gfpgan | codeformer | auto")
     fidelity: float = Field(0.5, ge=0.0, le=1.0, description="CodeFormer fidelity weight (0=quality, 1=fidelity)")
 
 class RestoreResponse(BaseModel):
@@ -309,16 +316,6 @@ class RestoreResponse(BaseModel):
     device: str
     restoration_backend: str = "gfpgan"
     face_analysis: Optional[list[dict]] = None
-    pipeline_profile: Optional[dict] = None
-
-class BatchRestoreRequest(BaseModel):
-    """Batch image restoration — process multiple images in one call."""
-    images: list[RestoreRequest] = Field(..., description="List of image restoration requests", max_length=10)
-
-class BatchRestoreResponse(BaseModel):
-    results: list[RestoreResponse]
-    total_processing_ms: int
-    images_processed: int
 
 class VideoRestoreRequest(BaseModel):
     """Base64-encoded video input for frame-by-frame restoration."""
@@ -327,7 +324,7 @@ class VideoRestoreRequest(BaseModel):
     face_enhance: bool = Field(True, description="Apply GFPGAN/CodeFormer on detected face regions")
     max_frames: int = Field(300, description="Max frames to process (safety limit)")
     temporal_consistency: bool = Field(True, description="Enable optical-flow temporal blending to reduce flickering")
-    restoration_model: str = Field("gfpgan", description="gfpgan | codeformer | hybrid — model for face regions in video")
+    restoration_model: str = Field("gfpgan", description="gfpgan | codeformer — model for face regions in video")
 
 class VideoRestoreResponse(BaseModel):
     video_base64: str
@@ -475,38 +472,6 @@ def restore_face_auto(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarra
         return result, count, "gfpgan"
 
 
-def restore_face_hybrid(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarray, int, str]:
-    """
-    Hybrid restoration: CodeFormer first (texture recovery) → GFPGAN second (identity preservation).
-    This sequential pipeline produces the highest quality output for severely degraded images.
-
-    CodeFormer excels at reconstructing texture/structure from heavily degraded faces,
-    while GFPGAN refines identity-specific facial features with generative priors.
-    Running them sequentially leverages both strengths.
-
-    Returns (image, face_count, backend_used).
-    """
-    profiler = PipelineProfiler()
-
-    # Step 1: CodeFormer — structural recovery and texture hallucination
-    cf = get_codeformer()
-    if cf != "unavailable" and cf is not None:
-        step1_result, face_count = restore_face_codeformer(img, fidelity=fidelity)
-        profiler.mark("codeformer_pass")
-    else:
-        step1_result = img
-        face_count = 0
-        profiler.mark("codeformer_skip")
-
-    # Step 2: GFPGAN — identity refinement on the CodeFormer output
-    final_result, gfpgan_faces = restore_face_gfpgan(step1_result, upscale=2)
-    profiler.mark("gfpgan_pass")
-
-    total_faces = max(face_count, gfpgan_faces)
-    logger.info("Hybrid restore: faces=%d, timings=%s", total_faces, profiler.to_dict())
-    return final_result, total_faces, "hybrid"
-
-
 def upscale_image(img: np.ndarray, scale: int = 4) -> np.ndarray:
     """Run Real-ESRGAN upscaling."""
     upsampler = get_realesrgan(scale)
@@ -589,11 +554,11 @@ def process_video(
     """
     Frame-by-frame video restoration pipeline with temporal consistency:
     1. Extract frames with ffmpeg
-    2. Concurrent batch processing of independent frames (upscale + face restore)
-    3. Sequential temporal blending pass (requires frame order)
-    4. Reconstruct video with ffmpeg at original framerate
+    2. Real-ESRGAN for background enhancement on each frame
+    3. GFPGAN or CodeFormer for face regions
+    4. Temporal blending to prevent facial flickering between frames
+    5. Reconstruct video with ffmpeg at original framerate
 
-    Uses ThreadPoolExecutor for GPU/CPU parallelism on independent frames.
     Returns (output_bytes, frames_processed, scene_changes).
     """
     tmpdir = tempfile.mkdtemp(prefix="glimpse_video_")
@@ -630,77 +595,55 @@ def process_video(
         if not frame_files:
             raise ValueError("No frames extracted from video")
 
-        logger.info("Extracted %d frames, processing concurrently...", len(frame_files))
+        logger.info("Extracted %d frames, processing...", len(frame_files))
 
         out_dir = os.path.join(tmpdir, "processed")
         os.makedirs(out_dir)
         scale = 4 if mode == "upscale_4x" else 2
 
-        # ── Phase 1: Concurrent frame enhancement (upscale + face restore) ──
-        def _process_single_frame(frame_path: Path, index: int) -> tuple[int, np.ndarray]:
-            """Process a single frame — runs in thread pool."""
+        prev_input_frame = None
+        prev_restored_frame = None
+        scene_changes = 0
+
+        for i, frame_path in enumerate(frame_files):
             frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
             if frame is None:
-                return index, np.zeros((height, width, 3), dtype=np.uint8)
+                continue
 
+            # Scene change detection
+            is_scene_change = False
+            if prev_input_frame is not None:
+                is_scene_change = detect_scene_change(prev_input_frame, frame)
+                if is_scene_change:
+                    scene_changes += 1
+
+            # Real-ESRGAN background enhancement
             if mode in ("upscale_2x", "upscale_4x"):
                 frame = upscale_image(frame, scale=scale)
 
+            # Face restoration on each frame
             if face_enhance:
-                if restoration_model == "hybrid":
-                    frame, _, _ = restore_face_hybrid(frame)
-                elif restoration_model == "codeformer":
+                if restoration_model == "codeformer":
                     frame, _ = restore_face_codeformer(frame)
                 else:
                     frame, _ = restore_face_gfpgan(frame)
 
-            return index, frame
+            # Temporal blending (only within same scene)
+            if temporal_consistency and prev_restored_frame is not None and not is_scene_change:
+                frame = temporal_blend(prev_restored_frame, frame, alpha=0.15)
 
-        # Submit all frames to thread pool for concurrent processing
-        restored_frames: dict[int, np.ndarray] = {}
-        futures = []
-        for i, fp in enumerate(frame_files):
-            future = _frame_executor.submit(_process_single_frame, fp, i)
-            futures.append(future)
-
-        completed = 0
-        for future in as_completed(futures):
-            idx, frame = future.result()
-            restored_frames[idx] = frame
-            completed += 1
-            if completed % 10 == 0:
-                logger.info("  Processed %d/%d frames", completed, len(frame_files))
-
-        # ── Phase 2: Sequential temporal blending (requires frame order) ──
-        scene_changes = 0
-        prev_input_frame = None
-
-        for i in range(len(frame_files)):
-            frame = restored_frames[i]
-            original = cv2.imread(str(frame_files[i]), cv2.IMREAD_COLOR)
-
-            # Scene change detection on originals
-            is_scene_change = False
-            if prev_input_frame is not None and original is not None:
-                is_scene_change = detect_scene_change(prev_input_frame, original)
-                if is_scene_change:
-                    scene_changes += 1
-
-            # Temporal blending within same scene
-            if temporal_consistency and i > 0 and not is_scene_change:
-                prev_frame = restored_frames.get(i - 1)
-                if prev_frame is not None:
-                    frame = temporal_blend(prev_frame, frame, alpha=0.15)
-                    restored_frames[i] = frame
-
-            prev_input_frame = original
+            prev_input_frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+            prev_restored_frame = frame.copy()
 
             out_path = os.path.join(out_dir, f"frame_{i:06d}.png")
             cv2.imwrite(out_path, frame)
 
+            if (i + 1) % 10 == 0:
+                logger.info("  Processed %d/%d frames", i + 1, len(frame_files))
+
         # Reconstruct video with ffmpeg
         output_path = os.path.join(tmpdir, "output.mp4")
-        first_out = restored_frames.get(0)
+        first_out = cv2.imread(os.path.join(out_dir, "frame_000000.png"))
         out_h, out_w = first_out.shape[:2] if first_out is not None else (height * scale, width * scale)
 
         subprocess.run(
@@ -742,15 +685,11 @@ def _available_capabilities() -> list[str]:
     try:
         import codeformer  # noqa: F401
         caps.append("codeformer")
-        # Hybrid requires both CodeFormer AND GFPGAN
-        if Path(MODEL_DIR / "GFPGANv1.4.pth").exists():
-            caps.append("hybrid")
     except ImportError:
         pass
     if shutil.which("ffmpeg"):
         caps.append("video_restore")
     caps.append("face_analysis")
-    caps.append("batch_restore")
     return caps
 
 
@@ -863,34 +802,23 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
     faces_detected = 0
     backend_used = "gfpgan"
     face_analysis = None
-    profiler = PipelineProfiler()
 
     # Cap large images to avoid CPU timeouts
     img = _cap_image_for_ml(img)
-    profiler.mark("image_cap")
 
-    if req_mode == "hybrid":
-        # Sequential CodeFormer→GFPGAN for maximum quality
-        result, faces_detected, backend_used = restore_face_hybrid(img, fidelity=req_fidelity)
-        profiler.mark("hybrid_restore")
-
-    elif req_mode == "face_restore":
-        if req_restoration_model == "hybrid":
-            result, faces_detected, backend_used = restore_face_hybrid(img, fidelity=req_fidelity)
-        elif req_restoration_model == "codeformer":
+    if req_mode == "face_restore":
+        if req_restoration_model == "codeformer":
             result, faces_detected = restore_face_codeformer(img, fidelity=req_fidelity)
             backend_used = "codeformer"
         elif req_restoration_model == "auto":
             result, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
         else:
             result, faces_detected = restore_face_gfpgan(img, upscale=2)
-        profiler.mark("face_restore")
 
     elif req_mode == "face_restore_hd":
-        # HD pipeline: face restore (2x) → ESRGAN 2x = 4x total output.
-        if req_restoration_model == "hybrid":
-            face_restored, faces_detected, backend_used = restore_face_hybrid(img, fidelity=req_fidelity)
-        elif req_restoration_model == "codeformer":
+        # HD pipeline: GFPGAN face restore (2x) → ESRGAN 2x = 4x total output.
+        # Previous pipeline was ESRGAN 4x → GFPGAN 2x = 8x (caused OOM + timeouts).
+        if req_restoration_model == "codeformer":
             face_restored, faces_detected = restore_face_codeformer(img, fidelity=req_fidelity)
             backend_used = "codeformer"
         elif req_restoration_model == "auto":
@@ -898,15 +826,12 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
         else:
             face_restored, faces_detected = restore_face_gfpgan(img, upscale=2)
             backend_used = "gfpgan"
-        profiler.mark("face_restore_pass")
-        # Second pass: ESRGAN 2x for overall sharpness
+        # Second pass: ESRGAN 2x for overall sharpness and texture on the face-restored image
         result = upscale_image(face_restored, scale=2)
-        profiler.mark("esrgan_upscale")
 
     elif req_mode == "codeformer":
         result, faces_detected = restore_face_codeformer(img, fidelity=req_fidelity)
         backend_used = "codeformer"
-        profiler.mark("codeformer")
 
     elif req_mode == "auto_face":
         faces_info = detect_faces_with_landmarks(img)
@@ -914,34 +839,27 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
             {**f, "degradation_level": estimate_degradation_level(f["blur_score"], f["area"])}
             for f in faces_info
         ]
-        profiler.mark("face_analysis")
         result, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
-        profiler.mark("auto_restore")
 
     elif req_mode == "upscale_2x":
         result = upscale_image(img, scale=2)
-        profiler.mark("upscale_2x")
         if req_face_enhance:
             result, faces_detected = restore_face_gfpgan(result)
-            profiler.mark("face_enhance")
 
     elif req_mode == "upscale_4x":
         result = upscale_image(img, scale=4)
-        profiler.mark("upscale_4x")
         if req_face_enhance:
             result, faces_detected = restore_face_gfpgan(result)
-            profiler.mark("face_enhance")
 
     elif req_mode == "old_photo":
         result, faces_detected, backend_used = restore_old_photo(
             img, restoration_model=req_restoration_model, fidelity=req_fidelity,
         )
-        profiler.mark("old_photo_restore")
 
     else:
         raise ValueError(f"Unknown mode: {req_mode}")
 
-    return result, faces_detected, backend_used, face_analysis, profiler
+    return result, faces_detected, backend_used, face_analysis
 
 
 @app.post("/restore", response_model=RestoreResponse)
@@ -962,7 +880,7 @@ async def restore_image_endpoint(req: RestoreRequest):
                 req.mode, req.restoration_model, img.shape[1], img.shape[0])
 
     try:
-        result, faces_detected, backend_used, face_analysis, profiler = await asyncio.to_thread(
+        result, faces_detected, backend_used, face_analysis = await asyncio.to_thread(
             _run_restore_sync, img, req.mode, req.restoration_model,
             req.fidelity, req.face_enhance,
         )
@@ -975,9 +893,9 @@ async def restore_image_endpoint(req: RestoreRequest):
     b64, mime = encode_image(result)
     elapsed_ms = int((time.time() - start) * 1000)
 
-    logger.info("Restored: mode=%s, backend=%s, faces=%d, time=%dms, input=%dx%d, profile=%s",
+    logger.info("Restored: mode=%s, backend=%s, faces=%d, time=%dms, input=%dx%d",
                 req.mode, backend_used, faces_detected, elapsed_ms,
-                img.shape[1], img.shape[0], profiler.to_dict())
+                img.shape[1], img.shape[0])
     return RestoreResponse(
         image_base64=b64,
         mime_type=mime,
@@ -987,14 +905,13 @@ async def restore_image_endpoint(req: RestoreRequest):
         device=DEVICE,
         restoration_backend=backend_used,
         face_analysis=face_analysis,
-        pipeline_profile=profiler.to_dict(),
     )
 
 
 @app.post("/restore-video", response_model=VideoRestoreResponse)
 async def restore_video_endpoint(req: VideoRestoreRequest):
     """
-    Video restoration: frame extraction → concurrent processing → temporal blending → reconstruction.
+    Video restoration: frame extraction → per-frame processing → temporal blending → reconstruction.
     """
     start = time.time()
 
@@ -1028,99 +945,6 @@ async def restore_video_endpoint(req: VideoRestoreRequest):
         mode=req.mode,
         scene_changes_detected=scene_changes,
     )
-
-
-@app.post("/restore-batch", response_model=BatchRestoreResponse)
-async def restore_batch_endpoint(batch_req: BatchRestoreRequest):
-    """
-    Batch image restoration — process up to 10 images in a single call.
-    Each image is processed concurrently via thread pool for maximum throughput.
-    """
-    start = time.time()
-    results: list[RestoreResponse] = []
-
-    async def _process_one(req: RestoreRequest) -> RestoreResponse:
-        img_start = time.time()
-        try:
-            img = decode_image(req.image_base64)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
-
-        result, faces_detected, backend_used, face_analysis, profiler = await asyncio.to_thread(
-            _run_restore_sync, img, req.mode, req.restoration_model,
-            req.fidelity, req.face_enhance,
-        )
-
-        b64, mime = encode_image(result)
-        elapsed_ms = int((time.time() - img_start) * 1000)
-
-        return RestoreResponse(
-            image_base64=b64,
-            mime_type=mime,
-            processing_ms=elapsed_ms,
-            faces_detected=faces_detected,
-            mode=req.mode,
-            device=DEVICE,
-            restoration_backend=backend_used,
-            face_analysis=face_analysis,
-            pipeline_profile=profiler.to_dict(),
-        )
-
-    # Process all images concurrently (asyncio.gather dispatches to thread pool)
-    tasks = [_process_one(req) for req in batch_req.images]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
-
-    total_ms = int((time.time() - start) * 1000)
-    logger.info("Batch restore: %d images, total=%dms", len(results), total_ms)
-
-    return BatchRestoreResponse(
-        results=results,
-        total_processing_ms=total_ms,
-        images_processed=len(results),
-    )
-
-
-@app.get("/metrics")
-async def metrics_endpoint():
-    """Pipeline metrics for monitoring: model status, device info, thread pool stats."""
-    pool_info = {
-        "max_workers": _frame_executor._max_workers,
-        "threads_active": len([t for t in _frame_executor._threads if t.is_alive()]) if hasattr(_frame_executor, '_threads') else 0,
-    }
-
-    # Memory usage
-    import psutil
-    process = psutil.Process(os.getpid())
-    mem = process.memory_info()
-
-    # GPU memory (CUDA only)
-    gpu_mem = None
-    if DEVICE == "cuda":
-        try:
-            gpu_mem = {
-                "allocated_mb": round(torch.cuda.memory_allocated() / 1024 / 1024, 1),
-                "reserved_mb": round(torch.cuda.memory_reserved() / 1024 / 1024, 1),
-                "max_allocated_mb": round(torch.cuda.max_memory_allocated() / 1024 / 1024, 1),
-            }
-        except Exception:
-            pass
-
-    return {
-        "device": DEVICE,
-        "models_loaded": {
-            "gfpgan": _gfpgan_restorer is not None,
-            "codeformer": _codeformer_restorer is not None and _codeformer_restorer != "unavailable",
-            "realesrgan_x2": _realesrgan_x2 is not None,
-            "realesrgan_x4": _realesrgan_x4 is not None,
-            "face_detector": _face_detector is not None and _face_detector != "unavailable",
-        },
-        "thread_pool": pool_info,
-        "memory": {
-            "rss_mb": round(mem.rss / 1024 / 1024, 1),
-            "vms_mb": round(mem.vms / 1024 / 1024, 1),
-        },
-        "gpu_memory": gpu_mem,
-    }
 
 
 if __name__ == "__main__":

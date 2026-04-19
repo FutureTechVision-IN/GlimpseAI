@@ -97,6 +97,19 @@ async function unsharpMask(
 }
 
 // ---------------------------------------------------------------------------
+// Safe gamma — clamps to Sharp's [1.0, 3.0] range, approximates sub-1 values
+// ---------------------------------------------------------------------------
+function safeGamma(p: sharp.Sharp, g: number): sharp.Sharp {
+  if (g >= 1.0 && g <= 3.0) return p.gamma(g);
+  if (g < 1.0) {
+    // Gamma < 1 darkens midtones (power curve x^(1/g), 1/g > 1).
+    // Approximate with linear contrast: slope=g darkens, offset preserves shadows.
+    return p.linear(g, (1 - g) * 30);
+  }
+  return p.gamma(3.0);
+}
+
+// ---------------------------------------------------------------------------
 // Multi-scale tone mapping — recovers shadows/highlights like HDR software
 // ---------------------------------------------------------------------------
 async function toneMap(
@@ -134,18 +147,18 @@ const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
   filmnoir: (p) => p.grayscale().normalize().gamma(1.3).sharpen({ sigma: 1.2, m1: 1.5, m2: 0.8 }),
   goldenhour: (p) => p.modulate({ saturation: 1.1, brightness: 1.06 }).tint({ r: 255, g: 220, b: 180 }).gamma(1.05).sharpen({ sigma: 0.5 }),
   moody: (p) => p.modulate({ saturation: 0.75, brightness: 0.92 }).tint({ r: 160, g: 170, b: 200 }).gamma(1.12).sharpen({ sigma: 0.6 }),
-  fresh: (p) => p.modulate({ saturation: 1.15, brightness: 1.08 }).gamma(0.95).normalize().sharpen({ sigma: 0.5 }),
+  fresh: (p) => safeGamma(p.modulate({ saturation: 1.15, brightness: 1.08 }), 0.95).normalize().sharpen({ sigma: 0.5 }),
   retro: (p) => p.modulate({ saturation: 0.65, brightness: 0.98 }).tint({ r: 200, g: 180, b: 150 }).gamma(1.18).sharpen({ sigma: 0.4 }),
   dramatic: (p) => p.normalize().sharpen({ sigma: 2.0, m1: 2.5, m2: 1.2 }).modulate({ saturation: 1.1, brightness: 0.95 }).gamma(1.15),
   warm_tone: (p) => p.modulate({ saturation: 1.1, brightness: 1.04 }).tint({ r: 245, g: 220, b: 185 }).gamma(1.04).sharpen({ sigma: 0.5 }),
   cool_tone: (p) => p.modulate({ saturation: 0.95, brightness: 1.02 }).tint({ r: 170, g: 200, b: 230 }).gamma(1.06).sharpen({ sigma: 0.5 }),
   sunset: (p) => p.modulate({ saturation: 1.2, brightness: 1.03 }).tint({ r: 255, g: 200, b: 160 }).gamma(1.05).sharpen({ sigma: 0.4 }),
-  matte: (p) => p.modulate({ saturation: 0.7, brightness: 1.02 }).gamma(0.92).linear(0.9, 15).sharpen({ sigma: 0.3 }),
+  matte: (p) => safeGamma(p.modulate({ saturation: 0.7, brightness: 1.02 }), 0.92).linear(0.9, 15).sharpen({ sigma: 0.3 }),
   neon: (p) => p.modulate({ saturation: 1.6, brightness: 1.05 }).sharpen({ sigma: 1.0 }).normalize(),
   // ── New premium filters ──
-  airy: (p) => p.modulate({ brightness: 1.12, saturation: 0.85 }).gamma(0.88).sharpen({ sigma: 0.3 }).tint({ r: 240, g: 240, b: 250 }),
+  airy: (p) => safeGamma(p.modulate({ brightness: 1.12, saturation: 0.85 }), 0.88).sharpen({ sigma: 0.3 }).tint({ r: 240, g: 240, b: 250 }),
   teal_orange: (p) => p.modulate({ saturation: 1.2, brightness: 1.02 }).tint({ r: 220, g: 195, b: 170 }).normalize().sharpen({ sigma: 0.6 }),
-  pastel: (p) => p.modulate({ saturation: 0.55, brightness: 1.15 }).gamma(0.85).sharpen({ sigma: 0.3 }).tint({ r: 240, g: 230, b: 235 }),
+  pastel: (p) => safeGamma(p.modulate({ saturation: 0.55, brightness: 1.15 }), 0.85).sharpen({ sigma: 0.3 }).tint({ r: 240, g: 230, b: 235 }),
   noir_color: (p) => p.modulate({ saturation: 0.4, brightness: 0.88 }).gamma(1.25).sharpen({ sigma: 1.5, m1: 2.0, m2: 1.0 }).normalize(),
   cross_process: (p) => p.modulate({ saturation: 1.3, brightness: 1.0 }).tint({ r: 200, g: 240, b: 180 }).gamma(1.1).sharpen({ sigma: 0.6 }),
   cyberpunk: (p) => p.modulate({ saturation: 1.5, brightness: 0.95 }).tint({ r: 200, g: 150, b: 255 }).gamma(1.15).sharpen({ sigma: 0.8 }),
@@ -168,7 +181,6 @@ const RESTORATION_TYPES = new Set([
   "face_restore_hd",
   "codeformer",
   "auto_face",
-  "hybrid",
   "esrgan_upscale_2x",
   "esrgan_upscale_4x",
   "old_photo_restore",
@@ -182,10 +194,6 @@ interface RestorationResponse {
   mode: string;
   device: string;
   restoration_backend: string;
-  pipeline_profile?: {
-    total_ms: number;
-    steps: Record<string, number>;
-  };
   face_analysis?: Array<{
     bbox: number[];
     blur_score: number;
@@ -223,7 +231,6 @@ async function callRestorationService(
     face_restore_hd: "face_restore_hd",
     codeformer: "codeformer",
     auto_face: "auto_face",
-    hybrid: "hybrid",
     esrgan_upscale_2x: "upscale_2x",
     esrgan_upscale_4x: "upscale_4x",
     old_photo_restore: "old_photo",
@@ -381,97 +388,6 @@ export async function callVideoRestoration(
 }
 
 /**
- * Call restoration service batch endpoint for multi-image processing.
- * Falls back to sequential processing if batch endpoint is unavailable.
- */
-export async function callBatchRestoration(
-  images: Array<{ base64Data: string; mode: string; settings?: Record<string, unknown> }>,
-): Promise<Array<{ base64: string; mimeType: string; processingMs: number; backend: string; profile?: Record<string, unknown> }>> {
-  const available = await isRestorationServiceAvailable();
-  if (!available) {
-    throw new Error("Restoration service unavailable");
-  }
-
-  // Try batch endpoint first
-  try {
-    const batchPayload = images.map((img) => ({
-      image_base64: img.base64Data,
-      mode: img.mode,
-      face_enhance: true,
-      restoration_model: (img.settings?.restorationModel as string) || "auto",
-      fidelity: typeof img.settings?.fidelity === "number" ? img.settings.fidelity : 0.5,
-    }));
-
-    const ctrl = new AbortController();
-    const timeoutId = setTimeout(() => ctrl.abort(), 20 * 60 * 1000); // 20 min for batch
-
-    let response: Response;
-    try {
-      response = await fetch(`${RESTORATION_SERVICE_URL}/restore-batch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: ctrl.signal,
-        body: JSON.stringify({ images: batchPayload }),
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    if (response.ok) {
-      const batchResult = (await response.json()) as {
-        results: Array<RestorationResponse>;
-        total_processing_ms: number;
-        images_processed: number;
-      };
-
-      logger.info({ count: batchResult.images_processed, totalMs: batchResult.total_processing_ms }, "Batch restoration complete");
-
-      return batchResult.results.map((r) => ({
-        base64: r.image_base64,
-        mimeType: r.mime_type,
-        processingMs: r.processing_ms,
-        backend: r.restoration_backend,
-        profile: r.pipeline_profile,
-      }));
-    }
-
-    // Batch endpoint returned error — fall through to sequential
-    logger.warn({ status: response.status }, "Batch endpoint failed, falling back to sequential");
-  } catch (err) {
-    logger.warn({ err }, "Batch endpoint unavailable, falling back to sequential");
-  }
-
-  // Fallback: sequential processing
-  const results = [];
-  for (const img of images) {
-    const result = await callRestorationService(img.base64Data, img.mode, img.settings);
-    results.push({
-      base64: result.base64,
-      mimeType: result.mimeType,
-      processingMs: 0,
-      backend: "sequential_fallback",
-    });
-  }
-  return results;
-}
-
-/**
- * Fetch pipeline metrics from restoration service for monitoring.
- */
-export async function getRestorationMetrics(): Promise<Record<string, unknown> | null> {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(`${RESTORATION_SERVICE_URL}/metrics`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    if (res.ok) return (await res.json()) as Record<string, unknown>;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Real image enhancement using sharp (libvips).
  * Accepts raw base64 (no prefix), returns raw base64 (no prefix).
  */
@@ -540,8 +456,7 @@ export async function enhanceImage(
             .sharpen({ sigma: 1.2, m1: 1.5, m2: 0.4 });
         } else if (stats.isBright) {
           // Overexposed: recover detail + add richness
-          pipeline = pipeline
-            .gamma(0.82)
+          pipeline = safeGamma(pipeline, 0.82)
             .normalize()
             .modulate({ brightness: 0.93, saturation: 1.2 })
             .sharpen({ sigma: 1.0, m1: 1.2, m2: 0.4 });
@@ -750,8 +665,7 @@ export async function enhanceImage(
             .sharpen({ sigma: 1.2, m1: 1.5, m2: 0.5 });
         } else if (lightStats.isBright) {
           // Recover blown highlights, add midtone depth
-          pipeline = pipeline
-            .gamma(0.78)
+          pipeline = safeGamma(pipeline, 0.78)
             .modulate({ brightness: 0.91, saturation: 1.12 })
             .normalize()
             .linear(1.05, -5)  // Add midtone contrast
@@ -895,8 +809,8 @@ export async function enhanceImage(
           .normalize()                                                  // adaptive contrast
           .modulate({ brightness: 1.05, saturation: 1.15 })            // revive faded colors
           .tint({ r: 135, g: 128, b: 118 })                           // slight warm tone
-          .sharpen({ sigma: 1.5, m1: 1.2, m2: 0.8 })                 // recover detail
-          .gamma(0.95);                                                 // lift shadows slightly
+          .sharpen({ sigma: 1.5, m1: 1.2, m2: 0.8 });                // recover detail
+        pipeline = safeGamma(pipeline, 0.95);                           // lift shadows slightly
         break;
       }
       case "face_restore":
@@ -907,8 +821,8 @@ export async function enhanceImage(
           .median(3)
           .normalize()
           .modulate({ brightness: 1.02, saturation: 1.08 })
-          .sharpen({ sigma: 1.8, m1: 1.5, m2: 1.0 })
-          .gamma(0.97);
+          .sharpen({ sigma: 1.8, m1: 1.5, m2: 1.0 });
+        pipeline = safeGamma(pipeline, 0.97);
         break;
       }
       case "esrgan_upscale_2x": {
@@ -929,8 +843,8 @@ export async function enhanceImage(
           .median(3)
           .normalize()
           .modulate({ brightness: 1.02, saturation: 1.1 })
-          .sharpen({ sigma: 2.0, m1: 1.5, m2: 1.0 })
-          .gamma(0.96);
+          .sharpen({ sigma: 2.0, m1: 1.5, m2: 1.0 });
+        pipeline = safeGamma(pipeline, 0.96);
         break;
       }
       default: {
@@ -946,7 +860,7 @@ export async function enhanceImage(
   }
   if (typeof s.contrast === "number" && s.contrast !== 100) {
     const g = 1 + ((100 - (s.contrast as number)) / 200);
-    pipeline = pipeline.gamma(Math.max(0.5, Math.min(3.0, g)));
+    pipeline = safeGamma(pipeline, Math.max(0.5, Math.min(3.0, g)));
   }
   if (typeof s.saturation === "number" && s.saturation !== 100) {
     pipeline = pipeline.modulate({ saturation: (s.saturation as number) / 100 });
@@ -964,7 +878,7 @@ export async function enhanceImage(
   }
   if (typeof s.shadows === "number" && s.shadows !== 100) {
     const sh = Math.max(0.3, Math.min(3.0, (s.shadows as number) / 100));
-    pipeline = pipeline.gamma(1 / sh);
+    pipeline = safeGamma(pipeline, 1 / sh);
   }
   if (typeof s.hue === "number" && s.hue !== 0) {
     pipeline = pipeline.modulate({ hue: s.hue as number });
@@ -997,12 +911,12 @@ export async function enhanceImage(
     if (guidance.contrast !== null && Math.abs(guidance.contrast - 1.0) > 0.02) {
       // Higher contrast = lower gamma (more S-curve), lower contrast = higher gamma
       const contrastGamma = 1 + ((1.0 - guidance.contrast) * 0.5);
-      pipeline = pipeline.gamma(Math.max(0.5, Math.min(2.0, contrastGamma)));
+      pipeline = safeGamma(pipeline, Math.max(0.5, Math.min(3.0, contrastGamma)));
     }
 
     // Gamma correction
     if (guidance.gammaCorrection !== null && Math.abs(guidance.gammaCorrection - 1.0) > 0.02) {
-      pipeline = pipeline.gamma(guidance.gammaCorrection);
+      pipeline = safeGamma(pipeline, guidance.gammaCorrection);
     }
 
     // Shadow recovery via tone mapping

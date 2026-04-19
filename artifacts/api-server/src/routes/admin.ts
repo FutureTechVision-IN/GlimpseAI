@@ -3,7 +3,6 @@ import { db, usersTable, mediaJobsTable, paymentsTable, plansTable, providersTab
 import { eq, desc, count, sum, and, ilike, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin, AuthRequest } from "../middlewares/auth";
 import { aiProvider } from "../lib/ai-provider";
-import { getRestorationMetrics } from "../lib/image-enhancer";
 import {
   SuspendUserBody,
   SuspendUserParams,
@@ -627,16 +626,6 @@ router.get("/admin/ai-recommendations", requireAuth, requireAdmin, async (_req, 
   recommendations.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 
   res.json({ recommendations, generatedAt: new Date().toISOString() });
-});
-
-// ─── Restoration Pipeline Metrics ─────────────────────────────────
-router.get("/admin/restoration-metrics", requireAuth, requireAdmin, async (_req: AuthRequest, res): Promise<void> => {
-  const metrics = await getRestorationMetrics();
-  if (!metrics) {
-    res.status(503).json({ error: "Restoration service unreachable", status: "offline" });
-    return;
-  }
-  res.json({ status: "online", ...metrics });
 });
 
 export default router;
