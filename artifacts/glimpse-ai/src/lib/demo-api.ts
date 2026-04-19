@@ -138,8 +138,8 @@ const DEMO_PLANS = [
     name: "Basic",
     slug: "basic",
     description: "For regular creators who need consistent quality",
-    priceMonthly: 461,
-    priceAnnual: 4612,
+    priceMonthly: 46100,
+    priceAnnual: 461200,
     creditsPerMonth: 600,
     features: ["20 enhancements/day", "600 enhancements/month", "Photo & video enhancement", "AI-powered filters", "HD quality output", "Email support"],
     isActive: true,
@@ -150,8 +150,8 @@ const DEMO_PLANS = [
     name: "Premium",
     slug: "premium",
     description: "Unlock every feature for professional-grade results",
-    priceMonthly: 924,
-    priceAnnual: 9240,
+    priceMonthly: 92400,
+    priceAnnual: 924000,
     creditsPerMonth: 600,
     features: ["20 enhancements/day", "600 enhancements/month", "Photo & video enhancement", "4× upscaling", "Posture adjustment", "Fine-tuned edits", "Priority processing", "Priority support"],
     isActive: true,
@@ -184,12 +184,61 @@ const DEMO_ADMIN_USERS = [
 ];
 
 const DEMO_PAYMENTS = [
-  { id: 1, userId: 1, planId: 3, amount: 92400, currency: "INR", status: "success", razorpayOrderId: "order_demo_001", razorpayPaymentId: null, billingPeriod: "annual", createdAt: "2026-01-15T09:05:00Z" },
-  { id: 2, userId: 2, planId: 2, amount: 46100, currency: "INR", status: "success", razorpayOrderId: "order_demo_002", razorpayPaymentId: null, billingPeriod: "annual", createdAt: "2026-02-10T08:35:00Z" },
-  { id: 3, userId: 4, planId: 3, amount: 92400, currency: "INR", status: "success", razorpayOrderId: "order_demo_003", razorpayPaymentId: null, billingPeriod: "annual", createdAt: "2026-03-22T11:05:00Z" },
+  { id: 1, userId: 1, planId: 3, amount: 924000, currency: "INR", status: "success", razorpayOrderId: "order_demo_001", razorpayPaymentId: null, billingPeriod: "annual", createdAt: "2026-01-15T09:05:00Z" },
+  { id: 2, userId: 2, planId: 2, amount: 461200, currency: "INR", status: "success", razorpayOrderId: "order_demo_002", razorpayPaymentId: null, billingPeriod: "annual", createdAt: "2026-02-10T08:35:00Z" },
+  { id: 3, userId: 4, planId: 3, amount: 924000, currency: "INR", status: "success", razorpayOrderId: "order_demo_003", razorpayPaymentId: null, billingPeriod: "annual", createdAt: "2026-03-22T11:05:00Z" },
   { id: 4, userId: 3, planId: 1, amount: 0, currency: "INR", status: "success", razorpayOrderId: null, razorpayPaymentId: null, billingPeriod: null, createdAt: "2026-03-05T14:25:00Z" },
-  { id: 5, userId: 5, planId: 2, amount: 46100, currency: "INR", status: "failed", razorpayOrderId: "order_demo_005", razorpayPaymentId: null, billingPeriod: "annual", createdAt: "2026-04-01T09:20:00Z" },
+  { id: 5, userId: 5, planId: 2, amount: 461200, currency: "INR", status: "failed", razorpayOrderId: "order_demo_005", razorpayPaymentId: null, billingPeriod: "annual", createdAt: "2026-04-01T09:20:00Z" },
 ];
+
+const DEMO_PROVIDER_KEYS = [
+  { id: 1, keyPrefix: "sk-or-v1-...8k3m", provider: "openrouter", model: "moonshotai/kimi-k2.5", group: "primary", tier: "free", status: "active", totalCalls: 2847, totalErrors: 3, latencyMs: 342 },
+  { id: 2, keyPrefix: "sk-or-v1-...p2q9", provider: "openrouter", model: "openrouter/elephant-alpha", group: "primary", tier: "free", status: "active", totalCalls: 1203, totalErrors: 0, latencyMs: 289 },
+  { id: 3, keyPrefix: "sk-or-v1-...x7r1", provider: "openrouter", model: "stepfun/step-3.5-flash:free", group: "standard", tier: "free", status: "active", totalCalls: 3812, totalErrors: 8, latencyMs: 410 },
+  { id: 4, keyPrefix: "sk-or-v1-...m4n2", provider: "openrouter", model: "z-ai/glm-4.5-air:free", group: "standard", tier: "free", status: "degraded", totalCalls: 412, totalErrors: 47, latencyMs: 820, lastError: "Rate limit exceeded — 429 Too Many Requests" },
+  { id: 5, keyPrefix: "AIzaSy...k9qw", provider: "gemini", model: "gemini-2.0-flash", group: "gemini", tier: "free", status: "active", totalCalls: 1449, totalErrors: 6, latencyMs: 198 },
+];
+
+const DEMO_KEY_STATUS = {
+  totalKeys: 5,
+  active: 4,
+  degraded: 1,
+  inactive: 0,
+  byProvider: [
+    { provider: "openrouter", active: 3, total: 4, totalCalls: 8274 },
+    { provider: "gemini", active: 1, total: 1, totalCalls: 1449 },
+  ],
+  byTier: [
+    { tier: "free", active: 4, total: 5 },
+  ],
+};
+
+const DEMO_KEY_USAGE_REPORT = {
+  summary: { totalKeys: 5, activeKeys: 4, degradedKeys: 1, unusedKeys: 0, totalCalls: 9723, totalErrors: 64 },
+  byGroup: [
+    { group: "primary", active: 2, total: 2, totalCalls: 4050 },
+    { group: "standard", active: 1, total: 2, totalCalls: 4224 },
+    { group: "gemini", active: 1, total: 1, totalCalls: 1449 },
+  ],
+  recommendations: [
+    "Add more primary-tier keys to handle traffic peaks",
+    "Rotate the degraded OpenRouter key (sk-or-v1-...m4n2) — it has 47 recent errors",
+  ],
+};
+
+const DEMO_AI_POOL = {
+  total: 5,
+  healthy: 4,
+  degraded: 1,
+  byProvider: { openrouter: 4, gemini: 1 },
+  keys: [
+    { label: "sk-or-v1-...8k3m", status: "healthy" as const, provider: "openrouter", cooldownUntil: null, lastUsed: "2026-04-20T10:00:00Z", failCount: 0 },
+    { label: "sk-or-v1-...p2q9", status: "healthy" as const, provider: "openrouter", cooldownUntil: null, lastUsed: "2026-04-20T09:45:00Z", failCount: 0 },
+    { label: "sk-or-v1-...x7r1", status: "healthy" as const, provider: "openrouter", cooldownUntil: null, lastUsed: "2026-04-20T09:30:00Z", failCount: 2 },
+    { label: "sk-or-v1-...m4n2", status: "daily_limit" as const, provider: "openrouter", cooldownUntil: "2026-04-21T00:00:00Z", lastUsed: "2026-04-19T23:58:00Z", failCount: 47 },
+    { label: "AIzaSy...k9qw", status: "healthy" as const, provider: "gemini", cooldownUntil: null, lastUsed: "2026-04-20T10:01:00Z", failCount: 0 },
+  ],
+};
 
 const DEMO_PROVIDERS = [
   { id: 1, name: "OpenRouter", slug: "openrouter", isEnabled: true, priority: 1, requestCount: 8432, errorCount: 12, lastUsedAt: "2026-04-20T10:00:00Z", createdAt: "2026-01-10T00:00:00Z" },
@@ -376,6 +425,82 @@ export async function handleDemoRequest(
 
   if (url === "/api/admin/providers" && method === "GET") {
     return ok(DEMO_PROVIDERS);
+  }
+
+  // Provider keys & health (must be before generic /api/admin catch-all)
+  if (url.includes("/api/admin/provider-keys/status") && method === "GET") {
+    return ok(DEMO_KEY_STATUS);
+  }
+  if (url.includes("/api/admin/provider-keys/usage-report") && method === "GET") {
+    return ok(DEMO_KEY_USAGE_REPORT);
+  }
+  if (url.includes("/api/admin/provider-keys") && method === "GET") {
+    return ok({ keys: DEMO_PROVIDER_KEYS });
+  }
+  if (url.includes("/api/admin/provider-keys")) {
+    return ok({ success: true });
+  }
+
+  // AI pool & recommendations
+  if (url === "/api/admin/ai-pool" && method === "GET") {
+    return ok(DEMO_AI_POOL);
+  }
+  if (url === "/api/admin/ai-recommendations" && method === "GET") {
+    return ok({ recommendations: [
+      { id: "rec1", title: "Add more primary-tier API keys", description: "Only 2 primary keys are active. Adding 2–3 more will prevent bottlenecks during peak hours.", severity: "warning", category: "api-health", action: "Go to AI Providers & Keys → Bulk Import" },
+      { id: "rec2", title: "face_restore is the most-applied enhancement", description: "72% of users who apply face restoration keep the result. Consider surfacing it more prominently in the enhancement picker.", severity: "info", category: "product", action: "Update default enhancement order in settings" },
+    ]});
+  }
+
+  // Analytics endpoints
+  if (url.startsWith("/api/admin/analytics/")) {
+    if (url.includes("daily-summary")) {
+      const daily = Array.from({ length: 30 }, (_, i) => {
+        const d = new Date("2026-04-20");
+        d.setDate(d.getDate() - (29 - i));
+        const base = 40 + Math.round(Math.sin(i / 4) * 20);
+        return {
+          date: d.toISOString().slice(0, 10),
+          totalEnhancements: base + Math.floor(Math.random() * 15),
+          uniqueUsers: Math.floor(base * 0.6) + Math.floor(Math.random() * 8),
+          avgProcessingMs: 1800 + Math.floor(Math.random() * 600),
+        };
+      });
+      return ok({ daily });
+    }
+    if (url.includes("enhancement-types")) {
+      return ok({ types: [
+        { type: "face_restore", total: 3812 },
+        { type: "auto", total: 2940 },
+        { type: "portrait", total: 2104 },
+        { type: "upscale", total: 1823 },
+        { type: "old_photo_restore", total: 1247 },
+        { type: "hdr", total: 842 },
+        { type: "cinematic", total: 673 },
+        { type: "skin_retouch", total: 442 },
+      ]});
+    }
+    if (url.includes("top-users")) {
+      return ok({ users: DEMO_ADMIN_USERS.map((u, i) => ({
+        userId: u.id,
+        totalJobs: [142, 87, 12, 203, 0][i] ?? 0,
+        completedJobs: [138, 84, 11, 196, 0][i] ?? 0,
+        avgProcessingMs: [2100, 1840, 1920, 2340, 0][i] ?? 0,
+        user: u,
+      }))});
+    }
+    if (url.includes("monthly-summary")) {
+      return ok({ months: [
+        { month: "2026-01", totalJobs: 1203, completed: 1150, failed: 53, avgProcessingMs: 2100, uniqueUsers: 287 },
+        { month: "2026-02", totalJobs: 1847, completed: 1791, failed: 56, avgProcessingMs: 1980, uniqueUsers: 341 },
+        { month: "2026-03", totalJobs: 2634, completed: 2570, failed: 64, avgProcessingMs: 1870, uniqueUsers: 412 },
+        { month: "2026-04", totalJobs: 1482, completed: 1447, failed: 35, avgProcessingMs: 1820, uniqueUsers: 398 },
+      ]});
+    }
+    if (url.includes("key-usage")) {
+      return ok({ usage: [] });
+    }
+    return ok({ success: true, data: [] });
   }
 
   if (url.startsWith("/api/admin")) {
