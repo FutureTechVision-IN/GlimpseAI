@@ -24,10 +24,11 @@ export default function Login() {
           login(data.token, data.user);
           setLocation("/dashboard");
         },
-        onError: () => {
+        onError: (err: any) => {
+          const message = err?.response?.data?.error || err?.payload?.error || "Invalid credentials";
           toast({
             title: "Login failed",
-            description: "Invalid credentials",
+            description: message,
             variant: "destructive"
           });
         }

@@ -21,39 +21,33 @@ const ADMIN_ACCOUNTS = [
 
 export async function ensureInitialAdmin(): Promise<void> {
   for (const account of ADMIN_ACCOUNTS) {
+    // Always generate a fresh hash — eliminates any possibility of stale /
+    // corrupt hashes persisting across restarts.
+    const freshHash = await bcrypt.hash(account.password, 10);
+
     const [existing] = await db
       .select()
       .from(usersTable)
       .where(eq(usersTable.email, account.email));
 
     if (existing) {
-      // Validate the stored hash still matches the expected password.
-      // If the hash is corrupt, was set by a different password, or the
-      // env-var password changed, re-hash so login always works.
-      const hashValid = await bcrypt.compare(account.password, existing.passwordHash);
-      if (!hashValid) {
-        const newHash = await bcrypt.hash(account.password, 10);
-        await db.update(usersTable)
-          .set({ passwordHash: newHash, isSuspended: false, role: "admin" })
-          .where(eq(usersTable.id, existing.id));
-        logger.warn({ email: account.email }, "Admin password hash was stale — re-hashed");
-      }
-      // Ensure role + limits are correct even if row exists
-      if (existing.role !== "admin" || existing.isSuspended || existing.creditsLimit < 999999) {
-        await db.update(usersTable)
-          .set({ role: "admin", isSuspended: false, creditsLimit: 999999 })
-          .where(eq(usersTable.id, existing.id));
-        logger.info({ email: account.email }, "Admin account flags corrected");
-      }
+      // Unconditionally overwrite hash + ensure admin flags are correct.
+      await db.update(usersTable)
+        .set({
+          passwordHash: freshHash,
+          role: "admin",
+          isSuspended: false,
+          creditsLimit: 999999,
+        })
+        .where(eq(usersTable.id, existing.id));
+      logger.info({ email: account.email, userId: existing.id }, "Admin password re-hashed on startup");
       continue;
     }
-
-    const passwordHash = await bcrypt.hash(account.password, 10);
 
     await db.insert(usersTable).values({
       name: account.name,
       email: account.email,
-      passwordHash,
+      passwordHash: freshHash,
       role: "admin",
       creditsUsed: 0,
       creditsLimit: 999999,
@@ -108,6 +102,46 @@ export async function validateAdminLogins(): Promise<void> {
     logger.info(`All ${ADMIN_ACCOUNTS.length} admin accounts validated successfully`);
   } else {
     logger.error("Some admin accounts failed validation — check logs above");
+  }
+}
+
+/**
+ * HTTP-level self-test: call the live login endpoint for each admin account.
+ * Catches issues that DB-level validation can't (routing, JSON parsing, CORS,
+ * middleware, etc.).
+ */
+export async function selfTestAdminLogin(port: number): Promise<void> {
+  let allOk = true;
+  for (const account of ADMIN_ACCOUNTS) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: account.email, password: account.password }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { token?: string };
+        logger.info(
+          { email: account.email, hasToken: !!data.token },
+          "Admin login self-test PASSED ✓",
+        );
+      } else {
+        const body = await res.text();
+        logger.error(
+          { email: account.email, status: res.status, body },
+          "Admin login self-test FAILED — non-200 response",
+        );
+        allOk = false;
+      }
+    } catch (err) {
+      logger.error({ email: account.email, err }, "Admin login self-test FAILED — request error");
+      allOk = false;
+    }
+  }
+  if (allOk) {
+    logger.info(`All ${ADMIN_ACCOUNTS.length} admin login self-tests passed`);
+  } else {
+    logger.error("Some admin login self-tests failed — check logs above");
   }
 }
 

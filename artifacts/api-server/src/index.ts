@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { ensureInitialAdmin, ensureDefaultPlans, initProviderKeys, validateAdminLogins } from "./lib/bootstrap";
+import { ensureInitialAdmin, ensureDefaultPlans, initProviderKeys, validateAdminLogins, selfTestAdminLogin } from "./lib/bootstrap";
 
 const rawPort = process.env["PORT"];
 
@@ -25,13 +25,21 @@ async function start() {
     logger.warn({ err }, "Provider key init failed (non-fatal)")
   );
 
-  app.listen(port, (err) => {
+  app.listen(port, async (err) => {
     if (err) {
       logger.error({ err }, "Error listening on port");
       process.exit(1);
     }
 
     logger.info({ port }, "Server listening");
+
+    // HTTP-level self-test — verify admin login works end-to-end via the
+    // live server.  Non-fatal: logs a loud error but doesn't crash.
+    try {
+      await selfTestAdminLogin(port);
+    } catch (e) {
+      logger.error({ err: e }, "Admin login self-test failed (non-fatal)");
+    }
   });
 }
 

@@ -269,7 +269,7 @@ class AIProviderService {
   }
 
   /** Check if any keys are available for a given tier (used for error classification) */
-  hasAvailableKeys(userTier?: UserTier): { openrouter: boolean; gemini: boolean } {
+  hasAvailableKeys(userTier?: UserTier): { openrouter: boolean; gemini: boolean; nvidia: boolean } {
     const now = Date.now();
     const isAvailable = (k: ProviderKey) => {
       if (k.dailyLimitHit && now < k.cooldownUntil) return false;

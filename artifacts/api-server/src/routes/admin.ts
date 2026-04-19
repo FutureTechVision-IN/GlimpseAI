@@ -505,9 +505,9 @@ router.get("/admin/ai-recommendations", requireAuth, requireAdmin, async (_req, 
 
   // 1. Check API key health
   const poolStats = aiProvider.getPoolStats();
-  const totalKeys = poolStats.length;
-  const healthyKeys = poolStats.filter((k: any) => k.status === "healthy").length;
-  const exhaustedKeys = poolStats.filter((k: any) => k.status === "daily_limit" || k.status === "circuit_open").length;
+  const totalKeys = poolStats.keys.length;
+  const healthyKeys = poolStats.keys.filter((k: any) => k.status === "healthy").length;
+  const exhaustedKeys = poolStats.keys.filter((k: any) => k.status === "daily_limit" || k.status === "circuit_open").length;
 
   if (healthyKeys === 0 && totalKeys > 0) {
     recommendations.push({
