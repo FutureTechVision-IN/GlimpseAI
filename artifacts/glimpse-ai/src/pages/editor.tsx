@@ -992,10 +992,10 @@ export default function Editor() {
       <TooltipProvider delayDuration={200}>
         {showOnboarding && <OnboardingWalkthrough onComplete={completeOnboarding} />}
 
-        <div className="flex flex-col lg:flex-row h-full min-h-[calc(100vh-4rem)]">
+        <div className="flex flex-col lg:flex-row h-[calc(100vh-4rem)] overflow-hidden">
 
           {/* Sidebar */}
-          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-10 max-h-[50vh] lg:max-h-none overflow-hidden">
+          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-10 max-h-[50vh] lg:max-h-full lg:h-full overflow-hidden">
             <div className="p-3 border-b border-white/10">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="font-semibold text-base flex items-center gap-2">
@@ -1717,8 +1717,8 @@ export default function Editor() {
           </aside>
 
           {/* Main Preview */}
-          <main className="flex-1 bg-zinc-900 relative flex flex-col">
-            <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+          <main className="flex-1 bg-zinc-900 relative flex flex-col min-h-0 min-w-0">
+            <div className="flex-1 flex items-center justify-center p-4 overflow-hidden min-h-0">
               {!file ? (
                 <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full">
                   <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-all cursor-pointer relative overflow-hidden group">
@@ -1869,37 +1869,37 @@ export default function Editor() {
                     </AnimatePresence>
 
                     {splitCompare && isCompleted && currentJob?.processedUrl ? (
-                      <div className="grid grid-cols-2 gap-3 w-full">
-                        <div className="space-y-1">
-                          <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Original</span>
-                          <div className="rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center">
+                      <div className="grid grid-cols-2 gap-3 w-full h-full min-h-0">
+                        <div className="flex flex-col min-h-0 gap-1">
+                          <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider shrink-0">Original</span>
+                          <div className="rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center flex-1 min-h-0">
                             {mediaType === "video"
-                              ? <video src={previewUrl} controls className="max-w-full max-h-[40vh] object-contain" />
-                              : <img src={previewUrl} alt="Original" className="max-w-full max-h-[40vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
+                              ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
+                              : <img src={previewUrl} alt="Original" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
                           </div>
                         </div>
-                        <div className="space-y-1">
-                          <span className="text-[10px] font-medium text-teal-400 uppercase tracking-wider">Enhanced</span>
-                          <div className="rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center">
+                        <div className="flex flex-col min-h-0 gap-1">
+                          <span className="text-[10px] font-medium text-teal-400 uppercase tracking-wider shrink-0">Enhanced</span>
+                          <div className="rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center flex-1 min-h-0">
                             {mediaType === "video"
-                              ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[40vh] object-contain" />
-                              : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[40vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
+                              ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
+                              : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
                           </div>
                         </div>
                       </div>
                     ) : isCompleted && currentJob?.processedUrl && !showCompare ? (
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="overflow-auto max-h-[55vh] flex items-center justify-center">
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center justify-center max-h-full">
                         {mediaType === "video"
-                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-[55vh] object-contain" />
-                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-[55vh] object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />
+                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
+                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />
                         }
                       </motion.div>
                     ) : (
                       mediaType === "video"
-                        ? <video src={previewUrl} controls className="max-w-full max-h-[55vh] object-contain" />
-                        : <div className="overflow-auto max-h-[55vh] flex items-center justify-center">
+                        ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
+                        : <div className="flex items-center justify-center max-h-full">
                             <img src={previewUrl} alt="Original"
-                              className="max-w-full max-h-[55vh] object-contain transition-all duration-200"
+                              className="max-w-full max-h-full object-contain transition-all duration-200"
                               style={{ ...(isProcessing ? { opacity: 0.5 } : previewStyle), transform: `scale(${zoomLevel})`, transformOrigin: "center" }} />
                           </div>
                     )}
