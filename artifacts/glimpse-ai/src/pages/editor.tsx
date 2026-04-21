@@ -961,7 +961,7 @@ export default function Editor() {
   const previewStyle = buildPreviewStyle(transform, filters, cropEnabled ? cropBox : DEFAULT_CROP, activePresetCssExtra);
   const stageInfo = STAGE_INFO[processStage];
 
-  const visibleFilters = showAllFilters ? FILTER_PRESETS : FILTER_PRESETS.slice(0, 12);
+  const visibleFilters = showAllFilters ? FILTER_PRESETS : FILTER_PRESETS.slice(0, 18);
 
   const ENHANCEMENT_TYPES: { type: EnhanceMediaBodyEnhancementType; label: string; icon: React.ReactNode }[] = [
     { type: "auto",                   label: "Auto",        icon: <Wand2       className="w-3 h-3" /> },
@@ -1763,24 +1763,34 @@ export default function Editor() {
                       </Tooltip>
                       {/* AI chat toggle moved to floating button */}
                       {isCompleted && (
-                        <Button variant="outline" size="sm"
-                          className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", showCompare && "border-teal-500 text-teal-300")}
-                          onMouseDown={() => setShowCompare(true)}
-                          onMouseUp={() => setShowCompare(false)}
-                          onMouseLeave={() => setShowCompare(false)}
-                          onTouchStart={() => setShowCompare(true)}
-                          onTouchEnd={() => setShowCompare(false)}
-                        >
-                          <Eye className="w-3.5 h-3.5 mr-1.5" />Hold to compare
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="outline" size="sm"
+                              className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", showCompare && "border-teal-500 text-teal-300")}
+                              onMouseDown={() => setShowCompare(true)}
+                              onMouseUp={() => setShowCompare(false)}
+                              onMouseLeave={() => setShowCompare(false)}
+                              onTouchStart={() => setShowCompare(true)}
+                              onTouchEnd={() => setShowCompare(false)}
+                            >
+                              <Eye className="w-3.5 h-3.5 mr-1.5" />Hold to compare
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom"><span className="text-xs">Hold to briefly show original image</span></TooltipContent>
+                        </Tooltip>
                       )}
                       {isCompleted && currentJob?.processedUrl && (
-                        <Button variant="outline" size="sm"
-                          className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", splitCompare && "border-teal-500 text-teal-300")}
-                          onClick={() => setSplitCompare(!splitCompare)}
-                        >
-                          <ArrowLeftRight className="w-3.5 h-3.5 mr-1.5" />Side-by-Side
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="outline" size="sm"
+                              className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", splitCompare && "border-teal-500 text-teal-300")}
+                              onClick={() => setSplitCompare(!splitCompare)}
+                            >
+                              <ArrowLeftRight className="w-3.5 h-3.5 mr-1.5" />Side-by-Side
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom"><span className="text-xs">Toggle side-by-side original vs enhanced view</span></TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                     {isCompleted && currentJob?.processedUrl ? (
@@ -1816,7 +1826,7 @@ export default function Editor() {
                   </div>
 
                   {/* Image preview */}
-                  <div className="relative max-w-[calc(100%-2rem)] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
+                  <div className="relative max-w-[calc(100%-2rem)] max-h-[calc(100vh-14rem)] lg:max-h-[calc(100vh-10rem)] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
                     <AnimatePresence>
                       {isProcessing && (
                         <motion.div
