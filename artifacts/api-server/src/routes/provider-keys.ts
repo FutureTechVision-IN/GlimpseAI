@@ -1,6 +1,7 @@
 import { Router, IRouter } from "express";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { providerKeyManager } from "../lib/provider-key-manager";
+import { aiProvider, feedbackAccumulator } from "../lib/ai-provider";
 import { db, apiKeysTable, apiKeyDailyUsageTable, enhancementLogsTable, mediaJobsTable, usersTable } from "@workspace/db";
 import { eq, desc, sql, count, sum, and } from "drizzle-orm";
 
@@ -245,6 +246,61 @@ router.get("/admin/analytics/monthly-summary", requireAuth, requireAdmin, async 
 // Detailed report: which keys are used, which aren't, priority cascade status
 router.get("/admin/provider-keys/usage-report", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
   res.json(providerKeyManager.getUsageReport());
+});
+
+// ─── Centralized AI Insights ────────────────────────────────────────────────
+// Aggregated view: provider health, feedback stats, enhancement performance, system status
+router.get("/admin/ai-insights", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  const providerPool = aiProvider.getPoolStats();
+  const feedbackStats = feedbackAccumulator.getStats();
+  const keyUsage = providerKeyManager.getUsageReport();
+
+  // Enhancement performance from recent jobs
+  const recentJobs = await db.select({
+    enhancementType: mediaJobsTable.enhancementType,
+    status: mediaJobsTable.status,
+    processingTimeMs: mediaJobsTable.processingTimeMs,
+  }).from(mediaJobsTable)
+    .orderBy(desc(mediaJobsTable.createdAt))
+    .limit(200);
+
+  const enhancementPerf: Record<string, { total: number; completed: number; failed: number; avgMs: number }> = {};
+  for (const j of recentJobs) {
+    const t = j.enhancementType ?? "unknown";
+    if (!enhancementPerf[t]) enhancementPerf[t] = { total: 0, completed: 0, failed: 0, avgMs: 0 };
+    enhancementPerf[t].total++;
+    if (j.status === "completed") {
+      enhancementPerf[t].completed++;
+      enhancementPerf[t].avgMs += (j.processingTimeMs ?? 0);
+    } else if (j.status === "failed") {
+      enhancementPerf[t].failed++;
+    }
+  }
+  // Calculate averages
+  for (const p of Object.values(enhancementPerf)) {
+    if (p.completed > 0) p.avgMs = Math.round(p.avgMs / p.completed);
+  }
+
+  // System health summary
+  const healthyKeys = providerPool.healthy;
+  const totalKeys = providerPool.total;
+  const systemHealth = totalKeys === 0 ? "no_keys" :
+    healthyKeys === totalKeys ? "healthy" :
+    healthyKeys > 0 ? "degraded" : "critical";
+
+  res.json({
+    systemHealth,
+    providerPool,
+    feedbackStats,
+    enhancementPerformance: enhancementPerf,
+    keyUsageSummary: {
+      totalKeys: keyUsage.total ?? totalKeys,
+      activeProviders: Object.entries(providerPool.byProvider)
+        .filter(([_, count]) => count > 0)
+        .map(([provider]) => provider),
+    },
+    generatedAt: new Date().toISOString(),
+  });
 });
 
 export default router;

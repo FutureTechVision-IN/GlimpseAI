@@ -372,7 +372,40 @@ class AIProviderService {
       let confidence = 0.78;
       let description = "";
 
-      if (brightness < 75) {
+      // Detect old/damaged photo characteristics:
+      // - Very low sharpness + low contrast = likely degraded scan
+      // - Near-grayscale/sepia with portrait aspect = likely old portrait photo
+      // - Low sharpness + portrait = blurry face likely needs AI restoration
+      const isLikelyOldPhoto = (sharpnessScore < 30 && contrast < 40 && chroma < 35) ||
+                                (sharpnessScore < 25 && brightness < 140);
+      const isDamagedFace = isPortrait && sharpnessScore < 35;
+      const isVeryBlurryFace = isPortrait && sharpnessScore < 20;
+
+      if (isLikelyOldPhoto && isPortrait) {
+        // Old photo with face — strongest signal for old_photo_restore
+        enhancement = "old_photo_restore";
+        confidence = 0.92;
+        description = `Old/damaged photo detected (sharpness ${Math.round(sharpnessScore)}, chroma ${Math.round(chroma)}). Old Photo Restore will repair scratches, fix fading, and restore faces with AI.`;
+        subjects.push("old_photo", "damaged");
+      } else if (isVeryBlurryFace) {
+        // Very blurry face — auto_face will pick CodeFormer for severe degradation
+        enhancement = "auto_face";
+        confidence = 0.90;
+        description = `Severely blurry face detected (sharpness ${Math.round(sharpnessScore)}). Auto Face AI will select the best restoration model (CodeFormer for heavy degradation).`;
+        subjects.push("blurry_face");
+      } else if (isDamagedFace) {
+        // Moderately damaged face — face_restore with GFPGAN
+        enhancement = "face_restore";
+        confidence = 0.87;
+        description = `Portrait with degraded facial detail (sharpness ${Math.round(sharpnessScore)}). Face AI will restore clarity, skin texture, and facial features.`;
+        subjects.push("degraded_face");
+      } else if (isLikelyOldPhoto) {
+        // Old photo without clear face — still benefit from old_photo_restore pipeline
+        enhancement = "old_photo_restore";
+        confidence = 0.85;
+        description = `Old/damaged photo detected (low sharpness ${Math.round(sharpnessScore)}, faded colors). Old Photo Restore will repair scratches and recover lost detail.`;
+        subjects.push("old_photo");
+      } else if (brightness < 75) {
         // Dark image — lighting fix is the clear winner
         enhancement = "lighting_enhance";
         confidence = 0.88;
@@ -471,37 +504,50 @@ class AIProviderService {
   // ---------------------------------------------------------------------------
   // Main entry — local analysis first (high confidence), then AI enrichment
   // userTier controls which provider pools are available.
+  // Cascading fallback: OpenRouter → NVIDIA → Gemini (premium) → local
   // ---------------------------------------------------------------------------
   async analyzeImage(base64Data: string, mimeType: string, userTier?: UserTier): Promise<AnalysisResult | null> {
     // 1. Always run local analysis first — produces 0.75–0.92 confidence regardless of API status
     const localResult = await this.localAnalyzeImage(base64Data, mimeType);
 
-    // 2. Try to enrich with AI vision (better description, detects unseen context)
+    // 2. Try all AI providers in cascade: OpenRouter → NVIDIA → Gemini (premium only)
     const thumb = await this.createAnalysisThumbnail(base64Data, mimeType);
     const aiResult = await this.tryOpenRouterAnalysis(thumb.data, thumb.mime, userTier)
-      ?? await this.tryNvidiaAnalysis(thumb.data, thumb.mime);
+      ?? await this.tryNvidiaAnalysis(thumb.data, thumb.mime)
+      ?? (userTier !== "free" ? await this.tryGeminiAnalysis(thumb.data, thumb.mime) : null);
 
-    // 3. Gemini fallback — only for premium users
-    const geminiResult = !aiResult && userTier !== "free"
-      ? await this.tryGeminiAnalysis(thumb.data, thumb.mime)
-      : null;
+    if (aiResult) {
+      // Merge: combine AI vision with local statistical analysis
+      // Prefer restoration-related suggestions from either source (higher priority)
+      const RESTORATION_TYPES = new Set(["face_restore", "auto_face", "old_photo_restore", "codeformer"]);
+      const localSuggestsRestoration = RESTORATION_TYPES.has(localResult.suggestedEnhancement);
+      const aiSuggestsRestoration = RESTORATION_TYPES.has(aiResult.suggestedEnhancement);
 
-    const bestAi = aiResult ?? geminiResult;
+      // If local detected old/damaged photo but AI didn't, prefer local's restoration suggestion
+      const finalEnhancement = localSuggestsRestoration && !aiSuggestsRestoration
+        ? localResult.suggestedEnhancement
+        : aiResult.suggestedEnhancement;
 
-    if (bestAi) {
-      // Merge: use AI description but keep local confidence if it's higher
+      // Merge detected subjects from both sources (deduplicated)
+      const mergedSubjects = [...new Set([
+        ...aiResult.detectedSubjects,
+        ...localResult.detectedSubjects,
+      ])];
+
       return {
-        ...bestAi,
-        confidence: Math.max(bestAi.confidence, localResult.confidence - 0.05),
-        analysisSource: bestAi.analysisSource,
-        // If AI doesn't detect subjects, use local
-        detectedSubjects: bestAi.detectedSubjects.length > 0 ? bestAi.detectedSubjects : localResult.detectedSubjects,
+        description: aiResult.description,
+        suggestedEnhancement: finalEnhancement,
+        suggestedFilter: aiResult.suggestedFilter ?? localResult.suggestedFilter,
+        detectedSubjects: mergedSubjects,
+        confidence: Math.max(aiResult.confidence, localResult.confidence - 0.05),
+        analysisSource: aiResult.analysisSource,
       };
     }
 
-    // 4. Return local analysis — confident result even without API
+    // 3. Return local analysis — confident result even without API
     // Attach failure cause if all API keys are exhausted
-    if (!this.hasAvailableKeys(userTier).openrouter) {
+    const availability = this.hasAvailableKeys(userTier);
+    if (!availability.openrouter && !availability.nvidia) {
       localResult.failureCause = userTier === "free" ? "TIER_RESTRICTED" : "ALL_KEYS_EXHAUSTED";
     }
     return localResult;
@@ -537,7 +583,7 @@ class AIProviderService {
               role: "user",
               content: [
                 { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Data}` } },
-                { type: "text", text: 'Analyze this image. Return JSON only — no markdown, no explanation:\n{"description":"one sentence about the photo","suggestedEnhancement":"auto|portrait|color|lighting|upscale|beauty|skin|color_grade_cinematic|color_grade_warm|color_grade_cool|blur_background|skin_retouch|lighting_enhance","suggestedFilter":"cinematic|vivid|film|vintage|moody|goldenhour|dramatic|airy|null","detectedSubjects":["face","landscape",...],"confidence":0.0-1.0}' },
+                { type: "text", text: 'Analyze this image. Return JSON only — no markdown, no explanation:\n{"description":"one sentence about the photo","suggestedEnhancement":"auto|portrait|color|lighting|upscale|beauty|skin|color_grade_cinematic|color_grade_warm|color_grade_cool|blur_background|skin_retouch|lighting_enhance|face_restore|auto_face|old_photo_restore|codeformer","suggestedFilter":"cinematic|vivid|film|vintage|moody|goldenhour|dramatic|airy|null","detectedSubjects":["face","landscape","old_photo","damaged","blurry_face",...],"confidence":0.0-1.0}\nIMPORTANT: If the image looks old, damaged, scratched, faded, or has degraded faces, suggest face_restore, auto_face, or old_photo_restore.' },
               ],
             }],
             max_tokens: 250,
@@ -597,7 +643,7 @@ class AIProviderService {
           body: JSON.stringify({
             contents: [{ parts: [
               { inlineData: { mimeType, data: base64Data } },
-              { text: 'Analyze this image. Return JSON only:\n{"description":"one sentence","suggestedEnhancement":"auto|portrait|color|lighting|upscale|beauty|skin|color_grade_cinematic|color_grade_warm|color_grade_cool|blur_background|skin_retouch|lighting_enhance","suggestedFilter":"cinematic|vivid|film|vintage|moody|goldenhour|dramatic|airy|null","detectedSubjects":[],"confidence":0.0-1.0}' },
+              { text: 'Analyze this image. Return JSON only:\n{"description":"one sentence","suggestedEnhancement":"auto|portrait|color|lighting|upscale|beauty|skin|color_grade_cinematic|color_grade_warm|color_grade_cool|blur_background|skin_retouch|lighting_enhance|face_restore|auto_face|old_photo_restore|codeformer","suggestedFilter":"cinematic|vivid|film|vintage|moody|goldenhour|dramatic|airy|null","detectedSubjects":[],"confidence":0.0-1.0}\nIMPORTANT: If the image looks old, damaged, scratched, faded, or has degraded faces, suggest face_restore, auto_face, or old_photo_restore.' },
             ]}],
             generationConfig: { maxOutputTokens: 250, temperature: 0.1 },
           }),
@@ -660,7 +706,7 @@ class AIProviderService {
               role: "user",
               content: [
                 { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Data}` } },
-                { type: "text", text: 'Analyze this image. Return JSON only — no markdown, no explanation:\n{"description":"one sentence about the photo","suggestedEnhancement":"auto|portrait|color|lighting|upscale|beauty|skin|color_grade_cinematic|color_grade_warm|color_grade_cool|blur_background|skin_retouch|lighting_enhance","suggestedFilter":"cinematic|vivid|film|vintage|moody|goldenhour|dramatic|airy|null","detectedSubjects":["face","landscape",...],"confidence":0.0-1.0}' },
+                { type: "text", text: 'Analyze this image. Return JSON only — no markdown, no explanation:\n{"description":"one sentence about the photo","suggestedEnhancement":"auto|portrait|color|lighting|upscale|beauty|skin|color_grade_cinematic|color_grade_warm|color_grade_cool|blur_background|skin_retouch|lighting_enhance|face_restore|auto_face|old_photo_restore|codeformer","suggestedFilter":"cinematic|vivid|film|vintage|moody|goldenhour|dramatic|airy|null","detectedSubjects":["face","landscape","old_photo","damaged","blurry_face",...],"confidence":0.0-1.0}\nIMPORTANT: If the image looks old, damaged, scratched, faded, or has degraded faces, suggest face_restore, auto_face, or old_photo_restore.' },
               ],
             }],
             max_tokens: 250,

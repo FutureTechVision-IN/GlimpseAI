@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import { createHash } from "crypto";
 import { logger } from "./logger";
 import type { AIEnhancementGuidance } from "./ai-provider";
 
@@ -6,6 +7,50 @@ export interface EnhanceOptions {
   enhancementType: string;
   settings?: Record<string, unknown>;
   aiGuidance?: AIEnhancementGuidance | null;
+}
+
+// ---------------------------------------------------------------------------
+// Enhancement result cache — avoids redundant processing for repeated requests
+// LRU eviction: max 50 entries, max 15 min TTL per entry.
+// Cache key = hash(image_data_prefix + enhancementType + settings)
+// Only caches Sharp (local) results, not restoration sidecar results (those
+// are too large and variable due to ML inference).
+// ---------------------------------------------------------------------------
+interface CacheEntry {
+  base64: string;
+  mimeType: string;
+  timestamp: number;
+}
+
+const CACHE_MAX_ENTRIES = 50;
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const enhancementCache = new Map<string, CacheEntry>();
+
+function getCacheKey(base64Data: string, options: EnhanceOptions): string {
+  // Use first 2048 chars of base64 as image fingerprint (avoids hashing multi-MB data)
+  const imageFingerprint = base64Data.substring(0, 2048);
+  const settingsStr = JSON.stringify(options.settings ?? {});
+  const raw = `${imageFingerprint}|${options.enhancementType}|${settingsStr}`;
+  return createHash("sha256").update(raw).digest("hex").substring(0, 32);
+}
+
+function getCachedResult(key: string): CacheEntry | null {
+  const entry = enhancementCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    enhancementCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function setCachedResult(key: string, result: { base64: string; mimeType: string }): void {
+  // Evict oldest entries if at capacity
+  if (enhancementCache.size >= CACHE_MAX_ENTRIES) {
+    const oldestKey = enhancementCache.keys().next().value;
+    if (oldestKey) enhancementCache.delete(oldestKey);
+  }
+  enhancementCache.set(key, { ...result, timestamp: Date.now() });
 }
 
 // ---------------------------------------------------------------------------
@@ -398,13 +443,23 @@ export async function enhanceImage(
 ): Promise<{ base64: string; mimeType: string }> {
   const type = options.enhancementType;
 
-  // Route restoration types to the Python sidecar
+  // Route restoration types to the Python sidecar (not cached — ML inference varies)
   if (RESTORATION_TYPES.has(type)) {
     const available = await isRestorationServiceAvailable();
     if (!available) {
       logger.warn({ type }, "Restoration service unreachable — falling back to local sharp processing");
     } else {
       return callRestorationService(base64Data, type, options.settings as Record<string, unknown>);
+    }
+  }
+
+  // Check cache for Sharp-processed results (skip if AI guidance provided — guidance varies per request)
+  const cacheKey = !options.aiGuidance ? getCacheKey(base64Data, options) : null;
+  if (cacheKey) {
+    const cached = getCachedResult(cacheKey);
+    if (cached) {
+      logger.info({ type, cacheKey: cacheKey.substring(0, 8) }, "Enhancement cache hit — returning cached result");
+      return { base64: cached.base64, mimeType: cached.mimeType };
     }
   }
 
@@ -1009,7 +1064,15 @@ export async function enhanceImage(
     ratio: (outputBuffer.length / inputBuffer.length).toFixed(2),
   }, "Image enhancement complete");
 
-  return { base64: outBase64, mimeType: outputMime };
+  const result = { base64: outBase64, mimeType: outputMime };
+
+  // Cache the result for future identical requests (skip AI-guided results — they vary)
+  if (cacheKey) {
+    setCachedResult(cacheKey, result);
+    logger.debug({ cacheKey: cacheKey.substring(0, 8), cacheSize: enhancementCache.size }, "Enhancement result cached");
+  }
+
+  return result;
 }
 
 /**
