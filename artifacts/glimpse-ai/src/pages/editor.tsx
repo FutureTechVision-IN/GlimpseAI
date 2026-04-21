@@ -542,6 +542,9 @@ export default function Editor() {
   // Filter gallery scroll
   const [showAllFilters, setShowAllFilters] = useState(false);
 
+  // Complementary filter suggestions shown after enhancement completes
+  const [suggestedFilters, setSuggestedFilters] = useState<string[]>([]);
+
   // AI Power-Up panel (below image)
   const [showPowerUp, setShowPowerUp] = useState(false);
 
@@ -654,6 +657,23 @@ export default function Editor() {
       setProcessStage("completed");
       upscaleChainRef.current = false;
       toast({ title: "Enhancement complete!", description: upscaleAfter ? "Enhancement + upscale applied!" : "Your media has been successfully enhanced." });
+
+      // Suggest complementary filters based on the enhancement type applied
+      const filterMap: Record<string, string[]> = {
+        portrait: ["portrait", "airy", "warm_tone"],
+        beauty: ["portrait", "fresh", "pastel"],
+        skin_retouch: ["portrait", "matte", "airy"],
+        face_restore: ["vivid", "warm_tone", "fresh"],
+        auto_face: ["vivid", "warm_tone", "portrait"],
+        old_photo_restore: ["vintage", "film", "warm_tone"],
+        codeformer: ["vivid", "fresh", "warm_tone"],
+        color_grade_cinematic: ["cinematic", "moody", "dramatic"],
+        color_grade_warm: ["goldenhour", "sunset", "ember"],
+        color_grade_cool: ["arctic", "cool_tone", "matte"],
+        lighting_enhance: ["hdr", "vivid", "dramatic"],
+        auto: ["vivid", "cinematic", "fresh"],
+      };
+      setSuggestedFilters(filterMap[enhancementType] ?? []);
 
       // Save to local history (photos only, max 5)
       if (studioMode === "photo" && currentJob.processedUrl) {
@@ -948,6 +968,7 @@ export default function Editor() {
     setSkinSmoothing(50); uploadedJobIdRef.current = null;
     setUndoStack([]); setChatMessages([]); setShowAiChat(false);
     setUpscaleAfter(null); upscaleChainRef.current = false;
+    setSuggestedFilters([]);
   };
 
   const isProcessing = processStage === "uploading" || processStage === "processing";
@@ -1247,6 +1268,22 @@ export default function Editor() {
                           {showAllFilters ? "Less" : `All ${FILTER_PRESETS.length}`}
                         </button>
                       </div>
+                      {suggestedFilters.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                          <span className="text-[10px] text-teal-400/70">Suggested:</span>
+                          {suggestedFilters.map((key) => {
+                            const p = FILTER_PRESETS.find((f) => f.key === key);
+                            if (!p) return null;
+                            return (
+                              <button key={key}
+                                className={cn("text-[10px] px-2 py-0.5 rounded-full border transition-colors",
+                                  selectedFilter === key ? "border-teal-500 bg-teal-500/20 text-teal-300" : "border-zinc-700 text-zinc-400 hover:border-teal-500/50 hover:text-teal-300")}
+                                onClick={() => { pushUndo(); setSelectedFilter(key); setFilters(p.f); if (p.serverFilter) setEnhancementType("filter"); }}
+                              >{p.name}</button>
+                            );
+                          })}
+                        </div>
+                      )}
                       <div className="grid grid-cols-6 gap-1">
                         {visibleFilters.map((p) => {
                           const filterLocked = isFeatureLocked("filter", p.key);

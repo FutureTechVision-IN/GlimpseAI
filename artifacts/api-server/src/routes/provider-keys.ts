@@ -299,6 +299,18 @@ router.get("/admin/ai-insights", requireAuth, requireAdmin, async (_req, res): P
         .filter(([_, count]) => count > 0)
         .map(([provider]) => provider),
     },
+    // Task 12: Expanded metadata
+    topEnhancements: Object.entries(enhancementPerf)
+      .sort(([, a], [, b]) => b.total - a.total)
+      .slice(0, 5)
+      .map(([type, stats]) => ({ type, ...stats })),
+    successRate: (() => {
+      const totals = Object.values(enhancementPerf).reduce((acc, p) => ({ c: acc.c + p.completed, t: acc.t + p.total }), { c: 0, t: 0 });
+      return totals.t > 0 ? Math.round((totals.c / totals.t) * 100) : 0;
+    })(),
+    cacheStats: {
+      note: "Enhancement cache is in-memory, stats available via /health endpoint",
+    },
     generatedAt: new Date().toISOString(),
   });
 });
