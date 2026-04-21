@@ -294,7 +294,7 @@ router.get("/admin/ai-insights", requireAuth, requireAdmin, async (_req, res): P
     feedbackStats,
     enhancementPerformance: enhancementPerf,
     keyUsageSummary: {
-      totalKeys: keyUsage.total ?? totalKeys,
+      totalKeys: keyUsage.summary.totalKeys ?? totalKeys,
       activeProviders: Object.entries(providerPool.byProvider)
         .filter(([_, count]) => count > 0)
         .map(([provider]) => provider),
