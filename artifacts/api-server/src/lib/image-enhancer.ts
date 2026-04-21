@@ -317,8 +317,9 @@ async function callRestorationService(
   let dispatcher: unknown | undefined;
   try {
     // undici is bundled with Node.js 18+; dynamic import avoids compile-time dependency.
+    // @ts-expect-error — undici types not installed; available at runtime in Node 18+
     const undici = await import("undici");
-    dispatcher = new undici.Agent({
+    dispatcher = new (undici as any).Agent({
       headersTimeout: TIMEOUT_MS,
       bodyTimeout: TIMEOUT_MS,
       connectTimeout: 10_000, // 10 s connect timeout
