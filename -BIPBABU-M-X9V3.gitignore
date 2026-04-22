@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.enc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+*.log
+
+# Misc
+*.local
+
+# Key validation logs (may contain secrets)
+.key-validation-logs/
+backup.sql
+
+# Runtime state
+.glimpse/
+
+# Python / ML
+services/restoration/.venv/
+services/restoration/models/*.pth
+services/restoration/gfpgan/
+__pycache__/
+*.pyc

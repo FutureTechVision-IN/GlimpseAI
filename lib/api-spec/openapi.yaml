@@ -1,0 +1,1497 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: GlimpseAI API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication
+  - name: users
+    description: User management
+  - name: media
+    description: Media (photo/video) operations
+  - name: plans
+    description: Subscription plans
+  - name: payments
+    description: Payment operations
+  - name: admin
+    description: Admin operations
+  - name: providers
+    description: AI provider management
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  # Auth
+  /auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Register new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterBody"
+      responses:
+        "201":
+          description: User registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/forgot-password:
+    post:
+      operationId: forgotPassword
+      tags: [auth]
+      summary: Request password reset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgotPasswordBody"
+      responses:
+        "200":
+          description: Reset email sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /auth/reset-password:
+    post:
+      operationId: resetPassword
+      tags: [auth]
+      summary: Reset password with token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordBody"
+      responses:
+        "200":
+          description: Password reset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # Users
+  /users/profile:
+    patch:
+      operationId: updateProfile
+      tags: [users]
+      summary: Update user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileBody"
+      responses:
+        "200":
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /users/usage:
+    get:
+      operationId: getUserUsage
+      tags: [users]
+      summary: Get user usage and credits
+      responses:
+        "200":
+          description: User usage stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserUsage"
+
+  /users/history:
+    get:
+      operationId: getUserHistory
+      tags: [users]
+      summary: Get user media history
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [photo, video, all]
+      responses:
+        "200":
+          description: User history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaHistoryResponse"
+
+  /users/delete-account:
+    delete:
+      operationId: deleteAccount
+      tags: [users]
+      summary: Delete user account
+      responses:
+        "200":
+          description: Account deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # Media
+  /media/upload:
+    post:
+      operationId: uploadMedia
+      tags: [media]
+      summary: Upload photo or video for processing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadMediaBody"
+      responses:
+        "201":
+          description: Media uploaded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaJob"
+        "400":
+          description: Invalid file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Quota exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /media/enhance:
+    post:
+      operationId: enhanceMedia
+      tags: [media]
+      summary: Enhance/process a media file with AI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnhanceMediaBody"
+      responses:
+        "200":
+          description: Enhancement job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaJob"
+
+  /media/analyze:
+    post:
+      operationId: analyzeMedia
+      tags: [media]
+      summary: AI analysis of uploaded image — suggests enhancement, filter, and detected subjects
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jobId:
+                  type: integer
+              required:
+                - jobId
+      responses:
+        "200":
+          description: Analysis result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResult"
+
+  /media/jobs:
+    get:
+      operationId: listMediaJobs
+      tags: [media]
+      summary: List user's media jobs
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed, all]
+      responses:
+        "200":
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MediaJob"
+
+  /media/jobs/{id}:
+    get:
+      operationId: getMediaJob
+      tags: [media]
+      summary: Get status of a media job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaJob"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /media/presets:
+    get:
+      operationId: listPresets
+      tags: [media]
+      summary: List available enhancement presets
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [photo, video, all]
+      responses:
+        "200":
+          description: List of presets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Preset"
+
+  /media/stats:
+    get:
+      operationId: getMediaStats
+      tags: [media]
+      summary: Get media processing statistics (wow endpoint)
+      responses:
+        "200":
+          description: Media stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaStats"
+
+  /media/enhance-batch:
+    post:
+      operationId: enhanceMediaBatch
+      tags: [media]
+      summary: Batch-enhance multiple images in one call (premium only, max 10)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jobIds:
+                  type: array
+                  items:
+                    type: integer
+                  maxItems: 10
+                enhancementType:
+                  type: string
+                settings:
+                  type: object
+              required:
+                - jobIds
+                - enhancementType
+      responses:
+        "200":
+          description: Batch processing started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  jobIds:
+                    type: array
+                    items:
+                      type: integer
+                  count:
+                    type: integer
+
+  # Plans
+  /plans:
+    get:
+      operationId: listPlans
+      tags: [plans]
+      summary: List available subscription plans
+      responses:
+        "200":
+          description: List of plans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Plan"
+
+  # Payments
+  /payments/create-order:
+    post:
+      operationId: createPaymentOrder
+      tags: [payments]
+      summary: Create a Razorpay payment order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderBody"
+      responses:
+        "200":
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentOrder"
+
+  /payments/verify:
+    post:
+      operationId: verifyPayment
+      tags: [payments]
+      summary: Verify payment and activate subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyPaymentBody"
+      responses:
+        "200":
+          description: Payment verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /payments/history:
+    get:
+      operationId: getPaymentHistory
+      tags: [payments]
+      summary: Get payment history
+      responses:
+        "200":
+          description: Payment history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Payment"
+
+  /payments/webhook:
+    post:
+      operationId: paymentWebhook
+      tags: [payments]
+      summary: Razorpay webhook endpoint
+      responses:
+        "200":
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # Admin
+  /admin/stats:
+    get:
+      operationId: getAdminStats
+      tags: [admin]
+      summary: Get admin dashboard stats
+      responses:
+        "200":
+          description: Admin stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminStats"
+
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      tags: [admin]
+      summary: List all users (admin)
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: plan
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsersResponse"
+
+  /admin/users/{id}/suspend:
+    patch:
+      operationId: suspendUser
+      tags: [admin]
+      summary: Suspend or unsuspend user
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuspendUserBody"
+      responses:
+        "200":
+          description: User suspended/unsuspended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /admin/users/{id}/credits:
+    patch:
+      operationId: adjustUserCredits
+      tags: [admin]
+      summary: Adjust user credits
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdjustCreditsBody"
+      responses:
+        "200":
+          description: Credits adjusted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /admin/jobs:
+    get:
+      operationId: listAdminJobs
+      tags: [admin]
+      summary: List all media jobs (admin)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+      responses:
+        "200":
+          description: All jobs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminJobsResponse"
+
+  /admin/payments:
+    get:
+      operationId: listAdminPayments
+      tags: [admin]
+      summary: List all payments (admin)
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: All payments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPaymentsResponse"
+
+  /admin/plans:
+    get:
+      operationId: listAdminPlans
+      tags: [admin]
+      summary: List all plans (admin)
+      responses:
+        "200":
+          description: Plans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Plan"
+
+    post:
+      operationId: createPlan
+      tags: [admin]
+      summary: Create a new plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlanBody"
+      responses:
+        "201":
+          description: Plan created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+
+  /admin/plans/{id}:
+    patch:
+      operationId: updatePlan
+      tags: [admin]
+      summary: Update a plan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePlanBody"
+      responses:
+        "200":
+          description: Plan updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+
+  # AI Providers
+  /admin/providers:
+    get:
+      operationId: listProviders
+      tags: [providers]
+      summary: List AI providers
+      responses:
+        "200":
+          description: Providers list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Provider"
+
+    post:
+      operationId: createProvider
+      tags: [providers]
+      summary: Add an AI provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProviderBody"
+      responses:
+        "201":
+          description: Provider added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Provider"
+
+  /admin/providers/{id}:
+    patch:
+      operationId: updateProvider
+      tags: [providers]
+      summary: Update provider (enable/disable, rotate key)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProviderBody"
+      responses:
+        "200":
+          description: Provider updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Provider"
+
+    delete:
+      operationId: deleteProvider
+      tags: [providers]
+      summary: Delete provider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Provider deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+
+    RegisterBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - name
+        - email
+        - password
+
+    LoginBody:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    ForgotPasswordBody:
+      type: object
+      properties:
+        email:
+          type: string
+      required:
+        - email
+
+    ResetPasswordBody:
+      type: object
+      properties:
+        token:
+          type: string
+        password:
+          type: string
+      required:
+        - token
+        - password
+
+    AuthResponse:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        token:
+          type: string
+      required:
+        - user
+        - token
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        planId:
+          type: ["integer", "null"]
+        creditsUsed:
+          type: integer
+        creditsLimit:
+          type: integer
+        isSuspended:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - email
+        - role
+        - creditsUsed
+        - creditsLimit
+        - isSuspended
+        - createdAt
+
+    UpdateProfileBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+
+    UserUsage:
+      type: object
+      properties:
+        creditsUsed:
+          type: integer
+        creditsLimit:
+          type: integer
+        creditsRemaining:
+          type: integer
+        dailyCreditsUsed:
+          type: integer
+        dailyLimit:
+          type: integer
+        dailyRemaining:
+          type: integer
+        planName:
+          type: ["string", "null"]
+        planExpiry:
+          type: ["string", "null"]
+          format: date-time
+        photoCount:
+          type: integer
+        videoCount:
+          type: integer
+        totalJobs:
+          type: integer
+      required:
+        - creditsUsed
+        - creditsLimit
+        - creditsRemaining
+        - dailyCreditsUsed
+        - dailyLimit
+        - dailyRemaining
+        - photoCount
+        - videoCount
+        - totalJobs
+
+    MediaHistoryResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaJob"
+        total:
+          type: integer
+        page:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - totalPages
+
+    UploadMediaBody:
+      type: object
+      properties:
+        filename:
+          type: string
+        mimeType:
+          type: string
+        size:
+          type: integer
+        mediaType:
+          type: string
+          enum: [photo, video]
+        base64Data:
+          type: string
+      required:
+        - filename
+        - mimeType
+        - size
+        - mediaType
+        - base64Data
+
+    EnhanceMediaBody:
+      type: object
+      properties:
+        jobId:
+          type: integer
+        presetId:
+          type: ["integer", "null"]
+        enhancementType:
+          type: string
+          enum: [auto, portrait, skin, lighting, lighting_enhance, color, background, beauty, upscale, upscale_4x, blur_background, posture, filter, trim, stabilize, custom, color_grade_cinematic, color_grade_warm, color_grade_cool, skin_retouch, face_restore, face_restore_hd, codeformer, hybrid, auto_face, esrgan_upscale_2x, esrgan_upscale_4x, old_photo_restore, video_restore]
+        settings:
+          type: object
+          additionalProperties: true
+      required:
+        - jobId
+        - enhancementType
+
+    MediaJob:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        mediaType:
+          type: string
+          enum: [photo, video]
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        filename:
+          type: string
+        originalUrl:
+          type: ["string", "null"]
+        processedUrl:
+          type: ["string", "null"]
+        thumbnailUrl:
+          type: ["string", "null"]
+        enhancementType:
+          type: ["string", "null"]
+        presetId:
+          type: ["integer", "null"]
+        errorMessage:
+          type: ["string", "null"]
+        processingTimeMs:
+          type: ["integer", "null"]
+        fileSize:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: ["string", "null"]
+          format: date-time
+      required:
+        - id
+        - userId
+        - mediaType
+        - status
+        - filename
+        - fileSize
+        - createdAt
+
+    Preset:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        mediaType:
+          type: string
+          enum: [photo, video, both]
+        category:
+          type: string
+        isPremium:
+          type: boolean
+        thumbnailUrl:
+          type: ["string", "null"]
+        settings:
+          type: object
+          additionalProperties: true
+      required:
+        - id
+        - name
+        - description
+        - mediaType
+        - category
+        - isPremium
+
+    AnalysisResult:
+      type: object
+      properties:
+        description:
+          type: string
+        suggestedEnhancement:
+          type: string
+        suggestedFilter:
+          type: ["string", "null"]
+        detectedSubjects:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+      required:
+        - description
+        - suggestedEnhancement
+        - detectedSubjects
+        - confidence
+
+    MediaStats:
+      type: object
+      properties:
+        totalEnhanced:
+          type: integer
+        photosEnhanced:
+          type: integer
+        videosEnhanced:
+          type: integer
+        avgProcessingTimeMs:
+          type: integer
+        topEnhancementTypes:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              count:
+                type: integer
+            required:
+              - type
+              - count
+        recentActivity:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaJob"
+      required:
+        - totalEnhanced
+        - photosEnhanced
+        - videosEnhanced
+        - avgProcessingTimeMs
+        - topEnhancementTypes
+        - recentActivity
+
+    Plan:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        priceMonthly:
+          type: integer
+        priceAnnual:
+          type: integer
+        creditsPerMonth:
+          type: integer
+        features:
+          type: array
+          items:
+            type: string
+        isActive:
+          type: boolean
+        isPopular:
+          type: boolean
+      required:
+        - id
+        - name
+        - slug
+        - description
+        - priceMonthly
+        - priceAnnual
+        - creditsPerMonth
+        - features
+        - isActive
+        - isPopular
+
+    CreatePlanBody:
+      type: object
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        priceMonthly:
+          type: integer
+        priceAnnual:
+          type: integer
+        creditsPerMonth:
+          type: integer
+        features:
+          type: array
+          items:
+            type: string
+        isPopular:
+          type: boolean
+      required:
+        - name
+        - slug
+        - description
+        - priceMonthly
+        - priceAnnual
+        - creditsPerMonth
+        - features
+
+    UpdatePlanBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        priceMonthly:
+          type: integer
+        priceAnnual:
+          type: integer
+        creditsPerMonth:
+          type: integer
+        features:
+          type: array
+          items:
+            type: string
+        isActive:
+          type: boolean
+        isPopular:
+          type: boolean
+
+    CreateOrderBody:
+      type: object
+      properties:
+        planId:
+          type: integer
+        billingPeriod:
+          type: string
+          enum: [monthly, annual]
+      required:
+        - planId
+        - billingPeriod
+
+    VerifyPaymentBody:
+      type: object
+      properties:
+        razorpayOrderId:
+          type: string
+        razorpayPaymentId:
+          type: string
+        razorpaySignature:
+          type: string
+        planId:
+          type: integer
+        billingPeriod:
+          type: string
+          enum: [monthly, annual]
+      required:
+        - razorpayOrderId
+        - razorpayPaymentId
+        - razorpaySignature
+        - planId
+        - billingPeriod
+
+    PaymentOrder:
+      type: object
+      properties:
+        orderId:
+          type: string
+        amount:
+          type: integer
+        currency:
+          type: string
+        keyId:
+          type: string
+      required:
+        - orderId
+        - amount
+        - currency
+        - keyId
+
+    Payment:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        planId:
+          type: ["integer", "null"]
+        amount:
+          type: integer
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [pending, success, failed, refunded]
+        razorpayOrderId:
+          type: ["string", "null"]
+        razorpayPaymentId:
+          type: ["string", "null"]
+        billingPeriod:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - amount
+        - currency
+        - status
+        - createdAt
+
+    AdminStats:
+      type: object
+      properties:
+        totalUsers:
+          type: integer
+        freeUsers:
+          type: integer
+        paidUsers:
+          type: integer
+        totalRevenue:
+          type: integer
+        activeSubscriptions:
+          type: integer
+        totalPhotosProcessed:
+          type: integer
+        totalVideosProcessed:
+          type: integer
+        jobsToday:
+          type: integer
+        failedJobsToday:
+          type: integer
+        conversionRate:
+          type: number
+        recentSignups:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        recentPayments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Payment"
+      required:
+        - totalUsers
+        - freeUsers
+        - paidUsers
+        - totalRevenue
+        - activeSubscriptions
+        - totalPhotosProcessed
+        - totalVideosProcessed
+        - jobsToday
+        - failedJobsToday
+        - conversionRate
+        - recentSignups
+        - recentPayments
+
+    AdminUsersResponse:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        total:
+          type: integer
+        page:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - users
+        - total
+        - page
+        - totalPages
+
+    SuspendUserBody:
+      type: object
+      properties:
+        suspend:
+          type: boolean
+        reason:
+          type: string
+      required:
+        - suspend
+
+    AdjustCreditsBody:
+      type: object
+      properties:
+        credits:
+          type: integer
+        reason:
+          type: string
+      required:
+        - credits
+
+    AdminJobsResponse:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaJob"
+        total:
+          type: integer
+        page:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - jobs
+        - total
+        - page
+        - totalPages
+
+    AdminPaymentsResponse:
+      type: object
+      properties:
+        payments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Payment"
+        total:
+          type: integer
+        page:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - payments
+        - total
+        - page
+        - totalPages
+
+    Provider:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        isEnabled:
+          type: boolean
+        priority:
+          type: integer
+        requestCount:
+          type: integer
+        errorCount:
+          type: integer
+        lastUsedAt:
+          type: ["string", "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - slug
+        - isEnabled
+        - priority
+        - requestCount
+        - errorCount
+        - createdAt
+
+    CreateProviderBody:
+      type: object
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        apiKey:
+          type: string
+        priority:
+          type: integer
+      required:
+        - name
+        - slug
+        - apiKey
+
+    UpdateProviderBody:
+      type: object
+      properties:
+        name:
+          type: string
+        apiKey:
+          type: string
+        isEnabled:
+          type: boolean
+        priority:
+          type: integer

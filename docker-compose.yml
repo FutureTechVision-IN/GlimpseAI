@@ -1,0 +1,85 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-glimpseai}
+      POSTGRES_USER: ${POSTGRES_USER:-glimpseai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-glimpseai}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-glimpseai} -d ${POSTGRES_DB:-glimpseai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: artifacts/api-server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      PORT: ${API_PORT:-3001}
+      DATABASE_URL: postgres://${POSTGRES_USER:-glimpseai}:${POSTGRES_PASSWORD:-glimpseai}@db:5432/${POSTGRES_DB:-glimpseai}
+      SESSION_SECRET: ${SESSION_SECRET:-glimpse-ai-local-dev-secret}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-rzp_test_placeholder}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-placeholder_secret}
+    ports:
+      - "${API_PORT:-3001}:${API_PORT:-3001}"
+
+  web:
+    build:
+      context: .
+      dockerfile: artifacts/glimpse-ai/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: development
+      PORT: ${WEB_PORT:-5173}
+      BASE_PATH: ${BASE_PATH:-/}
+      API_PROXY_TARGET: http://api:${API_PORT:-3001}
+    ports:
+      - "${WEB_PORT:-5173}:${WEB_PORT:-5173}"
+
+  restoration:
+    build:
+      context: services/restoration
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      RESTORATION_PORT: 7860
+      GPU_ID: "0"
+      # Enable PyTorch optimizations
+      TORCH_CUDNN_V8_API_ENABLED: "1"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+    volumes:
+      - ./services/restoration/models:/app/models
+      - ./services/restoration/gfpgan/weights:/app/gfpgan/weights
+    ports:
+      - "7860:7860"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+volumes:
+  postgres-data:

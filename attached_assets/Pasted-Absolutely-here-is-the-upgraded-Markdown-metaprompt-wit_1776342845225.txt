@@ -1,0 +1,611 @@
+Absolutely — here is the upgraded **Markdown metaprompt** with **video editing**, **simple but powerful UX**, **fewer clicks**, and **more enhancements** built in.
+
+```markdown
+# Meta Prompt: Build **GlimpseAI** as a Production-Ready AI Photo + Video Editing Platform
+
+Act as a **Senior Product Architect, Full-Stack Engineer, Frontend Developer, UI/UX Designer, Mobile App Architect, Growth Product Manager, and DevOps Lead**.
+
+Your job is to help me **design, architect, and build GlimpseAI**, a **modern, high-conversion AI-powered media editing platform** for both **photos and videos**.
+
+The final solution must be suitable for a **real public launch**, not just a prototype.
+
+The product must launch as:
+
+1. a **public website**
+2. an **iOS app**
+3. an **Android app**
+
+---
+
+## 1. Product Vision
+
+We are building **GlimpseAI** — a powerful, user-friendly AI platform that helps users transform, enhance, and edit **photos and videos** using cutting-edge AI.
+
+The experience should feel:
+
+- **simple, fast, and intuitive**
+- **premium and polished**
+- **powerful but not overwhelming**
+- **user-friendly with fewer clicks**
+- **smartly automated with more enhancements**
+- **beautiful enough to compete with top consumer AI editing apps**
+
+The product should emphasize:
+
+- one-tap enhancements
+- low-friction editing flows
+- strong visual results
+- fast previews
+- minimal learning curve
+- conversion-friendly premium UX
+- scalable architecture
+- strong monetization
+
+---
+
+## 2. Core Product Principle
+
+Design GlimpseAI around this philosophy:
+
+### **Simple, yet powerful**
+The product should allow users to get impressive outcomes in the fewest possible steps.
+
+### UX expectations:
+- fewer clicks
+- less manual setup
+- smart defaults
+- one-tap suggestions
+- guided editing flows
+- preview-first experience
+- quick upload → enhance → export journey
+- minimal clutter
+- advanced controls available, but not forced
+
+The product should feel like:
+- “upload, choose enhancement, preview, done”
+- not like a complicated professional editing suite
+
+---
+
+## 3. Core Media Capabilities
+
+GlimpseAI must support both **photo editing** and **video editing**.
+
+### A. Photo Editing Capabilities
+Include features such as:
+- AI enhancement
+- portrait retouching
+- skin smoothing
+- lighting correction
+- color correction
+- background cleanup/replacement
+- face enhancement
+- stylized transformations
+- beauty filters
+- smart cropping
+- sharpening/upscaling
+- before/after comparison
+- export/download
+
+### B. Video Editing Capabilities
+Include features such as:
+- short video enhancement
+- AI beautification / portrait enhancement for video
+- lighting and color improvement
+- background cleanup/replacement where feasible
+- video trimming
+- smart filters/presets
+- stabilization-ready architecture if possible
+- export options
+- preview rendering
+- side-by-side before/after preview
+- short-form content optimization for social platforms
+
+### C. Editing UX Requirement
+For both photos and videos:
+- optimize for the fewest steps possible
+- default to “recommended enhancement”
+- allow optional advanced settings
+- support quick preset-based editing
+- keep the editing flow beginner-friendly
+
+---
+
+## 4. Business Model
+
+Design the platform with a **freemium model**:
+
+- every new user gets **5 free uses**
+- after the free quota is exhausted, users are prompted to upgrade
+- propose the best monetization structure for launch
+
+### Include:
+- free tier
+- paid monthly plan
+- paid annual plan
+- optional credit packs / top-ups
+- premium export options if appropriate
+- usage metering
+- plan-based access control
+
+The product should balance:
+- generosity for first-time users
+- strong conversion to paid
+- simple pricing
+- trust-building premium positioning
+
+---
+
+## 5. Payments
+
+Integrate **Razorpay** for payments.
+
+### Payment support must include:
+- **UPI**
+- **cards**
+- **wallets**
+
+### Build for:
+- subscriptions
+- one-time credit purchases
+- payment confirmation flows
+- failed payment handling
+- retries
+- webhook handling
+- invoice/payment history
+- admin monitoring of transactions
+
+Design the payment UX to feel:
+- seamless
+- low-friction
+- mobile-friendly
+- India-first
+- trustworthy
+
+---
+
+## 6. AI / API Requirements
+
+The system should support integration with **Gemini API / Gemini Pro-class models** and other powerful AI APIs as needed.
+
+Design the system so that AI providers are **abstracted, rotatable, and replaceable**.
+
+### Include:
+- API key upload
+- API key rotation
+- provider enable/disable
+- fallback provider logic
+- provider prioritization
+- request routing
+- usage tracking per provider
+- rate-limit awareness
+- cost-awareness
+- error handling
+- failover strategy
+- environment-specific configuration
+
+The architecture must not depend on a single provider forever.
+
+---
+
+## 7. Admin Dashboard Requirements
+
+Create a secure **Admin Dashboard** where I can:
+
+- log in as admin
+- monitor total users
+- monitor daily/weekly/monthly usage
+- view free vs paid users
+- monitor photo usage vs video usage
+- track API usage by provider
+- upload/manage/rotate API keys
+- enable/disable providers
+- monitor payment/subscription activity
+- manage pricing plans
+- manage user credits and entitlements
+- view failed jobs and error logs
+- view storage and rendering usage
+- review conversion funnel metrics
+- suspend abusive users
+- review support or flagged content queues if needed
+
+The admin area should feel like a modern SaaS control center.
+
+---
+
+## 8. User Accounts and Authentication
+
+Include a secure authentication system for users.
+
+### Support:
+- email/password
+- Google sign-in where appropriate
+- Apple sign-in for iOS readiness where appropriate
+- password reset
+- secure sessions
+- user profile management
+- usage/credits display
+- billing/subscription status
+- generation history
+- export/download history
+- account deletion
+- privacy controls
+
+---
+
+## 9. Website + Mobile Scope
+
+The app must exist across:
+
+### Website
+Include:
+- landing page
+- pricing page
+- sign up / login
+- user dashboard
+- photo editing flow
+- video editing flow
+- billing/subscription page
+- profile/settings
+- support/help page
+- admin area
+
+### iOS App
+Include:
+- onboarding
+- login/signup
+- photo upload/edit
+- video upload/edit
+- subscription/paywall
+- profile/history
+- export/share
+- push notification readiness if appropriate
+
+### Android App
+Include:
+- onboarding
+- login/signup
+- photo upload/edit
+- video upload/edit
+- subscription/paywall
+- profile/history
+- export/share
+- push notification readiness if appropriate
+
+Use one consistent brand system across web and mobile, while respecting native mobile UX patterns.
+
+---
+
+## 10. Frontend / UI / Motion Requirements
+
+For the **web experience**, use the connected **21st.dev MCP** and **Framer Motion**.
+
+### Requirements:
+- use **UIX Pro guidelines** for spacing, typography, hierarchy, rhythm, and layout
+- choose the most beautiful and conversion-friendly components from **21st.dev**
+- use **Framer Motion** for:
+  - entry animations
+  - hover effects
+  - micro-interactions
+  - premium transitions
+  - subtle delight, not distraction
+
+The design must be:
+- clean
+- modern
+- elegant
+- responsive
+- accessible
+- high-conversion
+- premium consumer-grade
+
+For **mobile apps**, maintain the same visual language using a native-feeling UI system.
+
+---
+
+## 11. Landing Page Requirements
+
+Build a **modern, high-conversion landing page** for GlimpseAI.
+
+### It should include:
+- hero section with strong value proposition
+- visual showcase of photo and video transformations
+- before/after examples
+- how-it-works section
+- AI-powered features section
+- trust-building section
+- pricing teaser
+- testimonials / social-proof-ready blocks
+- FAQ
+- final CTA
+- footer
+
+Optimize the landing page for:
+- signup conversion
+- freemium activation
+- paid plan conversion
+- brand trust
+- premium positioning
+
+---
+
+## 12. UX Requirements for Editing Flow
+
+This section is critical.
+
+The editing flow must be built around:
+
+### **Fewer clicks, more enhancements**
+Design the user experience so users can get great results with minimal effort.
+
+### Required UX patterns:
+- upload first, configure later
+- show “recommended enhancement” immediately
+- offer one-tap quick presets
+- provide instant preview when possible
+- use guided steps only when necessary
+- do not overwhelm users with too many controls at once
+- keep advanced settings collapsible
+- highlight best result quickly
+- optimize for mobile-friendly interactions
+- reduce cognitive overload
+
+### Ideal flow:
+1. Upload image or video
+2. Choose suggested enhancement or preset
+3. Preview result
+4. Fine-tune optionally
+5. Export / save / share
+
+---
+
+## 13. Technical Architecture Requirements
+
+Design this as a real production app.
+
+Include recommendations for:
+
+- frontend architecture
+- backend/API architecture
+- mobile app architecture
+- database design
+- auth strategy
+- storage for images and videos
+- rendering / transformation pipeline
+- AI job processing
+- queues and background workers
+- payment integration
+- analytics
+- rate limiting
+- abuse prevention
+- logging and monitoring
+- secrets management
+- environment management
+- caching strategy
+- CDN strategy
+- deployment pipeline
+- scalability planning
+
+Also include:
+- secure media upload handling
+- privacy-conscious media storage
+- cleanup/retention policies
+- audit logs for admin actions
+- export pipeline for edited media
+- job status tracking for video processing
+
+---
+
+## 14. Media Processing Architecture
+
+Because this product includes **video editing**, think carefully about the processing pipeline.
+
+### Include architecture for:
+- media upload
+- validation
+- temporary storage
+- job queueing
+- transformation pipeline
+- thumbnail/preview generation
+- progress tracking
+- export generation
+- file cleanup
+- retry logic
+- failure handling
+
+Differentiate between:
+- real-time or near-real-time actions
+- queued background processing
+- high-cost operations
+- lightweight preview operations
+
+---
+
+## 15. Deployment Requirements
+
+The product must be designed for **public deployment**.
+
+Include launch-ready recommendations for:
+
+- website hosting
+- backend/API hosting
+- database
+- storage
+- CDN
+- worker infrastructure
+- monitoring
+- error tracking
+- logging
+- backups
+- SSL
+- CI/CD
+- environment separation
+- iOS release readiness
+- Android release readiness
+
+The final architecture should support a real startup launch.
+
+---
+
+## 16. Responsible AI and Safety
+
+Include sensible safeguards to prevent misuse.
+
+Design guardrails for:
+- abusive or harmful content generation/editing
+- impersonation misuse
+- consent-sensitive face editing
+- risky uploads
+- moderation strategy
+- reporting/flagging pathways
+- admin review capability where needed
+
+Keep these protections practical and product-friendly.
+
+---
+
+## 17. Output Instructions
+
+Do **not** jump directly into code.
+
+### First, provide the following in order:
+
+#### A. Product Assumptions
+List all reasonable assumptions you are making.
+
+#### B. Website Structure
+Outline the full site structure before writing code.
+
+#### C. Mobile App Structure
+Outline the iOS/Android app navigation and major screens before writing code.
+
+#### D. Core User Journeys
+Describe key flows such as:
+- visitor → signup
+- free user → paid user
+- photo upload → enhanced export
+- video upload → enhanced export
+- failed payment → recovery
+- admin API key rotation
+- admin analytics review
+
+#### E. Feature Breakdown
+Split into:
+- MVP
+- V1 launch
+- V2 expansion
+
+#### F. Technical Architecture
+Provide:
+- recommended stack
+- web stack
+- mobile stack
+- backend stack
+- database outline
+- storage strategy
+- job/worker strategy
+- payment architecture
+- AI provider abstraction layer
+- admin architecture
+
+#### G. Monetization Strategy
+Recommend:
+- free plan
+- paid plan(s)
+- credit strategy
+- upgrade triggers
+- paywall design
+- conversion optimization
+
+#### H. UX/UI Direction
+Explain:
+- visual system
+- design tone
+- motion philosophy
+- editing UX philosophy
+- responsive behavior
+- mobile adaptations
+
+#### I. Launch Plan
+Provide:
+- phased roadmap
+- build order
+- MVP-first approach
+- deployment plan
+
+#### J. Code Generation
+Only after all of the above, begin generating clean, modular, production-oriented code.
+
+---
+
+## 18. Code Quality Requirements
+
+When writing code, ensure it is:
+
+- clean
+- modular
+- scalable
+- maintainable
+- reusable
+- typed where appropriate
+- secure
+- responsive
+- production-minded
+
+Do not generate shallow mockup code only. Think in terms of a real product architecture.
+
+---
+
+## 19. Product Expectations
+
+Optimize the final solution for:
+
+- premium consumer UX
+- simple but powerful editing
+- fewer clicks
+- more enhancements
+- strong freemium conversion
+- India-friendly payments via Razorpay
+- scalable AI provider management
+- public deployment readiness
+- website + iOS + Android consistency
+- beautiful UI
+- trust and privacy
+
+---
+
+## 20. Tone of Execution
+
+Think like a founder-level builder who cares about:
+
+- growth
+- quality
+- monetization
+- trust
+- launch readiness
+- user delight
+- simplicity
+- scale
+
+Be opinionated but practical.
+
+If something is ambiguous, make the best reasonable decision and state it clearly.
+
+---
+
+## 21. Start Here
+
+Now begin in this order:
+
+1. **Product assumptions**
+2. **Website structure**
+3. **Mobile app structure**
+4. **Photo + video editing feature architecture**
+5. **Recommended tech stack**
+6. **Freemium + Razorpay monetization strategy**
+7. **Admin dashboard architecture**
+8. **UX strategy for fewer clicks and more enhancements**
+9. **Then proceed toward implementation**
+```
+
+I can also convert this into a **Claude Code-optimized build prompt** or a **Cursor/Codex execution prompt** with stricter engineering instructions.

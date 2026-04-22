@@ -1,0 +1,20 @@
+{
+  "name": "key-validator",
+  "version": "1.0.0",
+  "description": "API Key Validation and Organization System for GlimpseAI",
+  "type": "module",
+  "main": "key-validator.ts",
+  "scripts": {
+    "validate": "npx ts-node key-validator.ts",
+    "validate:build": "npx esbuild key-validator.ts --bundle --platform=node --outfile=key-validator.mjs && node key-validator.mjs",
+    "clean-logs": "rm -rf .key-validation-logs",
+    "list-valid": "cat .key-validation-logs/validation-*.json | jq '.results[] | select(.status == "valid") | {key: .keyPrefix, provider: .provider, latency: .latencyMs}'",
+    "list-invalid": "cat .key-validation-logs/validation-*.json | jq '.results[] | select(.status != "valid") | {key: .keyPrefix, status: .status, error: .errorMessage}'"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}
