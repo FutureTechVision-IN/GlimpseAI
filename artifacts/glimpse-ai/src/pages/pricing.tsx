@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import Layout from "../components/layout";
 import { useListPlans, useCreatePaymentOrder, useVerifyPayment } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,21 +8,12 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
+import { formatMoney } from "@/lib/currency";
 
 declare global {
   interface Window {
     Razorpay: any;
   }
-}
-
-function formatINR(amountInRupees: number): string {
-  if (amountInRupees === 0) return "₹0";
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amountInRupees);
-}
-
-function toUSD(inr: number): string {
-  const usd = inr / 85; // approximate INR→USD
-  return `≈ $${usd.toFixed(2)}`;
 }
 
 const planIcons: Record<string, React.ReactNode> = {
@@ -45,11 +36,37 @@ function loadRazorpayScript(): Promise<void> {
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(true);
   const [processingPlanId, setProcessingPlanId] = useState<number | null>(null);
+  const [pricingContext, setPricingContext] = useState<{
+    detectedCurrency: "INR" | "USD";
+    currencySymbol: string;
+    plans: Array<{
+      id: number;
+      canonicalMonthlyUsd: number;
+      canonicalAnnualUsd: number;
+      displayMonthly: number;
+      displayAnnual: number;
+    }>;
+  } | null>(null);
   const { data: plans, isLoading } = useListPlans();
   const createOrder = useCreatePaymentOrder();
   const verifyPayment = useVerifyPayment();
   const { toast } = useToast();
   const { user } = useAuth();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/payments/pricing-context")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled) setPricingContext(data);
+      })
+      .catch(() => {
+        if (!cancelled) setPricingContext(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubscribe = useCallback(async (planId: number) => {
     setProcessingPlanId(planId);
@@ -62,7 +79,7 @@ export default function Pricing() {
     }
 
     createOrder.mutate(
-      { data: { planId, billingPeriod: isAnnual ? "annual" : "monthly" } },
+      { data: { planId, billingPeriod: isAnnual ? "annual" : "monthly", currency: pricingContext?.detectedCurrency } as any },
       {
         onSuccess: (data: any) => {
           const options = {
@@ -144,9 +161,16 @@ export default function Pricing() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {plans?.map((plan) => {
-              const monthlyPrice = isAnnual
-                ? Math.round(plan.priceAnnual / 12)
-                : plan.priceMonthly;
+              const pricing = pricingContext?.plans.find((entry) => entry.id === plan.id);
+              const displayMonthly = pricing
+                ? (isAnnual ? Math.round((pricing.displayAnnual / 12) * 100) / 100 : pricing.displayMonthly)
+                : (isAnnual ? Math.round(plan.priceAnnual / 12) : plan.priceMonthly);
+              const displayAnnual = pricing?.displayAnnual ?? plan.priceAnnual;
+              const canonicalMonthlyUsd = pricing
+                ? (isAnnual ? Math.round((pricing.canonicalAnnualUsd / 12) * 100) / 100 : pricing.canonicalMonthlyUsd)
+                : Math.round((plan.priceMonthly / 85) * 100) / 100;
+              const canonicalAnnualUsd = pricing?.canonicalAnnualUsd ?? Math.round((plan.priceAnnual / 85) * 100) / 100;
+              const activeCurrency = pricingContext?.detectedCurrency ?? "INR";
               const isFree = plan.priceMonthly === 0;
               const isCurrentPlan = user?.planId === plan.id || (isFree && !user?.planId);
 
@@ -167,13 +191,14 @@ export default function Pricing() {
                     </div>
                     <CardDescription className="text-zinc-400">{plan.description}</CardDescription>
                     <div className="mt-4 flex items-baseline gap-1">
-                      <span className="text-4xl font-bold">{formatINR(monthlyPrice)}</span>
+                      <span className="text-4xl font-bold">{formatMoney(displayMonthly, activeCurrency)}</span>
                       {!isFree && <span className="text-zinc-500">/mo</span>}
                     </div>
                     {!isFree && (
                       <div className="text-sm text-zinc-500 mt-1">
-                        {toUSD(monthlyPrice)}/mo
-                        {isAnnual && ` · Billed ${formatINR(plan.priceAnnual)} yearly`}
+                        Internal USD reference: {formatMoney(canonicalMonthlyUsd, "USD")}/mo
+                        {isAnnual && ` · Billed ${formatMoney(displayAnnual, activeCurrency)} yearly`}
+                        {isAnnual && ` · Canonical ${formatMoney(canonicalAnnualUsd, "USD")}/yr`}
                       </div>
                     )}
                     {isFree && <div className="text-sm text-zinc-500 mt-1">No credit card required</div>}
@@ -224,7 +249,7 @@ export default function Pricing() {
         <div className="flex flex-wrap items-center justify-center gap-6 mt-16 text-sm text-zinc-500">
           <div className="flex items-center gap-2"><Shield className="w-4 h-4" /> Secure payments via Razorpay</div>
           <div className="flex items-center gap-2"><Zap className="w-4 h-4" /> Cancel anytime</div>
-          <div className="flex items-center gap-2"><Check className="w-4 h-4" /> Multi-currency (INR, USD, GBP & more)</div>
+          <div className="flex items-center gap-2"><Check className="w-4 h-4" /> Localized upgrade pricing with USD canonical reference</div>
         </div>
       </div>
     </Layout>

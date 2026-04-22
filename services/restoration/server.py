@@ -74,6 +74,37 @@ FACE_DEVICE = torch.device("cpu")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("restoration")
 
+
+def _compat_gpu_is_available() -> bool:
+    # Keep the compatibility shim aligned with FACE_DEVICE. The restoration
+    # stack intentionally runs face models on CPU for stability.
+    return False
+
+
+def _compat_get_device(gpu_id: Optional[int] = None) -> torch.device:
+    return FACE_DEVICE
+
+
+def _patch_basicsr_misc_compat() -> None:
+    """
+    CodeFormer's bundled facelib utilities expect helpers that newer basicsr
+    wheels no longer export. Inject shims before those modules are imported so
+    the direct CodeFormer path stays usable.
+    """
+    try:
+        import basicsr.utils.misc as basicsr_misc
+    except Exception as exc:
+        logger.warning("Could not patch basicsr compatibility helpers: %s", exc)
+        return
+
+    if not hasattr(basicsr_misc, "gpu_is_available"):
+        basicsr_misc.gpu_is_available = _compat_gpu_is_available
+    if not hasattr(basicsr_misc, "get_device"):
+        basicsr_misc.get_device = _compat_get_device
+
+
+_patch_basicsr_misc_compat()
+
 # ─── Global model holders (lazy-loaded) ──────────────────────────────────────
 _gfpgan_restorer = None
 _codeformer_restorer = None
@@ -314,10 +345,10 @@ def estimate_degradation_level(blur_score: float, face_area: int) -> str:
 class RestoreRequest(BaseModel):
     """Base64-encoded image input with restoration parameters."""
     image_base64: str = Field(..., description="Base64-encoded image (no data: prefix)")
-    mode: str = Field("face_restore", description="face_restore | face_restore_hd | codeformer | upscale_2x | upscale_4x | old_photo | auto_face")
+    mode: str = Field("face_restore", description="face_restore | face_restore_hd | codeformer | hybrid | upscale_2x | upscale_4x | old_photo | auto_face")
     scale: int = Field(2, description="Upscale factor (1, 2, or 4)")
     face_enhance: bool = Field(True, description="Apply face enhancement on detected faces")
-    restoration_model: str = Field("auto", description="gfpgan | codeformer | auto")
+    restoration_model: str = Field("auto", description="gfpgan | codeformer | hybrid | auto")
     fidelity: float = Field(0.5, ge=0.0, le=1.0, description="CodeFormer fidelity weight (0=quality, 1=fidelity)")
 
 class RestoreResponse(BaseModel):
@@ -405,7 +436,7 @@ def restore_face_gfpgan(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, 
     return restored_img, face_count
 
 
-def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarray, int]:
+def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarray, int, str]:
     """
     Run CodeFormer face restoration (superior for heavily degraded/blurry faces).
     Fidelity: 0.0 = max quality (more hallucination), 1.0 = max fidelity (closer to input).
@@ -414,7 +445,8 @@ def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.
     cf = get_codeformer()
     if cf == "unavailable" or cf is None:
         logger.info("CodeFormer unavailable, falling back to GFPGAN")
-        return restore_face_gfpgan(img)
+        result, count = restore_face_gfpgan(img)
+        return result, count, "gfpgan"
 
     # ── Direct CodeFormer-master inference (in-memory, no file I/O) ──
     if isinstance(cf, dict) and cf.get("type") == "direct":
@@ -445,7 +477,8 @@ def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.
             if num_faces == 0:
                 face_helper.clean_all()
                 logger.info("No faces detected by CodeFormer — falling back to GFPGAN")
-                return restore_face_gfpgan(img)
+                result, count = restore_face_gfpgan(img)
+                return result, count, "gfpgan"
 
             face_helper.align_warp_face()
 
@@ -476,7 +509,7 @@ def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.
             restored_img = face_helper.paste_faces_to_input_image(upsample_img=bg_img)
             face_helper.clean_all()
 
-            return restored_img, num_faces
+            return restored_img, num_faces, "codeformer"
 
         except Exception as e:
             logger.warning("CodeFormer direct inference failed: %s — trying pip fallback", e)
@@ -503,14 +536,119 @@ def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.
                 Path(result_path).unlink(missing_ok=True)
                 if result_img is not None:
                     faces = detect_faces_with_landmarks(img)
-                    return result_img, len(faces)
+                    return result_img, len(faces), "codeformer"
 
             Path(tmp_in).unlink(missing_ok=True)
         except Exception as e:
             logger.warning("CodeFormer pip inference failed: %s", e)
 
     logger.warning("CodeFormer all strategies failed — falling back to GFPGAN")
-    return restore_face_gfpgan(img)
+    result, count = restore_face_gfpgan(img)
+    return result, count, "gfpgan"
+
+
+def build_face_blend_mask(
+    source_shape: tuple[int, int],
+    target_shape: tuple[int, int],
+    faces: list[dict],
+) -> np.ndarray:
+    """
+    Build a soft facial mask so hybrid blending only nudges restored face areas
+    instead of smearing the full background.
+    """
+    src_h, src_w = source_shape
+    tgt_h, tgt_w = target_shape
+    scale_x = tgt_w / max(1, src_w)
+    scale_y = tgt_h / max(1, src_h)
+    mask = np.zeros((tgt_h, tgt_w), dtype=np.uint8)
+
+    for face in faces:
+        x1, y1, x2, y2 = face["bbox"]
+        pad_x = int((x2 - x1) * 0.18)
+        pad_y = int((y2 - y1) * 0.28)
+        x1 = max(0, x1 - pad_x)
+        y1 = max(0, y1 - pad_y)
+        x2 = min(src_w, x2 + pad_x)
+        y2 = min(src_h, y2 + pad_y)
+
+        sx1 = int(round(x1 * scale_x))
+        sy1 = int(round(y1 * scale_y))
+        sx2 = int(round(x2 * scale_x))
+        sy2 = int(round(y2 * scale_y))
+
+        center = ((sx1 + sx2) // 2, (sy1 + sy2) // 2)
+        axes = (
+            max(12, (sx2 - sx1) // 2),
+            max(14, (sy2 - sy1) // 2),
+        )
+        cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+
+    if np.count_nonzero(mask) == 0:
+        return np.ones((tgt_h, tgt_w), dtype=np.float32)
+
+    feather_sigma = max(4.0, min(tgt_h, tgt_w) * 0.012)
+    soft_mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=feather_sigma, sigmaY=feather_sigma)
+    return (soft_mask.astype(np.float32) / 255.0).clip(0.0, 1.0)
+
+
+def blend_images(base_img: np.ndarray, overlay_img: np.ndarray, mask: np.ndarray, strength: float) -> np.ndarray:
+    """Feather an overlay onto a base image using a soft mask and blend strength."""
+    if base_img.shape != overlay_img.shape:
+        overlay_img = cv2.resize(overlay_img, (base_img.shape[1], base_img.shape[0]), interpolation=cv2.INTER_CUBIC)
+
+    alpha = np.clip(mask, 0.0, 1.0) * max(0.0, min(1.0, strength))
+    alpha = alpha[..., None]
+    base_f = base_img.astype(np.float32)
+    overlay_f = overlay_img.astype(np.float32)
+    blended = base_f * (1.0 - alpha) + overlay_f * alpha
+    return np.clip(blended, 0, 255).astype(np.uint8)
+
+
+def restore_face_hybrid(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarray, int, str]:
+    """
+    Natural-looking hybrid face restoration:
+    GFPGAN provides the base output, then a softened CodeFormer contribution is
+    blended back only into face regions when degradation is high enough to help.
+    """
+    faces = detect_faces_with_landmarks(img)
+    if not faces:
+        result, count = restore_face_gfpgan(img)
+        return result, count, "gfpgan"
+
+    gfpgan_img, gfpgan_count = restore_face_gfpgan(img)
+    codeformer_img, codeformer_count, codeformer_backend = restore_face_codeformer(
+        img,
+        fidelity=min(0.7, max(0.35, fidelity)),
+    )
+    if codeformer_backend != "codeformer":
+        return gfpgan_img, max(gfpgan_count, codeformer_count), "gfpgan"
+
+    severe_faces = 0
+    moderate_faces = 0
+    for face in faces:
+        level = estimate_degradation_level(face["blur_score"], face["area"])
+        if level == "severe":
+            severe_faces += 1
+        elif level == "moderate":
+            moderate_faces += 1
+
+    if severe_faces > 0:
+        mix = 0.62
+    elif moderate_faces > 0:
+        mix = 0.44
+    else:
+        mix = 0.26
+
+    if len(faces) >= 2:
+        mix = min(0.68, mix + 0.04)
+
+    blend_mask = build_face_blend_mask(img.shape[:2], gfpgan_img.shape[:2], faces)
+    logger.info(
+        "Hybrid face restore: faces=%d severe=%d moderate=%d mix=%.2f",
+        len(faces), severe_faces, moderate_faces, mix,
+    )
+    blended = blend_images(gfpgan_img, codeformer_img, blend_mask, mix)
+    return blended, max(gfpgan_count, codeformer_count), "hybrid"
 
 
 def restore_face_auto(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarray, int, str]:
@@ -559,12 +697,12 @@ def restore_face_auto(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.ndarra
     # - Single moderate face with very small area → CodeFormer (tiny faces need hallucination)
     # - Mild degradation → GFPGAN (faster, preserves more original detail)
     if worst_degradation == "severe":
-        result, count = restore_face_codeformer(img, fidelity=fidelity)
-        return result, count, "codeformer"
+        result, count, backend = restore_face_codeformer(img, fidelity=fidelity)
+        return result, count, backend
     elif worst_degradation == "moderate" and (moderate_count >= 2 or avg_blur < 120):
         # Multiple moderately degraded faces or generally blurry — CodeFormer safer choice
-        result, count = restore_face_codeformer(img, fidelity=fidelity)
-        return result, count, "codeformer"
+        result, count, backend = restore_face_codeformer(img, fidelity=fidelity)
+        return result, count, backend
     else:
         result, count = restore_face_gfpgan(img)
         return result, count, "gfpgan"
@@ -590,6 +728,12 @@ def detect_scratches(img: np.ndarray) -> np.ndarray:
 
     # Absolute difference highlights scratches as bright deviations
     diff = cv2.absdiff(gray, smooth)
+
+    # Black-hat morphology helps surface thin dark scratches and creases that
+    # don't stand out strongly in absolute-difference space.
+    blackhat_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, blackhat_kernel)
+    diff = cv2.max(diff, blackhat)
 
     # Adaptive threshold to handle varying scratch brightness across the image
     scratch_mask = cv2.adaptiveThreshold(
@@ -619,22 +763,145 @@ def detect_scratches(img: np.ndarray) -> np.ndarray:
     dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     combined = cv2.dilate(combined, dilate_kernel, iterations=1)
 
-    # Filter by connected component area: keep only mid-sized components (scratches)
-    # Too small = noise, too large = image features misclassified as scratches
+    # A final close helps bridge broken crease segments so inpainting treats
+    # them as a continuous artifact instead of isolated dots.
+    bridge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, bridge_kernel)
+
+    # Filter by component area and shape. Real scratches are usually long and
+    # sparse; broad dense blobs are more likely to be real content and lead to
+    # over-aggressive inpainting artifacts.
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(combined, connectivity=8)
     img_area = img.shape[0] * img.shape[1]
-    min_area = max(20, img_area * 0.00005)  # at least 20px or 0.005% of image
-    max_area = img_area * 0.02              # no more than 2% of image
+    min_area = max(18, img_area * 0.00003)
+    max_area = img_area * 0.008
     filtered = np.zeros_like(combined)
     for i in range(1, num_labels):
         area = stats[i, cv2.CC_STAT_AREA]
-        if min_area <= area <= max_area:
+        if not (min_area <= area <= max_area):
+            continue
+
+        width = max(1, stats[i, cv2.CC_STAT_WIDTH])
+        height = max(1, stats[i, cv2.CC_STAT_HEIGHT])
+        bbox_area = width * height
+        fill_ratio = area / max(1, bbox_area)
+        aspect_ratio = max(width, height) / max(1, min(width, height))
+        is_elongated = aspect_ratio >= 2.2
+        is_sparse_fold = fill_ratio <= 0.22 and max(width, height) >= 40
+
+        if is_elongated or is_sparse_fold:
             filtered[labels == i] = 255
 
     scratch_coverage = np.count_nonzero(filtered) / img_area
     logger.info("Scratch detection: coverage=%.4f%%, components=%d", scratch_coverage * 100, num_labels - 1)
 
     return filtered
+
+
+def analyze_damage_profile(img: np.ndarray, faces: Optional[list[dict]] = None) -> dict:
+    """
+    Decide whether Auto Face should escalate to the stronger old-photo path.
+    The decision blends scratch coverage with low-saturation / low-contrast
+    cues so ordinary portraits do not get over-restored.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    scratch_mask = detect_scratches(img)
+    img_area = max(1, img.shape[0] * img.shape[1])
+    scratch_ratio = float(np.count_nonzero(scratch_mask)) / img_area
+    contrast = float(np.std(gray))
+    mean_saturation = float(np.mean(hsv[:, :, 1]))
+
+    degradation_levels = [
+        estimate_degradation_level(face["blur_score"], face["area"])
+        for face in (faces or [])
+    ]
+    severe_faces = sum(level == "severe" for level in degradation_levels)
+
+    use_old_photo_pipeline = (
+        scratch_ratio >= 0.012
+        or (scratch_ratio >= 0.003 and (mean_saturation < 70 or contrast < 60))
+        or (severe_faces > 0 and scratch_ratio >= 0.0015)
+    )
+
+    return {
+        "scratch_ratio": scratch_ratio,
+        "contrast": contrast,
+        "mean_saturation": mean_saturation,
+        "severe_faces": severe_faces,
+        "use_old_photo_pipeline": use_old_photo_pipeline,
+    }
+
+
+def detect_micro_scratches(img: np.ndarray) -> np.ndarray:
+    """
+    More selective scratch pass used after face restoration. It keeps only thin,
+    smaller leftover marks so the second inpaint pass does not wipe real detail.
+    """
+    candidate_mask = detect_scratches(img)
+    if np.count_nonzero(candidate_mask) == 0:
+        return candidate_mask
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(candidate_mask, connectivity=8)
+    img_area = max(1, img.shape[0] * img.shape[1])
+    filtered = np.zeros_like(candidate_mask)
+    min_area = max(10, int(img_area * 0.000005))
+    max_area = max(40, int(img_area * 0.0012))
+
+    for i in range(1, num_labels):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < min_area or area > max_area:
+            continue
+
+        width = max(1, stats[i, cv2.CC_STAT_WIDTH])
+        height = max(1, stats[i, cv2.CC_STAT_HEIGHT])
+        longest = max(width, height)
+        shortest = max(1, min(width, height))
+        aspect_ratio = longest / shortest
+        fill_ratio = area / max(1, width * height)
+
+        if (aspect_ratio >= 2.6 and longest >= 18) or (fill_ratio <= 0.20 and longest >= 24):
+            filtered[labels == i] = 255
+
+    coverage = np.count_nonzero(filtered) / img_area
+    logger.info("Residual scratch pass: coverage=%.4f%%", coverage * 100)
+    return filtered
+
+
+def cleanup_micro_scratches(img: np.ndarray) -> tuple[np.ndarray, float]:
+    """
+    A light second cleanup pass after face restoration. Uses a very small
+    inpaint radius and feathered blending to avoid plastic-looking regions.
+    """
+    residual_mask = detect_micro_scratches(img)
+    img_area = max(1, img.shape[0] * img.shape[1])
+    residual_ratio = np.count_nonzero(residual_mask) / img_area
+    if residual_ratio < 0.00005 or residual_ratio > 0.018:
+        return img, residual_ratio
+
+    repaired = cv2.inpaint(img, residual_mask, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
+    soft_mask = cv2.GaussianBlur(residual_mask, (0, 0), sigmaX=1.2, sigmaY=1.2)
+    cleaned = blend_images(img, repaired, soft_mask.astype(np.float32) / 255.0, 0.72)
+    return cleaned, residual_ratio
+
+
+def final_photo_polish(img: np.ndarray) -> np.ndarray:
+    """
+    Final global polish for restored photos: mild denoise, contrast recovery,
+    and restrained sharpening so the result stays crisp without turning harsh.
+    """
+    denoised = cv2.bilateralFilter(img, 5, 28, 24)
+
+    lab = cv2.cvtColor(denoised, cv2.COLOR_BGR2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+    clip_limit = 2.2 if float(np.mean(l_channel)) < 120 else 1.8
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+    l_channel = clahe.apply(l_channel)
+    polished = cv2.cvtColor(cv2.merge([l_channel, a_channel, b_channel]), cv2.COLOR_LAB2BGR)
+
+    blurred = cv2.GaussianBlur(polished, (0, 0), sigmaX=0.8, sigmaY=0.8)
+    polished = cv2.addWeighted(polished, 1.10, blurred, -0.10, 0)
+    return np.clip(polished, 0, 255).astype(np.uint8)
 
 
 def restore_old_photo(img: np.ndarray, restoration_model: str = "auto", fidelity: float = 0.5) -> tuple[np.ndarray, int, str]:
@@ -654,9 +921,16 @@ def restore_old_photo(img: np.ndarray, restoration_model: str = "auto", fidelity
     # Step 1: Detect and inpaint scratches, creases, and fold lines
     scratch_mask = detect_scratches(img)
     scratch_pixels = np.count_nonzero(scratch_mask)
+    img_area = img.shape[0] * img.shape[1]
+    scratch_ratio = scratch_pixels / max(1, img_area)
     if scratch_pixels > 0:
-        # Navier-Stokes inpainting — propagates texture smoothly across scratch gaps
-        img = cv2.inpaint(img, scratch_mask, inpaintRadius=5, flags=cv2.INPAINT_NS)
+        # Use both Navier-Stokes and Telea, then blend them. Telea tends to fill
+        # thin scratches cleanly, while Navier-Stokes better preserves broader
+        # structures around folds and creases.
+        inpaint_radius = 4 if scratch_ratio > 0.01 else 3
+        repaired_ns = cv2.inpaint(img, scratch_mask, inpaintRadius=inpaint_radius, flags=cv2.INPAINT_NS)
+        repaired_telea = cv2.inpaint(img, scratch_mask, inpaintRadius=max(3, inpaint_radius - 1), flags=cv2.INPAINT_TELEA)
+        img = cv2.addWeighted(repaired_telea, 0.72, repaired_ns, 0.28, 0)
         logger.info("Scratch inpainting applied: %d pixels repaired", scratch_pixels)
 
     # Step 2: Aggressive denoise — old photos have heavy grain
@@ -671,16 +945,34 @@ def restore_old_photo(img: np.ndarray, restoration_model: str = "auto", fidelity
     enhanced = cv2.merge([l_channel, a_channel, b_channel])
     enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
-    # Step 4: Face restoration — GFPGAN internally applies RealESRGAN to background.
-    # Output is 2x the original size with restored faces + enhanced background.
+    # Step 4: Face restoration — GFPGAN and CodeFormer both return a 2x output.
+    # For damaged portraits, favor a natural GFPGAN base with CodeFormer blended
+    # back into the face when heavy degradation is detected.
     if restoration_model == "codeformer":
-        restored, face_count = restore_face_codeformer(enhanced, fidelity=fidelity)
-        backend = "codeformer"
+        restored, face_count, backend = restore_face_codeformer(enhanced, fidelity=fidelity)
     elif restoration_model == "gfpgan":
         restored, face_count = restore_face_gfpgan(enhanced, upscale=2)
         backend = "gfpgan"
+    elif restoration_model == "hybrid":
+        restored, face_count, backend = restore_face_hybrid(enhanced, fidelity=fidelity)
     else:
-        restored, face_count, backend = restore_face_auto(enhanced, fidelity=fidelity)
+        faces = detect_faces_with_landmarks(enhanced)
+        severe_faces = sum(
+            estimate_degradation_level(face["blur_score"], face["area"]) == "severe"
+            for face in faces
+        )
+        if severe_faces > 0 or scratch_ratio >= 0.005:
+            restored, face_count, backend = restore_face_hybrid(enhanced, fidelity=fidelity)
+        else:
+            restored, face_count, backend = restore_face_auto(enhanced, fidelity=fidelity)
+
+    # Step 5: Micro-scratch cleanup after the upscale/face pass.
+    restored, residual_ratio = cleanup_micro_scratches(restored)
+    if residual_ratio > 0:
+        logger.info("Second cleanup pass applied: residual scratch coverage=%.4f%%", residual_ratio * 100)
+
+    # Step 6: Final blend/noise/color polish.
+    restored = final_photo_polish(restored)
 
     return restored, face_count, backend
 
@@ -797,7 +1089,7 @@ def process_video(
             # Face restoration on each frame
             if face_enhance and not skip_ml:
                 if restoration_model == "codeformer":
-                    frame, _ = restore_face_codeformer(frame)
+                    frame, _, _ = restore_face_codeformer(frame)
                 else:
                     frame, _ = restore_face_gfpgan(frame)
 
@@ -871,6 +1163,8 @@ def _available_capabilities() -> list[str]:
             caps.append("codeformer")
         except ImportError:
             pass
+    if "codeformer" in caps and "face_restore" in caps:
+        caps.append("hybrid")
     if shutil.which("ffmpeg"):
         caps.append("video_restore")
     caps.append("face_analysis")
@@ -992,19 +1286,22 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
 
     if req_mode == "face_restore":
         if req_restoration_model == "codeformer":
-            result, faces_detected = restore_face_codeformer(img, fidelity=req_fidelity)
-            backend_used = "codeformer"
+            result, faces_detected, backend_used = restore_face_codeformer(img, fidelity=req_fidelity)
+        elif req_restoration_model == "hybrid":
+            result, faces_detected, backend_used = restore_face_hybrid(img, fidelity=req_fidelity)
         elif req_restoration_model == "auto":
             result, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
         else:
             result, faces_detected = restore_face_gfpgan(img, upscale=2)
+            backend_used = "gfpgan"
 
     elif req_mode == "face_restore_hd":
         # HD pipeline: GFPGAN face restore (2x) → ESRGAN 2x = 4x total output.
         # Previous pipeline was ESRGAN 4x → GFPGAN 2x = 8x (caused OOM + timeouts).
         if req_restoration_model == "codeformer":
-            face_restored, faces_detected = restore_face_codeformer(img, fidelity=req_fidelity)
-            backend_used = "codeformer"
+            face_restored, faces_detected, backend_used = restore_face_codeformer(img, fidelity=req_fidelity)
+        elif req_restoration_model == "hybrid":
+            face_restored, faces_detected, backend_used = restore_face_hybrid(img, fidelity=req_fidelity)
         elif req_restoration_model == "auto":
             face_restored, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
         else:
@@ -1014,8 +1311,10 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
         result = upscale_image(face_restored, scale=2)
 
     elif req_mode == "codeformer":
-        result, faces_detected = restore_face_codeformer(img, fidelity=req_fidelity)
-        backend_used = "codeformer"
+        result, faces_detected, backend_used = restore_face_codeformer(img, fidelity=req_fidelity)
+
+    elif req_mode == "hybrid":
+        result, faces_detected, backend_used = restore_face_hybrid(img, fidelity=req_fidelity)
 
     elif req_mode == "auto_face":
         faces_info = detect_faces_with_landmarks(img)
@@ -1023,7 +1322,26 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
             {**f, "degradation_level": estimate_degradation_level(f["blur_score"], f["area"])}
             for f in faces_info
         ]
-        result, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
+        damage_profile = analyze_damage_profile(img, faces_info)
+        if damage_profile["use_old_photo_pipeline"]:
+            selected_model = req_restoration_model
+            if selected_model == "auto":
+                if damage_profile["severe_faces"] > 0 or damage_profile["scratch_ratio"] >= 0.005:
+                    selected_model = "hybrid"
+            logger.info(
+                "Auto Face switching to old-photo pipeline: scratch=%.4f%% sat=%.1f contrast=%.1f model=%s",
+                damage_profile["scratch_ratio"] * 100,
+                damage_profile["mean_saturation"],
+                damage_profile["contrast"],
+                selected_model,
+            )
+            result, faces_detected, backend_used = restore_old_photo(
+                img,
+                restoration_model=selected_model,
+                fidelity=req_fidelity,
+            )
+        else:
+            result, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
 
     elif req_mode == "upscale_2x":
         result = upscale_image(img, scale=2)
@@ -1050,7 +1368,7 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
 async def restore_image_endpoint(req: RestoreRequest):
     """
     Image restoration endpoint.
-    Modes: face_restore, face_restore_hd, codeformer, upscale_2x, upscale_4x, old_photo, auto_face
+    Modes: face_restore, face_restore_hd, codeformer, hybrid, upscale_2x, upscale_4x, old_photo, auto_face
 
     ML inference runs in a thread so /health stays responsive.
     """

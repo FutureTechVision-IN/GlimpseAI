@@ -34,9 +34,15 @@ export interface AnalysisResult {
   description: string;
   suggestedEnhancement: string;
   suggestedFilter: string | null;
+  recommendedFilters?: string[];
   detectedSubjects: string[];
   confidence: number;
   analysisSource: "local" | "openrouter" | "gemini" | "nvidia";  // which engine produced this
+  faceDetected?: boolean;
+  recommendedFaceModel?: "gfpgan" | "codeformer" | "auto";
+  detectedDamageLevel?: "none" | "mild" | "moderate" | "severe";
+  compareMode?: "peek" | "side_by_side" | "both";
+  analysisNotes?: string[];
   /** Set when AI call failed — only populated with cause info, never raw key data */
   failureCause?: ApiFailureCause;
 }
@@ -115,6 +121,57 @@ class FeedbackAccumulator {
 }
 
 export const feedbackAccumulator = FeedbackAccumulator.getInstance();
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const normalized = values
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return [...new Set(normalized)];
+}
+
+function hasFaceLikeSubject(subjects: string[]): boolean {
+  return subjects.some((subject) => {
+    const lower = subject.toLowerCase();
+    return lower.includes("face") || lower.includes("portrait") || lower.includes("person") || lower.includes("selfie");
+  });
+}
+
+function inferRecommendedFilters(
+  enhancement: string,
+  subjects: string[],
+  faceModel?: "gfpgan" | "codeformer" | "auto",
+): string[] {
+  const subjectSet = new Set(subjects.map((subject) => subject.toLowerCase()));
+  const faceDetected = hasFaceLikeSubject(subjects);
+  const oldOrDamaged = subjectSet.has("old_photo") || subjectSet.has("damaged") || subjectSet.has("blurry_face") || subjectSet.has("degraded_face");
+
+  const baseMap: Record<string, string[]> = {
+    auto_face: oldOrDamaged
+      ? ["portrait", "vintage", "film"]
+      : faceModel === "codeformer"
+        ? ["portrait", "film", "vivid"]
+        : ["portrait", "warm_tone", "fresh"],
+    face_restore: ["portrait", "warm_tone", "fresh"],
+    codeformer: ["portrait", "film", "vivid"],
+    old_photo_restore: ["vintage", "film", "warm_tone"],
+    portrait: ["portrait", "airy", "warm_tone"],
+    auto: faceDetected ? ["portrait", "fresh", "warm_tone"] : ["vivid", "cinematic", "fresh"],
+    lighting_enhance: ["hdr", "dramatic", "vivid"],
+    color_grade_cinematic: ["cinematic", "moody", "dramatic"],
+  };
+
+  const defaults = baseMap[enhancement] ?? [];
+
+  if (subjectSet.has("landscape") || subjectSet.has("scene")) {
+    return uniqueStrings([...defaults, "cinematic", "vivid", "hdr"]).slice(0, 3);
+  }
+
+  if (faceDetected) {
+    return uniqueStrings([...defaults, "portrait", oldOrDamaged ? "vintage" : "warm_tone"]).slice(0, 3);
+  }
+
+  return uniqueStrings(defaults).slice(0, 3);
+}
 
 // Vision-capable models available on OpenRouter — ordered by quality/reliability
 // Primary tier (new high-quality models) → standard tier fallback
@@ -360,9 +417,15 @@ class AIProviderService {
       const aspectRatio = h / w;
       const isPortrait = aspectRatio > 1.15;
       const isLandscape = aspectRatio < 0.8;
+      const likelyFaceCrop = !isLandscape
+        && (isPortrait || Math.abs(w - h) / Math.max(w, h) < 0.35)
+        && brightness > 45
+        && brightness < 220
+        && chroma < 120;
+      const faceDetected = isPortrait || likelyFaceCrop;
 
       const subjects: string[] = [];
-      if (isPortrait) subjects.push("portrait", "person");
+      if (faceDetected) subjects.push("portrait", "person", "face");
       else if (isLandscape) subjects.push("landscape", "scene");
       else subjects.push("general");
 
@@ -371,6 +434,9 @@ class AIProviderService {
       let filter: string | null = null;
       let confidence = 0.78;
       let description = "";
+      let recommendedFaceModel: "gfpgan" | "codeformer" | "auto" | undefined;
+      let detectedDamageLevel: "none" | "mild" | "moderate" | "severe" = "none";
+      const analysisNotes: string[] = [];
 
       // Detect old/damaged photo characteristics:
       // - Very low sharpness + low contrast = likely degraded scan
@@ -378,33 +444,41 @@ class AIProviderService {
       // - Low sharpness + portrait = blurry face likely needs AI restoration
       const isLikelyOldPhoto = (sharpnessScore < 30 && contrast < 40 && chroma < 35) ||
                                 (sharpnessScore < 25 && brightness < 140);
-      const isDamagedFace = isPortrait && sharpnessScore < 35;
-      const isVeryBlurryFace = isPortrait && sharpnessScore < 20;
+      const isDamagedFace = faceDetected && sharpnessScore < 35;
+      const isVeryBlurryFace = faceDetected && sharpnessScore < 20;
 
-      if (isLikelyOldPhoto && isPortrait) {
-        // Old photo with face — strongest signal for old_photo_restore
-        enhancement = "old_photo_restore";
-        confidence = 0.92;
-        description = `Old/damaged photo detected (sharpness ${Math.round(sharpnessScore)}, chroma ${Math.round(chroma)}). Old Photo Restore will repair scratches, fix fading, and restore faces with AI.`;
-        subjects.push("old_photo", "damaged");
-      } else if (isVeryBlurryFace) {
-        // Very blurry face — auto_face will pick CodeFormer for severe degradation
+      if (isVeryBlurryFace || (isLikelyOldPhoto && faceDetected)) {
         enhancement = "auto_face";
-        confidence = 0.90;
-        description = `Severely blurry face detected (sharpness ${Math.round(sharpnessScore)}). Auto Face AI will select the best restoration model (CodeFormer for heavy degradation).`;
-        subjects.push("blurry_face");
+        recommendedFaceModel = "codeformer";
+        detectedDamageLevel = "severe";
+        confidence = 0.95;
+        if (isLikelyOldPhoto) {
+          description = `Detected a face in an old or damaged photo. Auto Face AI is the default recommendation and will run structure repair, favor a CodeFormer-led face restore with natural blending, then finish with old-photo recovery tuned for scratches and 2x output.`;
+          subjects.push("old_photo", "damaged", "blurry_face");
+          analysisNotes.push("Damaged portraits use a three-stage pipeline: structure repair, face restoration, then upscale with a final cleanup pass.");
+        } else {
+          description = `Detected a heavily degraded face (sharpness ${Math.round(sharpnessScore)}). Auto Face AI is recommended by default and will route this image to a CodeFormer-led restore with natural GFPGAN blending when needed.`;
+          subjects.push("blurry_face");
+        }
+        filter = "portrait";
+        analysisNotes.push("CodeFormer is favored for severe blur, missing detail, or damaged facial regions, with natural blending used to avoid an artificial look.");
       } else if (isDamagedFace) {
-        // Moderately damaged face — face_restore with GFPGAN
-        enhancement = "face_restore";
-        confidence = 0.87;
-        description = `Portrait with degraded facial detail (sharpness ${Math.round(sharpnessScore)}). Face AI will restore clarity, skin texture, and facial features.`;
+        enhancement = "auto_face";
+        recommendedFaceModel = "gfpgan";
+        detectedDamageLevel = "moderate";
+        confidence = 0.95;
+        description = `Detected a face with moderate degradation (sharpness ${Math.round(sharpnessScore)}). Auto Face AI is recommended by default and will steer this image toward GFPGAN for a cleaner, more natural restoration.`;
         subjects.push("degraded_face");
+        filter = "portrait";
+        analysisNotes.push("GFPGAN is favored when the face is recoverable and preserving natural detail matters most.");
       } else if (isLikelyOldPhoto) {
         // Old photo without clear face — still benefit from old_photo_restore pipeline
         enhancement = "old_photo_restore";
         confidence = 0.85;
         description = `Old/damaged photo detected (low sharpness ${Math.round(sharpnessScore)}, faded colors). Old Photo Restore will repair scratches and recover lost detail.`;
         subjects.push("old_photo");
+        detectedDamageLevel = "moderate";
+        filter = "vintage";
       } else if (brightness < 75) {
         // Dark image — lighting fix is the clear winner
         enhancement = "lighting_enhance";
@@ -423,21 +497,21 @@ class AIProviderService {
         confidence = 0.85;
         description = `Flat image with low contrast (std ${Math.round(contrast)}). Vivid filter will add punch, depth, and vibrancy.`;
       } else if (isPortrait) {
-        // Portrait — face likely present
+        enhancement = "auto_face";
+        recommendedFaceModel = "gfpgan";
+        detectedDamageLevel = "mild";
+        confidence = 0.95;
         if (warmth > 15) {
-          enhancement = "portrait";
-          confidence = 0.87;
-          description = `Portrait photo with warm skin tones. Portrait Polish will refine skin texture and enhance facial detail.`;
+          description = `Detected a face with healthy detail. Auto Face AI is the default recommendation and will favor GFPGAN, then follow with portrait-friendly tonal refinement.`;
+          filter = "warm_tone";
         } else if (warmth < -15) {
-          enhancement = "portrait";
+          description = `Detected a face with cooler tones. Auto Face AI is the default recommendation and will favor GFPGAN before brightening the portrait look.`;
           filter = "airy";
-          confidence = 0.83;
-          description = `Portrait with cool tones. Portrait Polish + Airy filter will warm and brighten the subject.`;
         } else {
-          enhancement = "portrait";
-          confidence = 0.86;
-          description = `Portrait detected. Portrait Polish will naturally smooth skin and optimise facial lighting.`;
+          description = `Detected a face in the frame. Auto Face AI is the default recommendation and will choose the best face model with high confidence before applying portrait-friendly finishing.`;
+          filter = "portrait";
         }
+        analysisNotes.push("Auto Face AI becomes the default whenever a face is detected.");
       } else if (isLandscape) {
         if (chroma > 55) {
           enhancement = "color_grade_cinematic";
@@ -476,11 +550,39 @@ class AIProviderService {
       logger.info({ enhancement, filter, confidence, brightness: Math.round(brightness), contrast: Math.round(contrast) }, "Local image analysis complete");
       // Apply self-learning multiplier: boosts/reduces confidence based on historical acceptance
       const multiplier = feedbackAccumulator.getMultiplier(enhancement);
-      const adjustedConfidence = Math.min(0.95, Math.max(0.55, confidence * multiplier));
-      return { description, suggestedEnhancement: enhancement, suggestedFilter: filter, detectedSubjects: subjects, confidence: adjustedConfidence, analysisSource: "local" };
+      const adjustedConfidence = faceDetected && enhancement === "auto_face"
+        ? Math.max(0.95, Math.min(0.99, confidence * Math.max(multiplier, 1)))
+        : Math.min(0.95, Math.max(0.55, confidence * multiplier));
+      const recommendedFilters = inferRecommendedFilters(enhancement, subjects, recommendedFaceModel);
+      return {
+        description,
+        suggestedEnhancement: enhancement,
+        suggestedFilter: filter,
+        recommendedFilters,
+        detectedSubjects: subjects,
+        confidence: adjustedConfidence,
+        analysisSource: "local",
+        faceDetected,
+        recommendedFaceModel,
+        detectedDamageLevel,
+        compareMode: faceDetected || isLikelyOldPhoto ? "both" : "peek",
+        analysisNotes,
+      };
     } catch (err) {
       logger.warn({ err }, "Local analysis failed — returning safe defaults");
-      return { description: "Image ready for enhancement.", suggestedEnhancement: "auto", suggestedFilter: null, detectedSubjects: [], confidence: 0.72, analysisSource: "local" };
+      return {
+        description: "Image ready for enhancement.",
+        suggestedEnhancement: "auto",
+        suggestedFilter: null,
+        recommendedFilters: [],
+        detectedSubjects: [],
+        confidence: 0.72,
+        analysisSource: "local",
+        faceDetected: false,
+        detectedDamageLevel: "none",
+        compareMode: "peek",
+        analysisNotes: [],
+      };
     }
   }
 
@@ -524,23 +626,67 @@ class AIProviderService {
       const aiSuggestsRestoration = RESTORATION_TYPES.has(aiResult.suggestedEnhancement);
 
       // If local detected old/damaged photo but AI didn't, prefer local's restoration suggestion
-      const finalEnhancement = localSuggestsRestoration && !aiSuggestsRestoration
-        ? localResult.suggestedEnhancement
-        : aiResult.suggestedEnhancement;
-
-      // Merge detected subjects from both sources (deduplicated)
       const mergedSubjects = [...new Set([
         ...aiResult.detectedSubjects,
         ...localResult.detectedSubjects,
       ])];
+      const faceDetected = aiResult.faceDetected ?? localResult.faceDetected ?? hasFaceLikeSubject(mergedSubjects);
+      const recommendedFaceModel = aiResult.recommendedFaceModel
+        ?? localResult.recommendedFaceModel
+        ?? (mergedSubjects.some((subject) => subject.toLowerCase().includes("blurry_face") || subject.toLowerCase().includes("damaged"))
+          ? "codeformer"
+          : faceDetected ? "gfpgan" : undefined);
+      const oldOrDamaged = mergedSubjects.some((subject) => {
+        const lower = subject.toLowerCase();
+        return lower.includes("old_photo") || lower.includes("damaged") || lower.includes("degraded") || lower.includes("blurry_face");
+      });
+
+      let finalEnhancement = localSuggestsRestoration && !aiSuggestsRestoration
+        ? localResult.suggestedEnhancement
+        : aiResult.suggestedEnhancement;
+      if (faceDetected) {
+        finalEnhancement = "auto_face";
+      }
+
+      const primaryFilter = faceDetected
+        ? (aiResult.suggestedFilter ?? localResult.suggestedFilter ?? "portrait")
+        : (aiResult.suggestedFilter ?? localResult.suggestedFilter);
+      const recommendedFilters = uniqueStrings([
+        primaryFilter,
+        ...(aiResult.recommendedFilters ?? []),
+        ...(localResult.recommendedFilters ?? []),
+        ...inferRecommendedFilters(finalEnhancement, mergedSubjects, recommendedFaceModel),
+      ]).slice(0, 3);
+      const detectedDamageLevel = oldOrDamaged
+        ? (recommendedFaceModel === "codeformer" ? "severe" : "moderate")
+        : (localResult.detectedDamageLevel ?? "none");
+      const mergedNotes = uniqueStrings([
+        ...(aiResult.analysisNotes ?? []),
+        ...(localResult.analysisNotes ?? []),
+        faceDetected ? `Auto Face AI is the default because a face was detected and confidence is kept at or above 95%.` : null,
+        oldOrDamaged && recommendedFaceModel === "codeformer" ? "CodeFormer is recommended for heavy restoration before styling filters, with natural blending when severe damage is present." : null,
+        oldOrDamaged && faceDetected ? "Damaged portraits should run structure repair before the face model, then finish with upscale and a residual scratch cleanup pass." : null,
+        oldOrDamaged && !faceDetected ? "Old Photo Fix remains the best full-photo repair path when no clear face is detected." : null,
+      ]);
+      const mergedDescription = faceDetected
+        ? `${aiResult.description} Auto Face AI is recommended by default${recommendedFaceModel ? ` and is expected to favor ${recommendedFaceModel === "codeformer" ? "CodeFormer" : "GFPGAN"}` : ""}.`
+        : aiResult.description;
 
       return {
-        description: aiResult.description,
+        description: mergedDescription,
         suggestedEnhancement: finalEnhancement,
-        suggestedFilter: aiResult.suggestedFilter ?? localResult.suggestedFilter,
+        suggestedFilter: primaryFilter,
+        recommendedFilters,
         detectedSubjects: mergedSubjects,
-        confidence: Math.max(aiResult.confidence, localResult.confidence - 0.05),
+        confidence: faceDetected
+          ? Math.max(0.95, Math.max(aiResult.confidence, localResult.confidence))
+          : Math.max(aiResult.confidence, localResult.confidence - 0.05),
         analysisSource: aiResult.analysisSource,
+        faceDetected,
+        recommendedFaceModel,
+        detectedDamageLevel,
+        compareMode: faceDetected || oldOrDamaged ? "both" : "peek",
+        analysisNotes: mergedNotes,
       };
     }
 

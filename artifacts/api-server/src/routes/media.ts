@@ -1,5 +1,5 @@
 import { Router, IRouter } from "express";
-import { db, mediaJobsTable, usersTable, presetsTable, plansTable } from "@workspace/db";
+import { db, mediaJobsTable, usersTable, presetsTable, plansTable, enhancementLogsTable } from "@workspace/db";
 import { eq, and, desc, count } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { requireAuth, AuthRequest } from "../middlewares/auth";
@@ -14,8 +14,60 @@ import { aiProvider, feedbackAccumulator, type UserTier } from "../lib/ai-provid
 import { formatApiError } from "../lib/api-errors";
 import { checkTierAccess, resolvePlanSlug } from "../lib/tier-config";
 import { logger } from "../lib/logger";
+import sharp from "sharp";
 
 const router: IRouter = Router();
+
+function inferMimeType(rawB64: string): string {
+  if (rawB64.startsWith("iVBOR")) return "image/png";
+  if (rawB64.startsWith("UklGR")) return "image/webp";
+  if (rawB64.startsWith("R0lGO")) return "image/gif";
+  return "image/jpeg";
+}
+
+function inferFileFormatFromMime(mimeType: string): string {
+  if (mimeType.includes("png")) return "png";
+  if (mimeType.includes("webp")) return "webp";
+  if (mimeType.includes("gif")) return "gif";
+  return "jpeg";
+}
+
+async function extractMediaMetadata(base64Data: string): Promise<{ resolution: string | null; fileFormat: string }> {
+  const mimeType = inferMimeType(base64Data);
+  try {
+    const meta = await sharp(Buffer.from(base64Data, "base64")).metadata();
+    const resolution = meta.width && meta.height ? `${meta.width}x${meta.height}` : null;
+    return { resolution, fileFormat: meta.format ?? inferFileFormatFromMime(mimeType) };
+  } catch {
+    return { resolution: null, fileFormat: inferFileFormatFromMime(mimeType) };
+  }
+}
+
+async function recordEnhancementLog(entry: {
+  userId: number;
+  jobId: number;
+  enhancementType: string;
+  mediaType: string;
+  fileSize: number;
+  base64Data?: string | null;
+  processingTimeMs?: number | null;
+  provider?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const mediaMeta = entry.base64Data ? await extractMediaMetadata(entry.base64Data) : { resolution: null, fileFormat: null as string | null };
+  await db.insert(enhancementLogsTable).values({
+    userId: entry.userId,
+    jobId: entry.jobId,
+    enhancementType: entry.enhancementType,
+    mediaType: entry.mediaType,
+    fileSize: entry.fileSize,
+    fileFormat: mediaMeta.fileFormat,
+    resolution: mediaMeta.resolution,
+    processingTimeMs: entry.processingTimeMs ?? null,
+    provider: entry.provider ?? null,
+    metadata: entry.metadata ?? {},
+  });
+}
 
 /** Determine user tier from their plan: paid plan → premium, no plan → free */
 function getUserTier(user: { planId: number | null }): UserTier {
@@ -265,6 +317,26 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
         errorMessage: null,
       }).where(eq(mediaJobsTable.id, jobId));
 
+      await recordEnhancementLog({
+        userId: req.userId!,
+        jobId,
+        enhancementType,
+        mediaType: job.mediaType,
+        fileSize: job.fileSize,
+        base64Data: rawB64,
+        processingTimeMs: Date.now() - startTime,
+        provider: "restoration-service",
+        metadata: {
+          eventType: "enhancement",
+          videoMode,
+          faceEnhance,
+          temporalConsistency,
+          restorationModel,
+          framesProcessed: result.framesProcessed,
+          sceneChanges: result.sceneChanges,
+        },
+      }).catch((err) => logger.warn({ err, jobId }, "Failed to record video enhancement log"));
+
       logger.info({ jobId, type: enhancementType, frames: result.framesProcessed, scenes: result.sceneChanges, ms: result.processingMs }, "Video restoration completed");
       return;
     }
@@ -321,6 +393,27 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     }).where(eq(mediaJobsTable.id, jobId));
     mark("db_save");
 
+    await recordEnhancementLog({
+      userId: req.userId!,
+      jobId,
+      enhancementType,
+      mediaType: job.mediaType,
+      fileSize: job.fileSize,
+      base64Data: rawB64,
+      processingTimeMs: Date.now() - startTime,
+      provider: aiGuidance?.source ?? "local",
+      metadata: {
+        eventType: "enhancement",
+        selectedFilter: typeof (settings as Record<string, unknown> | undefined)?.filterName === "string"
+          ? (settings as Record<string, unknown>).filterName
+          : null,
+        aiGuidanceSource: aiGuidance?.source ?? null,
+        aiGuidanceDescription: aiGuidance?.description ?? null,
+        settings: settings ?? {},
+        cacheEligible: !aiGuidance,
+      },
+    }).catch((err) => logger.warn({ err, jobId }, "Failed to record enhancement log"));
+
     logger.info({ jobId, type: enhancementType, ms: Date.now() - startTime, perf }, "Enhancement completed");
   } catch (err) {
     logger.error({ err, jobId }, "Enhancement failed");
@@ -358,6 +451,29 @@ router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promis
   try {
     const result = await aiProvider.analyzeImage(job.base64Data, mimeType, userTier);
     if (result) {
+      await recordEnhancementLog({
+        userId: req.userId!,
+        jobId,
+        enhancementType: `analysis:${result.suggestedEnhancement}`,
+        mediaType: job.mediaType,
+        fileSize: job.fileSize,
+        base64Data: job.base64Data,
+        provider: result.analysisSource,
+        metadata: {
+          eventType: "analysis",
+          detectedSubjects: result.detectedSubjects,
+          suggestedEnhancement: result.suggestedEnhancement,
+          suggestedFilter: result.suggestedFilter,
+          recommendedFilters: result.recommendedFilters ?? [],
+          recommendedFaceModel: result.recommendedFaceModel ?? null,
+          detectedDamageLevel: result.detectedDamageLevel ?? "none",
+          faceDetected: result.faceDetected ?? false,
+          compareMode: result.compareMode ?? "peek",
+          confidence: result.confidence,
+          analysisNotes: result.analysisNotes ?? [],
+        },
+      }).catch((err) => logger.warn({ err, jobId }, "Failed to record analysis insight"));
+
       // If AI failed and we have a failure cause, format error for user/admin
       if (result.failureCause) {
         const apiErr = formatApiError({
@@ -559,6 +675,48 @@ router.post("/media/feedback", requireAuth, async (req, res): Promise<void> => {
   }
   feedbackAccumulator.record(enhancement, action as "applied" | "dismissed");
   res.json({ ok: true, stats: feedbackAccumulator.getStats()[enhancement] });
+});
+
+// ─── Export telemetry ───────────────────────────────────────────────────────
+router.post("/media/export", requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const { jobId, enhancementType, selectedFilter, exportedFormat } = req.body as {
+    jobId?: number;
+    enhancementType?: string;
+    selectedFilter?: string | null;
+    exportedFormat?: string | null;
+  };
+
+  if (!jobId || typeof jobId !== "number") {
+    res.status(400).json({ error: "jobId is required" });
+    return;
+  }
+
+  const [job] = await db.select().from(mediaJobsTable)
+    .where(and(eq(mediaJobsTable.id, jobId), eq(mediaJobsTable.userId, req.userId!)));
+
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+
+  await recordEnhancementLog({
+    userId: req.userId!,
+    jobId,
+    enhancementType: enhancementType ?? job.enhancementType ?? "export",
+    mediaType: job.mediaType,
+    fileSize: job.fileSize,
+    base64Data: job.processedUrl ?? job.base64Data,
+    processingTimeMs: job.processingTimeMs,
+    provider: "client-export",
+    metadata: {
+      eventType: "export",
+      exported: true,
+      selectedFilter: selectedFilter ?? null,
+      exportedFormat: exportedFormat ?? inferFileFormatFromMime(inferMimeType(job.processedUrl ?? job.base64Data ?? "")),
+    },
+  }).catch((err) => logger.warn({ err, jobId }, "Failed to record export telemetry"));
+
+  res.json({ ok: true });
 });
 
 // ─── Batch Enhancement ─────────────────────────────────────────

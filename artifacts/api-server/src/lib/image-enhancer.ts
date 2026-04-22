@@ -10,11 +10,10 @@ export interface EnhanceOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Enhancement result cache — avoids redundant processing for repeated requests
+// Enhancement result cache — avoids redundant processing for repeated requests,
+// including repeated face-model runs that would otherwise re-hit the ML sidecar.
 // LRU eviction: max 50 entries, max 15 min TTL per entry.
 // Cache key = hash(image_data_prefix + enhancementType + settings)
-// Only caches Sharp (local) results, not restoration sidecar results (those
-// are too large and variable due to ML inference).
 // ---------------------------------------------------------------------------
 interface CacheEntry {
   base64: string;
@@ -225,6 +224,7 @@ const RESTORATION_TYPES = new Set([
   "face_restore",
   "face_restore_hd",
   "codeformer",
+  "hybrid",
   "auto_face",
   "esrgan_upscale_2x",
   "esrgan_upscale_4x",
@@ -275,6 +275,7 @@ async function callRestorationService(
     face_restore: "face_restore",
     face_restore_hd: "face_restore_hd",
     codeformer: "codeformer",
+    hybrid: "hybrid",
     auto_face: "auto_face",
     esrgan_upscale_2x: "upscale_2x",
     esrgan_upscale_4x: "upscale_4x",
@@ -443,24 +444,32 @@ export async function enhanceImage(
   options: EnhanceOptions,
 ): Promise<{ base64: string; mimeType: string }> {
   const type = options.enhancementType;
-
-  // Route restoration types to the Python sidecar (not cached — ML inference varies)
-  if (RESTORATION_TYPES.has(type)) {
-    const available = await isRestorationServiceAvailable();
-    if (!available) {
-      logger.warn({ type }, "Restoration service unreachable — falling back to local sharp processing");
-    } else {
-      return callRestorationService(base64Data, type, options.settings as Record<string, unknown>);
-    }
-  }
-
-  // Check cache for Sharp-processed results (skip if AI guidance provided — guidance varies per request)
   const cacheKey = !options.aiGuidance ? getCacheKey(base64Data, options) : null;
+  let shouldCacheLocalFallback = true;
+
   if (cacheKey) {
     const cached = getCachedResult(cacheKey);
     if (cached) {
       logger.info({ type, cacheKey: cacheKey.substring(0, 8) }, "Enhancement cache hit — returning cached result");
       return { base64: cached.base64, mimeType: cached.mimeType };
+    }
+  }
+
+  // Route restoration types to the Python sidecar. These now participate in the
+  // same cache so repeated face restoration requests do not re-consume API/ML work.
+  if (RESTORATION_TYPES.has(type)) {
+    const available = await isRestorationServiceAvailable();
+    if (!available) {
+      logger.warn({ type }, "Restoration service unreachable — falling back to local sharp processing");
+      // Avoid pinning a lightweight fallback in cache once the ML sidecar comes back.
+      shouldCacheLocalFallback = false;
+    } else {
+      const result = await callRestorationService(base64Data, type, options.settings as Record<string, unknown>);
+      if (cacheKey) {
+        setCachedResult(cacheKey, result);
+        logger.debug({ cacheKey: cacheKey.substring(0, 8), cacheSize: enhancementCache.size }, "Restoration result cached");
+      }
+      return result;
     }
   }
 
@@ -887,6 +896,15 @@ export async function enhanceImage(
         pipeline = safeGamma(pipeline, 0.97);
         break;
       }
+      case "hybrid": {
+        pipeline = pipeline
+          .median(3)
+          .normalize()
+          .modulate({ brightness: 1.02, saturation: 1.05 })
+          .sharpen({ sigma: 1.6, m1: 1.1, m2: 0.7 });
+        pipeline = safeGamma(pipeline, 0.98);
+        break;
+      }
       case "esrgan_upscale_2x": {
         pipeline = pipeline
           .resize({ width: (meta.width ?? 512) * 2, height: (meta.height ?? 512) * 2, kernel: "lanczos3" })
@@ -1068,7 +1086,7 @@ export async function enhanceImage(
   const result = { base64: outBase64, mimeType: outputMime };
 
   // Cache the result for future identical requests (skip AI-guided results — they vary)
-  if (cacheKey) {
+  if (cacheKey && shouldCacheLocalFallback) {
     setCachedResult(cacheKey, result);
     logger.debug({ cacheKey: cacheKey.substring(0, 8), cacheSize: enhancementCache.size }, "Enhancement result cached");
   }

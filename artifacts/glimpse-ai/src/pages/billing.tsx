@@ -4,6 +4,7 @@ import { useGetPaymentHistory } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { formatMoney } from "@/lib/currency";
 
 export default function Billing() {
   const { data: payments, isLoading } = useGetPaymentHistory();
@@ -39,7 +40,7 @@ export default function Billing() {
                     {payments.map((payment) => (
                       <TableRow key={payment.id} className="border-zinc-800 hover:bg-zinc-900/50">
                         <TableCell className="font-medium">{new Date(payment.createdAt).toLocaleDateString()}</TableCell>
-                        <TableCell>{payment.amount} {payment.currency}</TableCell>
+                        <TableCell>{formatMoney((payment as any).displayAmount ?? payment.amount, payment.currency)}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className={
                             payment.status === 'success' ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10' :

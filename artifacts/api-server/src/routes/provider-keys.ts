@@ -281,6 +281,51 @@ router.get("/admin/ai-insights", requireAuth, requireAdmin, async (_req, res): P
     if (p.completed > 0) p.avgMs = Math.round(p.avgMs / p.completed);
   }
 
+  const recentLogs = await db.select({
+    enhancementType: enhancementLogsTable.enhancementType,
+    mediaType: enhancementLogsTable.mediaType,
+    provider: enhancementLogsTable.provider,
+    metadata: enhancementLogsTable.metadata,
+    processingTimeMs: enhancementLogsTable.processingTimeMs,
+  }).from(enhancementLogsTable)
+    .orderBy(desc(enhancementLogsTable.createdAt))
+    .limit(500);
+
+  const imageTypeCounts: Record<string, number> = {};
+  const filterPerformance: Record<string, { total: number; exports: number }> = {};
+  const faceModelCounts: Record<string, number> = {};
+  const eventCounts: Record<string, number> = {};
+  let exportedTotal = 0;
+
+  for (const log of recentLogs) {
+    const metadata = (log.metadata ?? {}) as Record<string, unknown>;
+    const eventType = typeof metadata.eventType === "string" ? metadata.eventType : "enhancement";
+    eventCounts[eventType] = (eventCounts[eventType] ?? 0) + 1;
+
+    const imageType = typeof metadata.imageType === "string"
+      ? metadata.imageType
+      : Array.isArray(metadata.detectedSubjects) && metadata.detectedSubjects.length > 0
+        ? String(metadata.detectedSubjects[0])
+        : "general";
+    imageTypeCounts[imageType] = (imageTypeCounts[imageType] ?? 0) + 1;
+
+    const faceModel = typeof metadata.recommendedFaceModel === "string" ? metadata.recommendedFaceModel : null;
+    if (faceModel) faceModelCounts[faceModel] = (faceModelCounts[faceModel] ?? 0) + 1;
+
+    const selectedFilter = typeof metadata.selectedFilter === "string"
+      ? metadata.selectedFilter
+      : typeof metadata.suggestedFilter === "string"
+        ? metadata.suggestedFilter
+        : null;
+    if (selectedFilter) {
+      if (!filterPerformance[selectedFilter]) filterPerformance[selectedFilter] = { total: 0, exports: 0 };
+      filterPerformance[selectedFilter].total += 1;
+      if (metadata.exported === true || eventType === "export") filterPerformance[selectedFilter].exports += 1;
+    }
+
+    if (metadata.exported === true || eventType === "export") exportedTotal += 1;
+  }
+
   // System health summary
   const healthyKeys = providerPool.healthy;
   const totalKeys = providerPool.total;
@@ -308,8 +353,27 @@ router.get("/admin/ai-insights", requireAuth, requireAdmin, async (_req, res): P
       const totals = Object.values(enhancementPerf).reduce((acc, p) => ({ c: acc.c + p.completed, t: acc.t + p.total }), { c: 0, t: 0 });
       return totals.t > 0 ? Math.round((totals.c / totals.t) * 100) : 0;
     })(),
+    metadataInsights: {
+      imageTypes: Object.entries(imageTypeCounts)
+        .sort(([, a], [, b]) => b - a)
+        .map(([type, total]) => ({ type, total }))
+        .slice(0, 6),
+      faceModels: Object.entries(faceModelCounts)
+        .sort(([, a], [, b]) => b - a)
+        .map(([model, total]) => ({ model, total })),
+      filters: Object.entries(filterPerformance)
+        .map(([filter, stats]) => ({
+          filter,
+          ...stats,
+          exportRate: stats.total > 0 ? Math.round((stats.exports / stats.total) * 100) : 0,
+        }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 8),
+      events: eventCounts,
+      exportedTotal,
+    },
     cacheStats: {
-      note: "Enhancement cache is in-memory, stats available via /health endpoint",
+      note: "Enhancement cache now covers repeated local and restoration requests in-memory.",
     },
     generatedAt: new Date().toISOString(),
   });

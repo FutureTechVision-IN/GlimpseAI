@@ -48,6 +48,10 @@ function convertAmount(amountInr: number, targetCurrency: SupportedCurrency): nu
   return Math.round(amountInr * INR_TO_USD_RATE * 100) / 100; // Round to 2 decimal places
 }
 
+function toCanonicalUsd(amountInr: number): number {
+  return Math.round(amountInr * INR_TO_USD_RATE * 100) / 100;
+}
+
 let razorpay: Razorpay | null = null;
 try {
   if (RAZORPAY_KEY_ID !== "rzp_test_placeholder") {
@@ -62,6 +66,26 @@ try {
 } catch (err) {
   logger.warn({ err }, "Failed to initialize Razorpay SDK");
 }
+
+router.get("/payments/pricing-context", async (req: AuthRequest, res): Promise<void> => {
+  const currency = detectCurrency(req);
+  const config = CURRENCY_CONFIGS[currency];
+  const plans = await db.select().from(plansTable).where(eq(plansTable.isActive, true));
+
+  res.json({
+    detectedCurrency: currency,
+    currencySymbol: config.symbol,
+    exchangeRateInrToUsd: INR_TO_USD_RATE,
+    plans: plans.map((plan) => ({
+      id: plan.id,
+      slug: plan.slug,
+      displayMonthly: convertAmount(plan.priceMonthly, currency),
+      displayAnnual: convertAmount(plan.priceAnnual, currency),
+      canonicalMonthlyUsd: toCanonicalUsd(plan.priceMonthly),
+      canonicalAnnualUsd: toCanonicalUsd(plan.priceAnnual),
+    })),
+  });
+});
 
 router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const parsed = CreatePaymentOrderBody.safeParse(req.body);
@@ -189,6 +213,7 @@ router.get("/payments/history", requireAuth, async (req: AuthRequest, res): Prom
     userId: p.userId,
     planId: p.planId,
     amount: p.amount,
+    displayAmount: convertAmount(p.amount, (p.currency === "USD" ? "USD" : "INR") as SupportedCurrency),
     currency: p.currency,
     status: p.status,
     razorpayOrderId: p.razorpayOrderId,
