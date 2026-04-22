@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# =============================================================================
+# GlimpseAI Pre-Push Secret Scanner
+# Second line of defence — scans commits being pushed for secrets.
+# Runs BEFORE anything is sent to the remote.
+# =============================================================================
+
+set -e
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+BLOCKED=0
+REMOTE="$1"
+REMOTE_URL="$2"
+
+SECRET_PATTERNS=(
+  'sk-or-v[0-9]-[0-9a-f]{60,}'
+  'AIzaSy[0-9A-Za-z_-]{33}'
+  'AQ\.Ab8[A-Za-z0-9_-]{10,}'
+  'rzp_live_[A-Za-z0-9]{14,}'
+  'ghp_[A-Za-z0-9]{36}'
+  'github_pat_[A-Za-z0-9_]{82}'
+  'AKIA[0-9A-Z]{16}'
+  'sk-[A-Za-z0-9]{48}'
+)
+
+while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
+  # Skip branch deletions
+  if [ "$LOCAL_SHA" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  # Determine the range of new commits
+  if [ "$REMOTE_SHA" = "0000000000000000000000000000000000000000" ]; then
+    RANGE="$LOCAL_SHA"
+    COMMITS=$(git rev-list "$LOCAL_SHA" 2>/dev/null | head -50)
+  else
+    RANGE="$REMOTE_SHA..$LOCAL_SHA"
+    COMMITS=$(git rev-list "$RANGE" 2>/dev/null)
+  fi
+
+  for COMMIT in $COMMITS; do
+    # Check if .env is in this commit's tree
+    ENV_IN_TREE=$(git ls-tree -r --name-only "$COMMIT" | grep -E '(^|/)\.env(\.|$)' | grep -v '\.env\.example' || true)
+    if [ -n "$ENV_IN_TREE" ]; then
+      echo -e "${RED}[SECURITY BLOCK] .env found in commit ${COMMIT:0:8} for ref ${REMOTE_REF}${NC}"
+      BLOCKED=1
+    fi
+
+    # Scan commit diff for secret patterns
+    DIFF=$(git show "$COMMIT" --format="" 2>/dev/null || true)
+    for pattern in "${SECRET_PATTERNS[@]}"; do
+      MATCH=$(echo "$DIFF" | grep -oE "^\+.*$pattern" | head -1 || true)
+      if [ -n "$MATCH" ]; then
+        echo -e "${RED}[SECURITY BLOCK] Secret pattern '${pattern}' in commit ${COMMIT:0:8}${NC}"
+        BLOCKED=1
+      fi
+    done
+  done
+done
+
+if [ "$BLOCKED" -eq 1 ]; then
+  echo ""
+  echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${RED}║  PUSH BLOCKED: Secrets detected in commits.              ║${NC}"
+  echo -e "${RED}║  Clean your history with: git filter-branch or BFG Repo  ║${NC}"
+  echo -e "${RED}║  Cleaner before pushing.                                 ║${NC}"
+  echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
+  exit 1
+fi
+
+echo -e "${GREEN}[pre-push] Secret scan passed for remote: ${REMOTE}${NC}"
+exit 0
