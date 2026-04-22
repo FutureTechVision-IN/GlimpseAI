@@ -118,8 +118,14 @@ interface AISuggestion {
   description: string;
   suggestedEnhancement: string;
   suggestedFilter?: string | null;
+  recommendedFilters?: string[];
   detectedSubjects: string[];
   confidence: number;
+  faceDetected?: boolean;
+  recommendedFaceModel?: "gfpgan" | "codeformer" | "auto";
+  detectedDamageLevel?: "none" | "mild" | "moderate" | "severe";
+  compareMode?: "peek" | "side_by_side" | "both";
+  analysisNotes?: string[];
 }
 
 interface EditorSnapshot {
@@ -526,6 +532,7 @@ export default function Editor() {
 
   // AI Analysis
   const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null);
+  const [restorationModelOverride, setRestorationModelOverride] = useState<"gfpgan" | "codeformer" | "auto" | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
   const [splitCompare, setSplitCompare] = useState(false);
@@ -541,6 +548,9 @@ export default function Editor() {
 
   // Filter gallery scroll
   const [showAllFilters, setShowAllFilters] = useState(false);
+
+  // Complementary filter suggestions shown after enhancement completes
+  const [suggestedFilters, setSuggestedFilters] = useState<string[]>([]);
 
   // AI Power-Up panel (below image)
   const [showPowerUp, setShowPowerUp] = useState(false);
@@ -655,6 +665,23 @@ export default function Editor() {
       upscaleChainRef.current = false;
       toast({ title: "Enhancement complete!", description: upscaleAfter ? "Enhancement + upscale applied!" : "Your media has been successfully enhanced." });
 
+      // Suggest complementary filters based on the enhancement type applied
+      const filterMap: Record<string, string[]> = {
+        portrait: ["portrait", "airy", "warm_tone"],
+        beauty: ["portrait", "fresh", "pastel"],
+        skin_retouch: ["portrait", "matte", "airy"],
+        face_restore: ["vivid", "warm_tone", "fresh"],
+        auto_face: ["vivid", "warm_tone", "portrait"],
+        old_photo_restore: ["vintage", "film", "warm_tone"],
+        codeformer: ["vivid", "fresh", "warm_tone"],
+        color_grade_cinematic: ["cinematic", "moody", "dramatic"],
+        color_grade_warm: ["goldenhour", "sunset", "ember"],
+        color_grade_cool: ["arctic", "cool_tone", "matte"],
+        lighting_enhance: ["hdr", "vivid", "dramatic"],
+        auto: ["vivid", "cinematic", "fresh"],
+      };
+      setSuggestedFilters(filterMap[enhancementType] ?? []);
+
       // Save to local history (photos only, max 5)
       if (studioMode === "photo" && currentJob.processedUrl) {
         saveToHistory({
@@ -681,6 +708,8 @@ export default function Editor() {
       {
         onSuccess: (result) => {
           setAiSuggestion(result as AISuggestion);
+          setRestorationModelOverride((result as AISuggestion).recommendedFaceModel ?? null);
+          setSuggestedFilters((result as AISuggestion).recommendedFilters ?? []);
           setIsAnalyzing(false);
           // Add AI message to chat panel
           const suggestion = result as AISuggestion;
@@ -722,6 +751,7 @@ export default function Editor() {
     setDenoise(false);
     setSelectedFilter(null);
     setAiSuggestion(null);
+    setRestorationModelOverride(null);
     setSkinSmoothing(50);
     setUndoStack([]);
     setChatMessages([]);
@@ -754,8 +784,10 @@ export default function Editor() {
     pushUndo();
     const et = aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType;
     setEnhancementType(et);
-    if (aiSuggestion.suggestedFilter) {
-      const fp = FILTER_PRESETS.find((p) => p.key === aiSuggestion.suggestedFilter || p.serverFilter === aiSuggestion.suggestedFilter);
+    setRestorationModelOverride(aiSuggestion.recommendedFaceModel ?? null);
+    const suggestedFilterKey = aiSuggestion.suggestedFilter ?? aiSuggestion.recommendedFilters?.[0] ?? null;
+    if (suggestedFilterKey) {
+      const fp = FILTER_PRESETS.find((p) => p.key === suggestedFilterKey || p.serverFilter === suggestedFilterKey);
       if (fp) {
         setSelectedFilter(fp.key);
         setFilters(fp.f);
@@ -766,7 +798,7 @@ export default function Editor() {
     // Track
     trackAiEvent({
       ts: Date.now(), action: "applied",
-      enhancement: et, filter: aiSuggestion.suggestedFilter ?? undefined,
+      enhancement: et, filter: suggestedFilterKey ?? undefined,
       imageType: inferImageType(aiSuggestion.detectedSubjects),
       confidence: aiSuggestion.confidence,
     });
@@ -777,6 +809,9 @@ export default function Editor() {
   const applyAlternative = useCallback((et: EnhanceMediaBodyEnhancementType) => {
     pushUndo();
     setEnhancementType(et);
+    if (et !== "auto_face" && et !== "face_restore" && et !== "face_restore_hd" && et !== "old_photo_restore" && et !== "hybrid") {
+      setRestorationModelOverride(null);
+    }
     if (aiSuggestion) {
       trackAiEvent({
         ts: Date.now(), action: "applied",
@@ -792,6 +827,20 @@ export default function Editor() {
   const handleExport = useCallback(() => {
     if (processStage !== "completed" || !currentJob?.processedUrl) return;
     pendingExportRef.current = false;
+    const token = localStorage.getItem("glimpse_token");
+    fetch("/api/media/export", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        jobId: currentJob.id,
+        enhancementType,
+        selectedFilter,
+        exportedFormat: file?.type ?? "image/jpeg",
+      }),
+    }).catch(() => {});
     try {
       const dataUri = currentJob.processedUrl;
       const byteString = atob(dataUri.split(",")[1] ?? dataUri);
@@ -816,7 +865,7 @@ export default function Editor() {
       window.open(currentJob.processedUrl!, "_blank");
       toast({ title: "Download", description: "Image opened in a new tab. Right-click to save." });
     }
-  }, [processStage, currentJob?.processedUrl, file?.name, toast]);
+  }, [processStage, currentJob?.processedUrl, currentJob?.id, enhancementType, selectedFilter, file?.name, file?.type, toast]);
 
   const handleProcess = useCallback(async () => {
     if (!file || !base64Data) return;
@@ -878,6 +927,13 @@ export default function Editor() {
       if (filters.hue !== 0) settings.hue = filters.hue;
     }
 
+    if (
+      (effectiveType === "auto_face" || effectiveType === "face_restore" || effectiveType === "face_restore_hd" || effectiveType === "old_photo_restore" || effectiveType === "hybrid") &&
+      restorationModelOverride
+    ) {
+      settings.restorationModel = restorationModelOverride;
+    }
+
     setProcessStage("uploading");
     uploadMedia.mutate(
       { data: { filename: file.name, mimeType: file.type, size: file.size, mediaType, base64Data: finalBase64 } },
@@ -906,7 +962,7 @@ export default function Editor() {
         },
       },
     );
-  }, [file, base64Data, enhancementType, mediaType, transform, filters, cropBox, cropEnabled, stabilize, presetId, editorMode, selectedFilter, skinSmoothing]);
+  }, [file, base64Data, enhancementType, mediaType, transform, filters, cropBox, cropEnabled, stabilize, presetId, editorMode, selectedFilter, skinSmoothing, restorationModelOverride]);
 
   // Process & Export — for staged state: trigger processing then auto-download
   const handleProcessAndExport = useCallback(() => {
@@ -945,9 +1001,11 @@ export default function Editor() {
     setStabilize(false); setDenoise(false);
     setVideoSpeed(1.0); setTrimStart(0); setTrimEnd(100); setMuteAudio(false); setVideoColorGrade(null);
     setSelectedFilter(null); setAiSuggestion(null);
+    setRestorationModelOverride(null);
     setSkinSmoothing(50); uploadedJobIdRef.current = null;
     setUndoStack([]); setChatMessages([]); setShowAiChat(false);
     setUpscaleAfter(null); upscaleChainRef.current = false;
+    setSuggestedFilters([]);
   };
 
   const isProcessing = processStage === "uploading" || processStage === "processing";
@@ -961,7 +1019,14 @@ export default function Editor() {
   const previewStyle = buildPreviewStyle(transform, filters, cropEnabled ? cropBox : DEFAULT_CROP, activePresetCssExtra);
   const stageInfo = STAGE_INFO[processStage];
 
-  const visibleFilters = showAllFilters ? FILTER_PRESETS : FILTER_PRESETS.slice(0, 12);
+  const defaultVisibleFilterCount = typeof window !== "undefined"
+    ? window.innerWidth < 768
+      ? 12
+      : window.innerHeight > 900
+        ? 24
+        : 18
+    : 18;
+  const visibleFilters = showAllFilters ? FILTER_PRESETS : FILTER_PRESETS.slice(0, defaultVisibleFilterCount);
 
   const ENHANCEMENT_TYPES: { type: EnhanceMediaBodyEnhancementType; label: string; icon: React.ReactNode }[] = [
     { type: "auto",                   label: "Auto",        icon: <Wand2       className="w-3 h-3" /> },
@@ -1051,17 +1116,46 @@ export default function Editor() {
                                 <Badge variant="outline" className="text-[9px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-4 capitalize">
                                   {inferImageType(aiSuggestion.detectedSubjects)}
                                 </Badge>
+                                {aiSuggestion.faceDetected && (
+                                  <Badge variant="outline" className="text-[9px] border-emerald-500/40 text-emerald-300 px-1.5 py-0 h-4">
+                                    Auto Face Default
+                                  </Badge>
+                                )}
                               </div>
                               <p className="text-xs text-zinc-300 leading-relaxed mb-2">{aiSuggestion.description}</p>
+                              {aiSuggestion.recommendedFaceModel && (
+                                <div className="mb-2 flex flex-wrap gap-1">
+                                  <Badge variant="outline" className="text-[9px] border-amber-500/40 text-amber-300 px-1.5 py-0 h-4 uppercase">
+                                    Best Face Model: {aiSuggestion.recommendedFaceModel}
+                                  </Badge>
+                                  {aiSuggestion.detectedDamageLevel && aiSuggestion.detectedDamageLevel !== "none" && (
+                                    <Badge variant="outline" className="text-[9px] border-zinc-600 text-zinc-300 px-1.5 py-0 h-4 capitalize">
+                                      Damage: {aiSuggestion.detectedDamageLevel}
+                                    </Badge>
+                                  )}
+                                </div>
+                              )}
                               <div className="flex flex-wrap gap-1 mb-2">
                                 {aiSuggestion.detectedSubjects.slice(0, 4).map((s) => (
                                   <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
                                 ))}
                               </div>
+                              {aiSuggestion.recommendedFilters && aiSuggestion.recommendedFilters.length > 0 && (
+                                <div className="mb-2">
+                                  <p className="text-[10px] text-zinc-500 mb-1">Suggested finishing filters</p>
+                                  <div className="flex flex-wrap gap-1">
+                                    {aiSuggestion.recommendedFilters.map((filterKey) => (
+                                      <Badge key={filterKey} variant="outline" className="text-[9px] border-cyan-500/30 text-cyan-300 px-1.5 py-0 h-4">
+                                        {FILTER_PRESETS.find((preset) => preset.key === filterKey)?.name ?? filterKey}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                               <Button size="sm" className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white w-full font-medium" onClick={applyAiSuggestion}>
                                 <Sparkles className="w-4 h-4 mr-1.5" />
                                 Apply: {aiSuggestion.suggestedEnhancement}
-                                {aiSuggestion.suggestedFilter && ` + ${aiSuggestion.suggestedFilter}`}
+                                {(aiSuggestion.suggestedFilter ?? aiSuggestion.recommendedFilters?.[0]) && ` + ${aiSuggestion.suggestedFilter ?? aiSuggestion.recommendedFilters?.[0]}`}
                               </Button>
                               {/* Alternative suggestions based on image type */}
                               {(() => {
@@ -1107,7 +1201,9 @@ export default function Editor() {
                                 </div>
                               </TooltipTrigger>
                               <TooltipContent side="bottom" className="text-xs max-w-[200px]">
-                                {aiSuggestion.confidence >= 0.85
+                                {aiSuggestion.faceDetected
+                                  ? "Face detected — Auto Face AI is intentionally promoted as the safest default and confidence is held at 95% or above."
+                                  : aiSuggestion.confidence >= 0.85
                                   ? "High confidence — AI is very sure this enhancement will look great"
                                   : aiSuggestion.confidence >= 0.6
                                     ? "Medium confidence — this enhancement should produce good results"
@@ -1244,9 +1340,25 @@ export default function Editor() {
                       <div className="flex items-center justify-between">
                         <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
                         <button onClick={() => setShowAllFilters(!showAllFilters)} className="text-[11px] text-teal-500 hover:text-teal-400">
-                          {showAllFilters ? "Less" : `All ${FILTER_PRESETS.length}`}
+                          {showAllFilters ? "Collapse filters" : `Show all filters (${FILTER_PRESETS.length})`}
                         </button>
                       </div>
+                      {suggestedFilters.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                          <span className="text-[10px] text-teal-400/70">Suggested:</span>
+                          {suggestedFilters.map((key) => {
+                            const p = FILTER_PRESETS.find((f) => f.key === key);
+                            if (!p) return null;
+                            return (
+                              <button key={key}
+                                className={cn("text-[10px] px-2 py-0.5 rounded-full border transition-colors",
+                                  selectedFilter === key ? "border-teal-500 bg-teal-500/20 text-teal-300" : "border-zinc-700 text-zinc-400 hover:border-teal-500/50 hover:text-teal-300")}
+                                onClick={() => { pushUndo(); setSelectedFilter(key); setFilters(p.f); if (p.serverFilter) setEnhancementType("filter"); }}
+                              >{p.name}</button>
+                            );
+                          })}
+                        </div>
+                      )}
                       <div className="grid grid-cols-6 gap-1">
                         {visibleFilters.map((p) => {
                           const filterLocked = isFeatureLocked("filter", p.key);
@@ -1763,24 +1875,34 @@ export default function Editor() {
                       </Tooltip>
                       {/* AI chat toggle moved to floating button */}
                       {isCompleted && (
-                        <Button variant="outline" size="sm"
-                          className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", showCompare && "border-teal-500 text-teal-300")}
-                          onMouseDown={() => setShowCompare(true)}
-                          onMouseUp={() => setShowCompare(false)}
-                          onMouseLeave={() => setShowCompare(false)}
-                          onTouchStart={() => setShowCompare(true)}
-                          onTouchEnd={() => setShowCompare(false)}
-                        >
-                          <Eye className="w-3.5 h-3.5 mr-1.5" />Hold to compare
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="outline" size="sm"
+                              className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", showCompare && "border-teal-500 text-teal-300")}
+                              onMouseDown={() => setShowCompare(true)}
+                              onMouseUp={() => setShowCompare(false)}
+                              onMouseLeave={() => setShowCompare(false)}
+                              onTouchStart={() => setShowCompare(true)}
+                              onTouchEnd={() => setShowCompare(false)}
+                            >
+                              <Eye className="w-3.5 h-3.5 mr-1.5" />Quick Peek
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom"><span className="text-xs">Press and hold to briefly reveal the original without leaving the editor</span></TooltipContent>
+                        </Tooltip>
                       )}
                       {isCompleted && currentJob?.processedUrl && (
-                        <Button variant="outline" size="sm"
-                          className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", splitCompare && "border-teal-500 text-teal-300")}
-                          onClick={() => setSplitCompare(!splitCompare)}
-                        >
-                          <ArrowLeftRight className="w-3.5 h-3.5 mr-1.5" />Side-by-Side
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="outline" size="sm"
+                              className={cn("bg-black/50 backdrop-blur border-white/10 hover:bg-white/10 text-xs h-8", splitCompare && "border-teal-500 text-teal-300")}
+                              onClick={() => setSplitCompare(!splitCompare)}
+                            >
+                              <ArrowLeftRight className="w-3.5 h-3.5 mr-1.5" />Inspect Split
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom"><span className="text-xs">Open a persistent side-by-side view for careful before/after inspection</span></TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                     {isCompleted && currentJob?.processedUrl ? (
@@ -1816,7 +1938,7 @@ export default function Editor() {
                   </div>
 
                   {/* Image preview */}
-                  <div className="relative max-w-[calc(100%-2rem)] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
+                  <div className="relative w-full max-w-[calc(100%-2rem)] max-h-[calc(100vh-18rem)] lg:max-h-[calc(100vh-12rem)] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
                     <AnimatePresence>
                       {isProcessing && (
                         <motion.div

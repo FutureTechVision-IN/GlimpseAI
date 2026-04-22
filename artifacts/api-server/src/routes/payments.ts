@@ -12,6 +12,46 @@ const router: IRouter = Router();
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID ?? "rzp_test_placeholder";
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET ?? "placeholder_secret";
 
+// ---------------------------------------------------------------------------
+// Currency Configuration — supports INR (default) and USD
+// Plans store prices in INR (paise-friendly). USD conversion uses a static rate
+// that can be overridden via env. Production should use a live FX API.
+// ---------------------------------------------------------------------------
+type SupportedCurrency = "INR" | "USD";
+
+const INR_TO_USD_RATE = parseFloat(process.env.INR_TO_USD_RATE ?? "0.012"); // ~83 INR per USD
+const CURRENCY_CONFIGS: Record<SupportedCurrency, { subunitMultiplier: number; symbol: string }> = {
+  INR: { subunitMultiplier: 100, symbol: "₹" },   // 1 INR = 100 paise
+  USD: { subunitMultiplier: 100, symbol: "$" },     // 1 USD = 100 cents
+};
+
+/**
+ * Detect currency from request headers or explicit parameter.
+ * Priority: explicit currency param > Accept-Language > default INR
+ */
+function detectCurrency(req: AuthRequest, explicitCurrency?: string): SupportedCurrency {
+  if (explicitCurrency && (explicitCurrency === "USD" || explicitCurrency === "INR")) {
+    return explicitCurrency;
+  }
+  // Geo-hint from Accept-Language or CF-IPCountry (Cloudflare) / X-Country header
+  const country = (req.headers["cf-ipcountry"] ?? req.headers["x-country"] ?? "").toString().toUpperCase();
+  if (country && country !== "IN") return "USD";
+  const lang = (req.headers["accept-language"] ?? "").toString().toLowerCase();
+  if (lang.includes("en-in") || lang.includes("hi")) return "INR";
+  if (lang && !lang.includes("en-in")) return "USD";
+  return "INR";
+}
+
+/** Convert INR amount to target currency (plans store prices in INR) */
+function convertAmount(amountInr: number, targetCurrency: SupportedCurrency): number {
+  if (targetCurrency === "INR") return amountInr;
+  return Math.round(amountInr * INR_TO_USD_RATE * 100) / 100; // Round to 2 decimal places
+}
+
+function toCanonicalUsd(amountInr: number): number {
+  return Math.round(amountInr * INR_TO_USD_RATE * 100) / 100;
+}
+
 let razorpay: Razorpay | null = null;
 try {
   if (RAZORPAY_KEY_ID !== "rzp_test_placeholder") {
@@ -27,6 +67,26 @@ try {
   logger.warn({ err }, "Failed to initialize Razorpay SDK");
 }
 
+router.get("/payments/pricing-context", async (req: AuthRequest, res): Promise<void> => {
+  const currency = detectCurrency(req);
+  const config = CURRENCY_CONFIGS[currency];
+  const plans = await db.select().from(plansTable).where(eq(plansTable.isActive, true));
+
+  res.json({
+    detectedCurrency: currency,
+    currencySymbol: config.symbol,
+    exchangeRateInrToUsd: INR_TO_USD_RATE,
+    plans: plans.map((plan) => ({
+      id: plan.id,
+      slug: plan.slug,
+      displayMonthly: convertAmount(plan.priceMonthly, currency),
+      displayAnnual: convertAmount(plan.priceAnnual, currency),
+      canonicalMonthlyUsd: toCanonicalUsd(plan.priceMonthly),
+      canonicalAnnualUsd: toCanonicalUsd(plan.priceAnnual),
+    })),
+  });
+});
+
 router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const parsed = CreatePaymentOrderBody.safeParse(req.body);
   if (!parsed.success) {
@@ -35,27 +95,32 @@ router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res)
   }
 
   const { planId, billingPeriod } = parsed.data;
+  const requestedCurrency = (req.body as Record<string, unknown>)?.currency as string | undefined;
   const [plan] = await db.select().from(plansTable).where(eq(plansTable.id, planId));
   if (!plan) {
     res.status(404).json({ error: "Plan not found" });
     return;
   }
 
-  const amount = billingPeriod === "annual" ? plan.priceAnnual : plan.priceMonthly;
+  const amountInr = billingPeriod === "annual" ? plan.priceAnnual : plan.priceMonthly;
+  const currency = detectCurrency(req, requestedCurrency);
+  const displayAmount = convertAmount(amountInr, currency);
+  const config = CURRENCY_CONFIGS[currency];
 
   let orderId: string;
 
   if (razorpay) {
-    // Real Razorpay order creation
+    // Real Razorpay order creation — Razorpay expects smallest currency unit
     try {
       const order = await razorpay.orders.create({
-        amount: amount * 100, // Razorpay expects paise (1 INR = 100 paise)
-        currency: "INR",
+        amount: Math.round(displayAmount * config.subunitMultiplier),
+        currency,
         receipt: `glimpse_${req.userId}_${Date.now()}`,
         notes: {
           userId: String(req.userId),
           planId: String(planId),
           billingPeriod,
+          originalAmountInr: String(amountInr),
         },
       });
       orderId = order.id;
@@ -72,8 +137,8 @@ router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res)
   await db.insert(paymentsTable).values({
     userId: req.userId!,
     planId,
-    amount,
-    currency: "INR",
+    amount: amountInr, // Always store in INR for consistency
+    currency,
     status: "pending",
     razorpayOrderId: orderId,
     billingPeriod,
@@ -81,8 +146,9 @@ router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res)
 
   res.json({
     orderId,
-    amount,
-    currency: "INR",
+    amount: displayAmount,
+    currency,
+    currencySymbol: config.symbol,
     keyId: RAZORPAY_KEY_ID,
   });
 });
@@ -147,6 +213,7 @@ router.get("/payments/history", requireAuth, async (req: AuthRequest, res): Prom
     userId: p.userId,
     planId: p.planId,
     amount: p.amount,
+    displayAmount: convertAmount(p.amount, (p.currency === "USD" ? "USD" : "INR") as SupportedCurrency),
     currency: p.currency,
     status: p.status,
     razorpayOrderId: p.razorpayOrderId,

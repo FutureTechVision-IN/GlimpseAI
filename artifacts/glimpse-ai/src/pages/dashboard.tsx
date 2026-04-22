@@ -25,7 +25,8 @@ function getGreeting() {
 export default function Dashboard() {
   const { user } = useAuth();
   const { data: usage, isLoading: isLoadingUsage } = useGetUserUsage();
-  const { data: recentJobs, isLoading: isLoadingJobs } = useListMediaJobs({ status: "all" });
+  const { data: rawJobs, isLoading: isLoadingJobs } = useListMediaJobs({ status: "all" });
+  const recentJobs = Array.isArray(rawJobs) ? rawJobs : [];
 
   const creditsUsed = usage?.creditsUsed || 0;
   const creditsLimit = usage?.creditsLimit || 1;
@@ -37,7 +38,7 @@ export default function Dashboard() {
 
   // Enhancement analytics — aggregate usage by type
   const enhancementAnalytics = useMemo(() => {
-    if (!recentJobs?.length) return [];
+    if (!recentJobs.length) return [];
     const counts: Record<string, number> = {};
     for (const job of recentJobs) {
       const type = job.enhancementType || "auto";
@@ -51,7 +52,7 @@ export default function Dashboard() {
 
   // Detailed stats
   const detailedStats = useMemo(() => {
-    if (!recentJobs?.length) return null;
+    if (!recentJobs.length) return null;
     const completed = recentJobs.filter(j => j.status === "completed").length;
     const failed = recentJobs.filter(j => j.status === "failed").length;
     const total = recentJobs.length;
