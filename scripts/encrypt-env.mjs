@@ -61,7 +61,7 @@ const sensitivePatterns = [
   /^SESSION_SECRET=/,
   /^ADMIN_PASSWORD=/,
   /^DATABASE_URL=/,
-  /^GERMANY_OPENROUTER_/,
+  /^NVIDIA_API_KEY=/,
 ];
 
 const lines = envContent.split("\n");

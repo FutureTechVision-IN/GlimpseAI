@@ -1,6 +1,8 @@
 import { Router, IRouter } from "express";
 import { requireAuth, requireAdmin } from "../middlewares/auth";
 import { providerKeyManager } from "../lib/provider-key-manager";
+import { loadSecrets } from "../lib/key-vault";
+import { aiProvider } from "../lib/ai-provider";
 import { db, apiKeysTable, apiKeyDailyUsageTable, enhancementLogsTable, mediaJobsTable, usersTable } from "@workspace/db";
 import { eq, desc, sql, count, sum, and } from "drizzle-orm";
 
@@ -8,10 +10,15 @@ const router: IRouter = Router();
 
 // Load keys from .env and validate them
 router.post("/admin/provider-keys/load-env", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  // Re-read .env / .env.enc into process.env so newly-added keys are picked up
+  const secrets = loadSecrets();
+  // Also refresh the in-memory AIProviderService
+  aiProvider.loadFromEnv();
+
   const loaded = await providerKeyManager.loadFromEnv();
   const validation = await providerKeyManager.validateAll();
   providerKeyManager.startHealthChecks();
-  res.json({ loaded, validation });
+  res.json({ secrets, loaded, validation });
 });
 
 // Bulk import keys
@@ -245,6 +252,48 @@ router.get("/admin/analytics/monthly-summary", requireAuth, requireAdmin, async 
 // Detailed report: which keys are used, which aren't, priority cascade status
 router.get("/admin/provider-keys/usage-report", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
   res.json(providerKeyManager.getUsageReport());
+});
+
+// ─── Diagnostics: show which env vars are present / missing ────────────────
+router.get("/admin/provider-keys/diagnostics", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  const envVarChecks: { name: string; found: boolean; keyCount: number }[] = [];
+
+  // Check all PROVIDER_KEYS_* vars
+  const providerKeyVars = Object.keys(process.env).filter(k => k.startsWith("PROVIDER_KEYS_"));
+  if (providerKeyVars.length === 0) {
+    envVarChecks.push({ name: "PROVIDER_KEYS_* (any)", found: false, keyCount: 0 });
+  } else {
+    for (const v of providerKeyVars) {
+      const keys = (process.env[v] ?? "").split(",").filter(k => k.trim().startsWith("sk-or-"));
+      envVarChecks.push({ name: v, found: true, keyCount: keys.length });
+    }
+  }
+
+  // Check Gemini
+  const geminiRaw = process.env.GEMINI_API_KEYS ?? "";
+  const geminiKeys = geminiRaw.split(",").filter(k => k.trim().length > 10);
+  envVarChecks.push({ name: "GEMINI_API_KEYS", found: !!geminiRaw, keyCount: geminiKeys.length });
+
+  // Check NVIDIA
+  const nvidiaKey = (process.env.NVIDIA_API_KEY ?? "").trim();
+  envVarChecks.push({ name: "NVIDIA_API_KEY", found: nvidiaKey.startsWith("nvapi-"), keyCount: nvidiaKey.startsWith("nvapi-") ? 1 : 0 });
+
+  // Check .env file existence
+  const { existsSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const envPath = resolve(process.cwd(), ".env");
+  const encPath = resolve(process.cwd(), ".env.enc");
+
+  res.json({
+    envFile: existsSync(envPath),
+    envEncFile: existsSync(encPath),
+    encryptionSecretSet: !!process.env.KEY_ENCRYPTION_SECRET,
+    cwd: process.cwd(),
+    envVarChecks,
+    totalEnvKeysFound: envVarChecks.reduce((s, c) => s + c.keyCount, 0),
+    aiProviderKeys: aiProvider.getPoolStats().total,
+    providerManagerKeys: providerKeyManager.getStatus().totalKeys,
+  });
 });
 
 export default router;

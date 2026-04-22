@@ -121,7 +121,7 @@ export const feedbackAccumulator = FeedbackAccumulator.getInstance();
 const OPENROUTER_VISION_MODELS = [
   // Primary tier — new models with strong vision & reasoning
   "moonshotai/kimi-k2.5",               // top vision+reasoning, supports image input
-  "openrouter/elephant-alpha",           // OpenRouter flagship multimodal
+  "inclusionai/ling-2.6-flash:free",     // was elephant-alpha, revealed as Ling-2.6
   "bytedance/seedance-2.0",              // video+image capable
   "alibaba/wan-2.7",                     // video enhancement model
   // Standard tier — proven free-tier models
@@ -475,6 +475,31 @@ class AIProviderService {
   async analyzeImage(base64Data: string, mimeType: string, userTier?: UserTier): Promise<AnalysisResult | null> {
     // 1. Always run local analysis first — produces 0.75–0.92 confidence regardless of API status
     const localResult = await this.localAnalyzeImage(base64Data, mimeType);
+
+    // 1b. Restoration-aware enhancement: if local analysis detects portrait/face
+    // AND restoration sidecar is available, suggest face_restore for better results
+    if (localResult.suggestedEnhancement === "portrait" || localResult.detectedSubjects.includes("face")) {
+      try {
+        const healthRes = await fetchWithTimeout(
+          `http://localhost:${process.env.RESTORATION_PORT || "7860"}/health`,
+          { timeout: 3000 },
+        );
+        if (healthRes.ok) {
+          const health = await healthRes.json() as { capabilities?: string[] };
+          if (health.capabilities?.includes("face_restore")) {
+            // Upgrade portrait → face_restore when sidecar is available (ML is superior)
+            localResult.suggestedEnhancement = "face_restore";
+            localResult.description = localResult.description.replace(
+              /Portrait Polish will/,
+              "AI face restoration (GFPGAN/CodeFormer) will",
+            );
+            localResult.confidence = Math.min(0.95, localResult.confidence + 0.05);
+          }
+        }
+      } catch {
+        // Sidecar unreachable — keep local recommendation
+      }
+    }
 
     // 2. Try to enrich with AI vision (better description, detects unseen context)
     const thumb = await this.createAnalysisThumbnail(base64Data, mimeType);

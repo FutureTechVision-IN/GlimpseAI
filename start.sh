@@ -320,8 +320,9 @@ start_restoration_native() {
   log "Starting Restoration Service on port ${RESTORATION_PORT}"
   (
     cd "${ROOT_DIR}/services/restoration"
-    source "${venv_dir}/bin/activate"
-    RESTORATION_PORT="${RESTORATION_PORT}" python server.py
+    # Use the venv's python directly — activation can break if the project was moved
+    # (activate hardcodes VIRTUAL_ENV to the original path)
+    RESTORATION_PORT="${RESTORATION_PORT}" "${venv_dir}/bin/python" server.py
   ) &
   record_pid "restoration" "$!"
 }

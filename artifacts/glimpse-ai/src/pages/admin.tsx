@@ -1200,7 +1200,7 @@ function ApiKeysSection() {
                   <TableCell>
                     <Badge variant="outline" className={`text-xs ${
                       k.group === "primary" ? "border-violet-500/40 text-violet-400" :
-                      k.group === "germany" ? "border-amber-500/40 text-amber-400" :
+                      k.group === "nvidia" ? "border-orange-500/40 text-orange-400" :
                       k.group === "gemini" ? "border-blue-500/40 text-blue-400" :
                       "border-zinc-600 text-zinc-400"
                     }`}>
@@ -1345,7 +1345,7 @@ function ApiKeysSection() {
                   <div key={g.group} className="bg-zinc-800/60 rounded-md p-2">
                     <Badge variant="outline" className={`text-[10px] mb-1 ${
                       g.group === "primary" ? "border-violet-500/40 text-violet-400" :
-                      g.group === "germany" ? "border-amber-500/40 text-amber-400" :
+                      g.group === "nvidia" ? "border-orange-500/40 text-orange-400" :
                       g.group === "gemini" ? "border-blue-500/40 text-blue-400" :
                       "border-zinc-600 text-zinc-400"
                     }`}>{g.group}</Badge>

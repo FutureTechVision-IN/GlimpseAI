@@ -15,6 +15,5 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 
 echo "Starting GlimpseAI Restoration Service on port $PORT..."
-source "$VENV_DIR/bin/activate"
 export RESTORATION_PORT="$PORT"
-exec python "$SCRIPT_DIR/server.py"
+exec "$VENV_DIR/bin/python" "$SCRIPT_DIR/server.py"

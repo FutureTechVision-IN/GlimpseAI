@@ -17,6 +17,7 @@ Runs as a local service on port 7860, called by the Node.js API server.
 
 import base64
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -27,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import OrderedDict
 from enum import Enum
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -82,6 +84,60 @@ _realesrgan_x4 = None
 _face_detector = None
 
 
+# ─── Result Cache (LRU, content-hash based) ──────────────────────────────────
+class ResultCache:
+    """Thread-safe LRU cache keyed by SHA-256 of (image_bytes + mode + params)."""
+
+    def __init__(self, max_entries: int = 64, max_memory_mb: int = 512):
+        self._cache: OrderedDict[str, tuple[np.ndarray, int, str]] = OrderedDict()
+        self._max_entries = max_entries
+        self._max_memory_bytes = max_memory_mb * 1024 * 1024
+        self._current_bytes = 0
+        self._hits = 0
+        self._misses = 0
+
+    def _make_key(self, img_bytes: bytes, mode: str, model: str, fidelity: float) -> str:
+        h = hashlib.sha256()
+        h.update(img_bytes)
+        h.update(f"{mode}:{model}:{fidelity:.2f}".encode())
+        return h.hexdigest()
+
+    def get(self, img_bytes: bytes, mode: str, model: str, fidelity: float):
+        key = self._make_key(img_bytes, mode, model, fidelity)
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            self._hits += 1
+            return self._cache[key]
+        self._misses += 1
+        return None
+
+    def put(self, img_bytes: bytes, mode: str, model: str, fidelity: float,
+            result: np.ndarray, faces: int, backend: str):
+        key = self._make_key(img_bytes, mode, model, fidelity)
+        entry_bytes = result.nbytes
+        # Evict until we have space
+        while (self._current_bytes + entry_bytes > self._max_memory_bytes
+               or len(self._cache) >= self._max_entries) and self._cache:
+            _, (old_img, _, _) = self._cache.popitem(last=False)
+            self._current_bytes -= old_img.nbytes
+        self._cache[key] = (result, faces, backend)
+        self._current_bytes += entry_bytes
+
+    @property
+    def stats(self) -> dict:
+        total = self._hits + self._misses
+        return {
+            "entries": len(self._cache),
+            "memory_mb": round(self._current_bytes / (1024 * 1024), 1),
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": round(self._hits / total * 100, 1) if total > 0 else 0.0,
+        }
+
+
+_result_cache = ResultCache(max_entries=64, max_memory_mb=512)
+
+
 class RestorationModel(str, Enum):
     """Selectable face restoration backend."""
     GFPGAN = "gfpgan"
@@ -104,10 +160,17 @@ def _get_realesrgan_upsampler(scale: int = 4):
     if not Path(model_path).exists():
         raise RuntimeError(f"RealESRGAN model not found at {model_path}")
 
-    # Use CPU for tile-based processing; avoids MPS/CUDA op-support gaps
-    # tile=256 for CPU: processes image in chunks to avoid OOM on large inputs.
-    # tile=0 (disabled) only makes sense on GPU with large VRAM.
-    tile_size = 0 if DEVICE == "cuda" else 256
+    # Adaptive tile sizing based on device and available memory.
+    # GPU: tile=0 (full image, fastest) if VRAM > 4GB, else tile=400.
+    # CPU/MPS: tile=256 to avoid OOM.
+    if DEVICE == "cuda":
+        try:
+            free_vram = torch.cuda.mem_get_info()[0] / (1024 ** 2)  # MB
+            tile_size = 0 if free_vram > 4096 else 400
+        except Exception:
+            tile_size = 400
+    else:
+        tile_size = 256
     upsampler = RealESRGANer(
         scale=scale,
         model_path=model_path,
@@ -354,6 +417,7 @@ class HealthResponse(BaseModel):
     models_dir: str
     models_available: dict
     capabilities: list[str]
+    cache_stats: Optional[dict] = None
 
 
 # ─── Core Processing Functions ────────────────────────────────────────────────
@@ -375,6 +439,16 @@ def encode_image(img: np.ndarray, quality: int = 92) -> tuple[str, str]:
     return b64, "image/jpeg"
 
 
+def _cleanup_gpu_memory():
+    """Release GPU memory after inference to prevent accumulation."""
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+    elif DEVICE == "mps":
+        # MPS doesn't have empty_cache, but gc helps release Python-side refs
+        import gc
+        gc.collect()
+
+
 def restore_face_gfpgan(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, int]:
     """
     Run GFPGAN face restoration.
@@ -392,6 +466,8 @@ def restore_face_gfpgan(img: np.ndarray, upscale: int = 2) -> tuple[np.ndarray, 
         paste_back=True,
         weight=0.9,  # was 0.5 — raised to 0.9 for strong visible restoration
     )
+
+    _cleanup_gpu_memory()
 
     if restored_img is None:
         logger.warning("GFPGAN returned None — bypassing face restoration")
@@ -476,6 +552,7 @@ def restore_face_codeformer(img: np.ndarray, fidelity: float = 0.5) -> tuple[np.
             restored_img = face_helper.paste_faces_to_input_image(upsample_img=bg_img)
             face_helper.clean_all()
 
+            _cleanup_gpu_memory()
             return restored_img, num_faces
 
         except Exception as e:
@@ -810,6 +887,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Model preload partially failed: %s (will lazy-load on demand)", e)
 
+    # ── Warm-up inference: run a tiny dummy image to JIT-compile all code paths ──
+    try:
+        warmup_start = time.time()
+        dummy = np.zeros((64, 64, 3), dtype=np.uint8)
+        dummy[:] = (128, 128, 128)  # neutral gray
+        # Warm up face detection (fast, no actual faces)
+        detect_faces_with_landmarks(dummy)
+        # Warm up GFPGAN forward pass (will find no faces but exercises the pipeline)
+        if _gfpgan_restorer is not None:
+            restore_face_gfpgan(dummy, upscale=2)
+        _cleanup_gpu_memory()
+        logger.info("Warm-up inference completed in %.1fs", time.time() - warmup_start)
+    except Exception as e:
+        logger.warning("Warm-up inference failed (non-critical): %s", e)
+
     yield
     logger.info("Restoration service shutting down")
 
@@ -840,6 +932,7 @@ async def health():
             "face_detector": "face_analysis" in caps,
         },
         capabilities=caps,
+        cache_stats=_result_cache.stats,
     )
 
 
@@ -961,15 +1054,30 @@ async def restore_image_endpoint(req: RestoreRequest):
     Modes: face_restore, face_restore_hd, codeformer, upscale_2x, upscale_4x, old_photo, auto_face
 
     ML inference runs in a thread so /health stays responsive.
+    Results are cached by content hash to skip redundant inference.
     """
     start = time.time()
     try:
+        img_bytes = base64.b64decode(req.image_base64)
         img = decode_image(req.image_base64)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
     logger.info("Restore request: mode=%s, model=%s, input=%dx%d",
                 req.mode, req.restoration_model, img.shape[1], img.shape[0])
+
+    # ── Cache lookup ──
+    cached = _result_cache.get(img_bytes, req.mode, req.restoration_model, req.fidelity)
+    if cached is not None:
+        result, faces_detected, backend_used = cached
+        b64, mime = encode_image(result)
+        elapsed_ms = int((time.time() - start) * 1000)
+        logger.info("Cache HIT: mode=%s, backend=%s, time=%dms", req.mode, backend_used, elapsed_ms)
+        return RestoreResponse(
+            image_base64=b64, mime_type=mime, processing_ms=elapsed_ms,
+            faces_detected=faces_detected, mode=req.mode, device=DEVICE,
+            restoration_backend=backend_used,
+        )
 
     try:
         result, faces_detected, backend_used, face_analysis = await asyncio.to_thread(
@@ -981,6 +1089,10 @@ async def restore_image_endpoint(req: RestoreRequest):
     except Exception as e:
         logger.error("Restoration failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Restoration failed: {str(e)}")
+
+    # ── Cache store ──
+    _result_cache.put(img_bytes, req.mode, req.restoration_model, req.fidelity,
+                      result, faces_detected, backend_used)
 
     b64, mime = encode_image(result)
     elapsed_ms = int((time.time() - start) * 1000)

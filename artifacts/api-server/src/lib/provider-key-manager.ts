@@ -22,7 +22,7 @@ export interface KeyEntry {
   tier: "free" | "premium";
   status: "active" | "inactive" | "degraded" | "validating";
   priority: number;
-  group: "primary" | "standard" | "germany" | "gemini" | "nvidia";
+  group: "primary" | "standard" | "gemini" | "nvidia";
   totalCalls: number;
   totalErrors: number;
   consecutiveErrors: number;
@@ -42,7 +42,7 @@ const PRIMARY_MODELS: Record<string, string> = {
   // NEW — video-capable models (also support text/vision analysis)
   BYTEDANCE_SEEDANCE_2_0:      "bytedance/seedance-2.0",
   ALIBABA_WAN_2_7:             "alibaba/wan-2.7",
-  OPENROUTER_ELEPHANT_ALPHA:   "openrouter/elephant-alpha",
+  INCLUSIONAI_LING_2_6_FLASH_FREE: "inclusionai/ling-2.6-flash:free",
   MOONSHOTAI_KIMI_K2_5:        "moonshotai/kimi-k2.5",
 };
 
@@ -62,7 +62,7 @@ const SLUG_TO_MODEL: Record<string, string> = {
 };
 
 /** Maps model ID → routing group (used by pickKeyForTier priority cascade) */
-const MODEL_GROUP: Record<string, "primary" | "standard" | "germany"> = {};
+const MODEL_GROUP: Record<string, "primary" | "standard"> = {};
 for (const m of Object.values(PRIMARY_MODELS))  MODEL_GROUP[m] = "primary";
 for (const m of Object.values(STANDARD_MODELS)) MODEL_GROUP[m] = "standard";
 
@@ -77,14 +77,13 @@ const NVIDIA_DIRECT_MODELS: Record<string, { visionCapable: boolean; maxTokens: 
 const VISION_CAPABLE_MODELS = new Set([
   "bytedance/seedance-2.0",
   "alibaba/wan-2.7",
-  "openrouter/elephant-alpha",
+  "inclusionai/ling-2.6-flash:free",
   "moonshotai/kimi-k2.5",
   "stepfun/step-3.5-flash:free",
   "nvidia/nemotron-3-super-120b-a12b:free",
 ]);
 
 const OPENROUTER_BASE = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
-const GERMANY_OPENROUTER_BASE = process.env.GERMANY_OPENROUTER_BASE_URL ?? OPENROUTER_BASE;
 const NVIDIA_BASE = "https://integrate.api.nvidia.com/v1";
 const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_CONSECUTIVE_ERRORS = 3;
@@ -124,18 +123,6 @@ class ProviderKeyManager {
       }
     }
 
-    // ── Germany OpenRouter fallback keys ─────────────────────────────────
-    // Env: GERMANY_OPENROUTER_KEYS=sk-or-v1-xxx,sk-or-v1-yyy,...
-    // These are dedicated higher-limit keys used only when primary keys degrade
-    const germanyRaw = process.env.GERMANY_OPENROUTER_KEYS ?? "";
-    const germanyModel = process.env.GERMANY_OPENROUTER_MODEL ?? "moonshotai/kimi-k2.5";
-    const germanyKeys = germanyRaw.split(",").map((k) => k.trim()).filter(isValidKeyFormat);
-    for (const key of germanyKeys) {
-      await this.upsertKey(key, "openrouter", germanyModel, "premium", "germany");
-      totalKeys++;
-      models.add(germanyModel);
-    }
-
     // ── Gemini keys (last-resort fallback, premium only) ─────────────────
     const geminiRaw = process.env.GEMINI_API_KEYS ?? "";
     const geminiKeys = geminiRaw.split(",").map((k) => k.trim()).filter(isValidKeyFormat);
@@ -165,17 +152,29 @@ class ProviderKeyManager {
     provider: "openrouter" | "gemini" | "nvidia",
     model: string,
     tier: "free" | "premium",
-    group: "primary" | "standard" | "germany" | "gemini" | "nvidia" = "standard",
+    group: "primary" | "standard" | "gemini" | "nvidia" = "standard",
   ): Promise<KeyEntry> {
     const keyHash = key.slice(-8);
     const keyPrefix = key.slice(0, 12);
 
-    const [existing] = await db.select().from(apiKeysTable)
-      .where(and(eq(apiKeysTable.keyHash, keyHash), eq(apiKeysTable.provider, provider)));
+    // For non-NVIDIA providers, match by keyHash + provider (one key per model)
+    // For NVIDIA, match by keyHash + provider + model (same key used for multiple models)
+    const matchCondition = provider === "nvidia"
+      ? and(eq(apiKeysTable.keyHash, keyHash), eq(apiKeysTable.provider, provider), eq(apiKeysTable.model, model))
+      : and(eq(apiKeysTable.keyHash, keyHash), eq(apiKeysTable.provider, provider));
+
+    const [existing] = await db.select().from(apiKeysTable).where(matchCondition);
 
     let dbId: number;
     if (existing) {
       dbId = existing.id;
+
+      // Sync model in DB if it changed (e.g. model renamed upstream like elephant-alpha → ling)
+      if (existing.model !== model) {
+        await db.update(apiKeysTable).set({ model }).where(eq(apiKeysTable.id, dbId)).catch(() => {});
+        logger.info({ oldModel: existing.model, newModel: model, keyPrefix }, "Migrated key to updated model");
+      }
+
       if (!this.keys.has(dbId)) {
         const entry: KeyEntry = {
           id: dbId,
@@ -197,13 +196,14 @@ class ProviderKeyManager {
         this.keys.set(dbId, entry);
         return entry;
       }
-      // Update group if key was previously loaded without it
+      // Update group + model if key was previously loaded with stale values
       const mem = this.keys.get(dbId)!;
       mem.group = group;
+      mem.model = model;
       return mem;
     }
 
-    const priorityVal = group === "primary" ? 3 : group === "germany" ? 2 : group === "gemini" ? 1 : 2;
+    const priorityVal = group === "primary" ? 3 : group === "gemini" ? 1 : group === "nvidia" ? 2 : 2;
     const [inserted] = await db.insert(apiKeysTable).values({
       provider,
       model,
@@ -258,7 +258,7 @@ class ProviderKeyManager {
       }
     }
 
-    const group: "primary" | "standard" | "germany" = MODEL_GROUP[model] === "primary"
+    const group: "primary" | "standard" = MODEL_GROUP[model] === "primary"
       ? "primary"
       : "standard";
 
@@ -283,19 +283,12 @@ class ProviderKeyManager {
       let resp: Response;
 
       if (entry.provider === "openrouter") {
-        resp = await fetchWithTimeout(`${OPENROUTER_BASE}/chat/completions`, {
-          method: "POST",
+        // Lightweight: /auth/key just checks key validity, no model call or rate-limit cost
+        resp = await fetchWithTimeout(`${OPENROUTER_BASE}/auth/key`, {
+          method: "GET",
           headers: {
             Authorization: `Bearer ${entry.key}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://glimpse.ai",
-            "X-Title": "GlimpseAI",
           },
-          body: JSON.stringify({
-            model: entry.model,
-            messages: [{ role: "user", content: "hi" }],
-            max_tokens: 1,
-          }),
           timeout: 10000,
         });
       } else if (entry.provider === "nvidia") {
@@ -310,17 +303,14 @@ class ProviderKeyManager {
             messages: [{ role: "user", content: "hi" }],
             max_tokens: 1,
           }),
-          timeout: 10000,
+          timeout: 25000,
         });
       } else {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${entry.key}`;
+        // Gemini: lightweight model list check — no generation, no RPM cost
+        const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${entry.key}&pageSize=1`;
         resp = await fetchWithTimeout(url, {
-          method: "POST",
+          method: "GET",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: "hi" }] }],
-            generationConfig: { maxOutputTokens: 1 },
-          }),
           timeout: 10000,
         });
       }
@@ -353,7 +343,8 @@ class ProviderKeyManager {
     } catch (err) {
       entry.latencyMs = Date.now() - start;
       entry.lastValidatedAt = new Date();
-      entry.status = "inactive";
+      // Network errors / timeouts are temporary — mark as degraded, not inactive
+      entry.status = "degraded";
       entry.lastError = err instanceof Error ? err.message : String(err);
       await this.syncToDb(entry);
       return false;
@@ -362,7 +353,33 @@ class ProviderKeyManager {
 
   async validateAll(): Promise<{ active: number; inactive: number; degraded: number }> {
     const entries = Array.from(this.keys.values());
-    await Promise.allSettled(entries.map((e) => this.validateKey(e)));
+
+    // Group by provider and stagger to avoid rate-limit stampedes
+    const byProvider = new Map<string, KeyEntry[]>();
+    for (const e of entries) {
+      const list = byProvider.get(e.provider) ?? [];
+      list.push(e);
+      byProvider.set(e.provider, list);
+    }
+
+    // Validate each provider group with mild stagger (lightweight endpoints, low rate-limit risk)
+    // OpenRouter /auth/key and Gemini /models are metadata endpoints, not generation calls
+    const validateGroup = async (group: KeyEntry[]) => {
+      const batchSize = 3;
+      const delayMs = 500;
+      for (let i = 0; i < group.length; i += batchSize) {
+        const batch = group.slice(i, i + batchSize);
+        await Promise.allSettled(batch.map(e => this.validateKey(e)));
+        if (i + batchSize < group.length) {
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+      }
+    };
+
+    // Run provider groups in parallel (different APIs won't conflict)
+    await Promise.allSettled(
+      Array.from(byProvider.values()).map(group => validateGroup(group))
+    );
 
     let active = 0, inactive = 0, degraded = 0;
     for (const e of entries) {
@@ -404,19 +421,18 @@ class ProviderKeyManager {
   }
 
   /**
-   * Tier-based key selection with 5-level priority cascade:
+   * Tier-based key selection with 4-level priority cascade:
    *   1. Primary OpenRouter (Seedance, WAN, Kimi, Elephant)   — all tiers
    *   2. NVIDIA direct (Kimi-K2.5, MiniMax-M2.5, Nemotron)   — all tiers
    *   3. Standard OpenRouter (Stepfun, NVIDIA, GLM)            — all tiers
-   *   4. Germany OpenRouter keys (dedicated fallback)          — all tiers
-   *   5. Gemini                                                — premium only
+   *   4. Gemini                                                — premium only
    *
    * Within each level: active > degraded, then pick lowest latency.
    */
   pickKeyForTier(userTier: "free" | "premium"): KeyEntry | null {
     const all = Array.from(this.keys.values());
 
-    const tryGroup = (group: "primary" | "standard" | "germany" | "gemini" | "nvidia"): KeyEntry | null => {
+    const tryGroup = (group: "primary" | "standard" | "gemini" | "nvidia"): KeyEntry | null => {
       const active = all.filter((k) => k.group === group && k.status === "active");
       if (active.length > 0) return this.pickBest(active);
       // Degrade-fallback: if all keys in this group are degraded, try them anyway
@@ -429,7 +445,6 @@ class ProviderKeyManager {
       tryGroup("primary") ??
       tryGroup("nvidia") ??
       tryGroup("standard") ??
-      tryGroup("germany") ??
       // Gemini is reserved: premium users only, last resort
       (userTier === "premium" ? tryGroup("gemini") : null)
     );
@@ -525,6 +540,7 @@ class ProviderKeyManager {
     try {
       await db.update(apiKeysTable)
         .set({
+          model: entry.model,
           status: entry.status,
           totalCalls: entry.totalCalls,
           totalErrors: entry.totalErrors,
@@ -583,7 +599,7 @@ class ProviderKeyManager {
   getSafeEntries(): Array<Omit<KeyEntry, "key"> & { keyPrefix: string }> {
     return Array.from(this.keys.values())
       .sort((a, b) => {
-        const groupOrder = { primary: 0, nvidia: 1, standard: 2, germany: 3, gemini: 4 };
+        const groupOrder = { primary: 0, nvidia: 1, standard: 2, gemini: 3 };
         const statusOrder = { active: 0, degraded: 1, validating: 2, inactive: 3 };
         const gDiff = (groupOrder[a.group] ?? 4) - (groupOrder[b.group] ?? 4);
         if (gDiff !== 0) return gDiff;
@@ -676,9 +692,6 @@ class ProviderKeyManager {
     }
     const errorRate = totalCalls > 0 ? totalErrors / totalCalls : 0;
     if (errorRate > 0.2) recs.push(`⚠️ High error rate (${Math.round(errorRate * 100)}%) — review degraded keys.`);
-    if (!groupMap.has("germany") || (groupMap.get("germany")?.total ?? 0) === 0) {
-      recs.push("💡 No Germany fallback keys configured — add GERMANY_OPENROUTER_KEYS to .env for higher resilience.");
-    }
     if (recs.length === 0) recs.push("✅ Key pool is healthy. All tiers configured and active.");
 
     return {

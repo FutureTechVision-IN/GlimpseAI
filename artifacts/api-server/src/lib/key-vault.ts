@@ -112,7 +112,34 @@ export function loadSecrets(): VaultLoadResult {
     }
   }
 
-  // Development: no encryption required — .env is loaded by dotenv or shell
-  logger.info({ source: "env" }, "Using plain-text environment variables (dev mode)");
+  // Development: read .env file directly if it exists
+  // Check cwd first, then monorepo root (2 levels up from artifacts/api-server)
+  const candidates = [
+    resolve(process.cwd(), ".env"),
+    resolve(process.cwd(), "../../.env"),
+  ];
+  for (const envPath of candidates) {
+    if (!existsSync(envPath)) continue;
+    try {
+      const content = readFileSync(envPath, "utf8");
+      const parsed = parseEnvContent(content);
+
+      let loaded = 0;
+      for (const [k, v] of Object.entries(parsed)) {
+        if (!process.env[k]) {
+          process.env[k] = v;
+          loaded++;
+        }
+      }
+
+      logger.info({ source: "env", keysLoaded: loaded, file: envPath }, "Secrets loaded from .env file");
+      return { source: "env", keysLoaded: loaded };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: msg, file: envPath }, "Failed to read .env file");
+    }
+  }
+
+  logger.warn("No .env or .env.enc found — API keys must be set via shell environment variables");
   return { source: "env", keysLoaded: 0 };
 }

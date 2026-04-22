@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import { logger } from "./logger";
 import type { AIEnhancementGuidance } from "./ai-provider";
+import { createHash } from "crypto";
 
 export interface EnhanceOptions {
   enhancementType: string;
@@ -202,24 +203,62 @@ interface RestorationResponse {
   }>;
 }
 
+// ---------------------------------------------------------------------------
+// Shared undici Agent — reused across all restoration requests to avoid
+// creating a new TCP connection + TLS handshake per request.
+// ---------------------------------------------------------------------------
+let _sharedDispatcher: unknown | undefined;
+async function getSharedDispatcher(): Promise<unknown | undefined> {
+  if (_sharedDispatcher) return _sharedDispatcher;
+  try {
+    const undici = await import("undici");
+    _sharedDispatcher = new undici.Agent({
+      headersTimeout: 15 * 60 * 1000,
+      bodyTimeout: 15 * 60 * 1000,
+      connectTimeout: 10_000,
+      keepAliveTimeout: 60_000,
+      keepAliveMaxTimeout: 600_000,
+      connections: 4,
+    });
+  } catch {
+    // undici not available — fall back to default
+  }
+  return _sharedDispatcher;
+}
+
+// ---------------------------------------------------------------------------
+// Health-check cache — avoids hammering /health on rapid successive calls
+// ---------------------------------------------------------------------------
+let _healthCacheResult = false;
+let _healthCacheExpiry = 0;
+const HEALTH_CACHE_TTL_MS = 10_000; // 10 seconds
+
 /**
  * Check whether the restoration sidecar is reachable.
- * Returns false if unreachable (caller should fall back to local processing).
+ * Caches result for 10s to avoid excessive health checks during bursts.
  */
 async function isRestorationServiceAvailable(): Promise<boolean> {
+  const now = Date.now();
+  if (now < _healthCacheExpiry) return _healthCacheResult;
+
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     const res = await fetch(`${RESTORATION_SERVICE_URL}/health`, { signal: ctrl.signal });
     clearTimeout(timer);
-    return res.ok;
+    _healthCacheResult = res.ok;
+    _healthCacheExpiry = now + HEALTH_CACHE_TTL_MS;
+    return _healthCacheResult;
   } catch {
+    _healthCacheResult = false;
+    _healthCacheExpiry = now + HEALTH_CACHE_TTL_MS;
     return false;
   }
 }
 
 /**
  * Map enhancement type to restoration service mode and call the Python sidecar.
+ * Includes retry-with-exponential-backoff for transient failures.
  */
 async function callRestorationService(
   base64Data: string,
@@ -245,8 +284,6 @@ async function callRestorationService(
   logger.info({ enhancementType, mode, restorationModel, serviceUrl: RESTORATION_SERVICE_URL }, "Calling restoration service");
 
   // Downscale large images before sending to ML sidecar.
-  // 1024px matches the Python MAX_ML_DIM cap; anything larger gets re-capped server-side.
-  // Keeping this at 1024 reduces upload payload size and speeds up inference ~4x.
   const MAX_RESTORATION_DIM = 1024;
   let sendBase64 = base64Data;
   const inputBuf = Buffer.from(base64Data, "base64");
@@ -261,63 +298,77 @@ async function callRestorationService(
     sendBase64 = resized.toString("base64");
   }
 
-  // 15-minute timeout — GFPGAN/ESRGAN on CPU can take 5-10 min for complex images.
-  // Use undici dispatcher with matching headersTimeout to prevent "Headers Timeout Error".
-  // The default undici headersTimeout is 5 min which is insufficient for heavy ML inference.
-  const ctrl = new AbortController();
   const TIMEOUT_MS = 15 * 60 * 1000; // 15 min
-  const timeoutId = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const MAX_RETRIES = 2;
+  const dispatcher = await getSharedDispatcher();
+  const requestBody = JSON.stringify({
+    image_base64: sendBase64,
+    mode,
+    face_enhance: true,
+    restoration_model: restorationModel,
+    fidelity,
+  });
 
-  // Build undici Agent with elevated headersTimeout (must match or exceed AbortController timeout).
-  let dispatcher: unknown | undefined;
-  try {
-    // undici is bundled with Node.js 18+; dynamic import avoids compile-time dependency.
-    const undici = await import("undici");
-    dispatcher = new undici.Agent({
-      headersTimeout: TIMEOUT_MS,
-      bodyTimeout: TIMEOUT_MS,
-      connectTimeout: 10_000, // 10 s connect timeout
-    });
-  } catch {
-    // undici not available (unlikely in Node 18+) — fall back to default dispatcher
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff: 2s, 4s
+      const backoffMs = 2000 * Math.pow(2, attempt - 1);
+      logger.info({ attempt, backoffMs }, "Retrying restoration service after backoff");
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      // Invalidate health cache on retry so we re-check availability
+      _healthCacheExpiry = 0;
+    }
+
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+
+    try {
+      const response = await fetch(`${RESTORATION_SERVICE_URL}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ctrl.signal,
+        body: requestBody,
+        ...(dispatcher ? { dispatcher } : {}),
+      } as RequestInit);
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errBody = await response.text();
+        // Don't retry on 400 (bad input) — only on 500/503 (server error)
+        if (response.status >= 400 && response.status < 500) {
+          throw new Error(`Restoration service failed (${response.status}): ${errBody}`);
+        }
+        lastError = new Error(`Restoration service failed (${response.status}): ${errBody}`);
+        logger.warn({ status: response.status, attempt }, "Restoration service error — will retry");
+        continue;
+      }
+
+      const result = (await response.json()) as RestorationResponse;
+
+      logger.info({
+        mode: result.mode,
+        backend: result.restoration_backend,
+        faces: result.faces_detected,
+        processingMs: result.processing_ms,
+        device: result.device,
+        attempt,
+      }, "Restoration complete");
+
+      return { base64: result.image_base64, mimeType: result.mime_type };
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.message.includes("Restoration service failed (4")) {
+        throw err; // Don't retry client errors
+      }
+      lastError = err instanceof Error ? err : new Error(String(err));
+      logger.warn({ err: lastError.message, attempt }, "Restoration service call failed");
+    }
   }
 
-  let response: Response;
-  try {
-    response = await fetch(`${RESTORATION_SERVICE_URL}/restore`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: ctrl.signal,
-      body: JSON.stringify({
-        image_base64: sendBase64,
-        mode,
-        face_enhance: true,
-        restoration_model: restorationModel,
-        fidelity,
-      }),
-      ...(dispatcher ? { dispatcher } : {}),
-    } as RequestInit);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  if (!response.ok) {
-    const errBody = await response.text();
-    logger.error({ status: response.status, body: errBody }, "Restoration service error");
-    throw new Error(`Restoration service failed (${response.status}): ${errBody}`);
-  }
-
-  const result = (await response.json()) as RestorationResponse;
-
-  logger.info({
-    mode: result.mode,
-    backend: result.restoration_backend,
-    faces: result.faces_detected,
-    processingMs: result.processing_ms,
-    device: result.device,
-  }, "Restoration complete");
-
-  return { base64: result.image_base64, mimeType: result.mime_type };
+  throw lastError ?? new Error("Restoration service failed after retries");
 }
 
 /**
@@ -1013,31 +1064,60 @@ export async function enhanceImage(
 }
 
 /**
- * Batch restoration: sends multiple images to the restoration sidecar in sequence.
- * Falls back to local Sharp processing if the sidecar is unreachable.
+ * Batch restoration with bounded concurrency.
+ * ML sidecar processes are sequential (single worker), so we send restoration
+ * requests serially but process local Sharp enhancements concurrently (up to 4).
  */
 export async function callBatchRestoration(
   images: Array<{ base64Data: string; mode: string; settings?: Record<string, unknown> }>,
 ): Promise<Array<{ base64: string; mimeType: string }>> {
   const available = await isRestorationServiceAvailable();
-  const results: Array<{ base64: string; mimeType: string }> = [];
 
-  for (const img of images) {
+  // Partition: restoration items go serial (sidecar is single-worker),
+  // local items can be processed concurrently
+  const restorationItems: Array<{ idx: number; img: typeof images[0] }> = [];
+  const localItems: Array<{ idx: number; img: typeof images[0] }> = [];
+
+  for (let i = 0; i < images.length; i++) {
+    if (available && RESTORATION_TYPES.has(images[i].mode)) {
+      restorationItems.push({ idx: i, img: images[i] });
+    } else {
+      localItems.push({ idx: i, img: images[i] });
+    }
+  }
+
+  const results: Array<{ base64: string; mimeType: string }> = new Array(images.length);
+
+  // Process restoration items serially (sidecar is single-worker)
+  for (const { idx, img } of restorationItems) {
     try {
-      if (available && RESTORATION_TYPES.has(img.mode)) {
-        const result = await callRestorationService(img.base64Data, img.mode, img.settings);
-        results.push(result);
-      } else {
-        // Fallback to local Sharp enhancement
-        const result = await enhanceImage(img.base64Data, "image/jpeg", {
-          enhancementType: img.mode,
-          settings: img.settings,
-        });
-        results.push(result);
-      }
+      results[idx] = await callRestorationService(img.base64Data, img.mode, img.settings);
     } catch (err) {
       logger.error({ mode: img.mode, err }, "Batch restoration item failed — using original");
-      results.push({ base64: img.base64Data, mimeType: "image/jpeg" });
+      results[idx] = { base64: img.base64Data, mimeType: "image/jpeg" };
+    }
+  }
+
+  // Process local Sharp items with bounded concurrency (4)
+  const CONCURRENCY = 4;
+  for (let i = 0; i < localItems.length; i += CONCURRENCY) {
+    const chunk = localItems.slice(i, i + CONCURRENCY);
+    const chunkResults = await Promise.allSettled(
+      chunk.map(({ img }) =>
+        enhanceImage(img.base64Data, "image/jpeg", {
+          enhancementType: img.mode,
+          settings: img.settings,
+        }),
+      ),
+    );
+    for (let j = 0; j < chunk.length; j++) {
+      const r = chunkResults[j];
+      if (r.status === "fulfilled") {
+        results[chunk[j].idx] = r.value;
+      } else {
+        logger.error({ mode: chunk[j].img.mode, err: r.reason }, "Batch local item failed — using original");
+        results[chunk[j].idx] = { base64: chunk[j].img.base64Data, mimeType: "image/jpeg" };
+      }
     }
   }
 
