@@ -1,3 +1,5 @@
+import { PREMIUM_FILTER_IDS } from "@workspace/filter-registry";
+
 /**
  * Tier-based feature gating configuration.
  *
@@ -79,10 +81,7 @@ const TIER_MAP: Record<PlanSlug, TierCapabilities> = {
 };
 
 /** Premium filter keys that require basic+ tier */
-export const PREMIUM_FILTER_KEYS = new Set([
-  "airy", "teal_orange", "pastel", "noir_color",
-  "cross_process", "cyberpunk", "arctic", "ember", "chrome",
-]);
+export const PREMIUM_FILTER_KEYS = PREMIUM_FILTER_IDS;
 
 /**
  * Resolve a plan slug from a planId.

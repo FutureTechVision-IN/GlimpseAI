@@ -12,6 +12,16 @@ import {
   UploadMediaBodyMediaType,
   EnhanceMediaBodyEnhancementType,
 } from "@workspace/api-client-react";
+import {
+  CANONICAL_FILTERS_BY_ID,
+  CANONICAL_FILTER_REGISTRY,
+  DEFAULT_CROP_BOX,
+  DEFAULT_FILTER_STATE,
+  DEFAULT_TRANSFORM_STATE,
+  type CropBox,
+  type FilterState,
+  type TransformState,
+} from "@workspace/filter-registry";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
@@ -91,30 +101,6 @@ import { Input } from "@/components/ui/input";
 type ProcessStage = "idle" | "uploading" | "processing" | "completed" | "failed";
 type EditorMode = "simple" | "advanced";
 
-interface FilterState {
-  brightness: number;
-  contrast: number;
-  saturation: number;
-  sharpness: number;
-  warmth: number;
-  highlights: number;
-  shadows: number;
-  hue: number;
-}
-
-interface TransformState {
-  rotation: number;
-  flipH: boolean;
-  flipV: boolean;
-}
-
-interface CropBox {
-  x: number;
-  y: number;
-  x2: number;
-  y2: number;
-}
-
 interface AISuggestion {
   description: string;
   suggestedEnhancement: string;
@@ -141,53 +127,51 @@ interface ChatMessage {
   applied?: boolean;
 }
 
+interface CanonicalPreviewResponse {
+  base64: string;
+  mimeType: string;
+  filterId?: string | null;
+  filterVersion?: string | null;
+  renderKind: "preview";
+  width?: number;
+  height?: number;
+}
+
+interface FilterPreset {
+  name: string;
+  key: string;
+  f: FilterState;
+  serverFilter: string | null;
+  version: string;
+  gradient: string;
+  premium: boolean;
+  cssExtra?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Defaults & constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_FILTERS: FilterState = {
-  brightness: 100, contrast: 100, saturation: 100, sharpness: 100,
-  warmth: 0, highlights: 0, shadows: 0, hue: 0,
-};
-const DEFAULT_TRANSFORM: TransformState = { rotation: 0, flipH: false, flipV: false };
-const DEFAULT_CROP: CropBox = { x: 0, y: 0, x2: 100, y2: 100 };
+const DEFAULT_FILTERS: FilterState = DEFAULT_FILTER_STATE;
+const DEFAULT_TRANSFORM: TransformState = DEFAULT_TRANSFORM_STATE;
+const DEFAULT_CROP: CropBox = DEFAULT_CROP_BOX;
 const MAX_FILE_MB = 100;
 const ONBOARDING_KEY = "glimpse_onboarding_done";
 
-// -- Filter Gallery (29 presets including premium) --
-// `f` = CSS filter preview values, `cssExtra` = extra CSS filter string to better match Sharp tint/gamma
-const FILTER_PRESETS: { name: string; key: string; f: FilterState; serverFilter: string | null; gradient: string; premium?: boolean; cssExtra?: string }[] = [
-  { name: "Original",    key: "original",      f: DEFAULT_FILTERS,                                                                                      serverFilter: null, gradient: "from-zinc-700 to-zinc-800" },
-  { name: "Vivid",       key: "vivid",         f: { ...DEFAULT_FILTERS, brightness: 103, contrast: 120, saturation: 135, sharpness: 110 },              serverFilter: "vivid", gradient: "from-red-500 to-amber-500" },
-  { name: "Portrait",    key: "portrait",      f: { ...DEFAULT_FILTERS, brightness: 104, contrast: 95, saturation: 92, sharpness: 105 },                serverFilter: "portrait", gradient: "from-rose-400 to-pink-500", cssExtra: "sepia(5%)" },
-  { name: "B&W",         key: "bw",            f: { ...DEFAULT_FILTERS, contrast: 115, saturation: 0 },                                                 serverFilter: "bw", gradient: "from-zinc-300 to-zinc-600" },
-  { name: "Film",        key: "film",          f: { ...DEFAULT_FILTERS, brightness: 97, contrast: 92, saturation: 80, sharpness: 95 },                  serverFilter: "film", gradient: "from-amber-600 to-yellow-800", cssExtra: "sepia(22%) hue-rotate(-5deg)" },
-  { name: "HDR",         key: "hdr",           f: { ...DEFAULT_FILTERS, contrast: 140, saturation: 120, sharpness: 118 },                               serverFilter: "hdr", gradient: "from-cyan-500 to-blue-600" },
-  { name: "Vintage",     key: "vintage",       f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 92, saturation: 70, sharpness: 92 },                  serverFilter: "vintage", gradient: "from-amber-400 to-orange-700", cssExtra: "sepia(30%) hue-rotate(-8deg)" },
-  { name: "Cinematic",   key: "cinematic",     f: { ...DEFAULT_FILTERS, brightness: 96, contrast: 108, saturation: 85 },                                serverFilter: "cinematic", gradient: "from-teal-600 to-cyan-800", cssExtra: "sepia(8%) hue-rotate(185deg)" },
-  { name: "Vibrant",     key: "vibrant",       f: { ...DEFAULT_FILTERS, brightness: 105, contrast: 110, saturation: 145, sharpness: 108 },              serverFilter: "vibrant", gradient: "from-fuchsia-500 to-pink-600" },
-  { name: "Film Noir",   key: "filmnoir",      f: { ...DEFAULT_FILTERS, brightness: 90, contrast: 130, saturation: 0, sharpness: 112 },                 serverFilter: "filmnoir", gradient: "from-zinc-900 to-zinc-700" },
-  { name: "Golden Hour", key: "goldenhour",    f: { ...DEFAULT_FILTERS, brightness: 106, saturation: 110 },                                             serverFilter: "goldenhour", gradient: "from-yellow-400 to-orange-500", cssExtra: "sepia(18%) hue-rotate(-10deg)" },
-  { name: "Moody",       key: "moody",         f: { ...DEFAULT_FILTERS, brightness: 92, contrast: 105, saturation: 75 },                                serverFilter: "moody", gradient: "from-indigo-800 to-purple-900", cssExtra: "sepia(10%) hue-rotate(220deg)" },
-  { name: "Fresh",       key: "fresh",         f: { ...DEFAULT_FILTERS, brightness: 108, saturation: 115 },                                             serverFilter: "fresh", gradient: "from-green-400 to-emerald-500" },
-  { name: "Retro",       key: "retro",         f: { ...DEFAULT_FILTERS, brightness: 98, contrast: 95, saturation: 65, sharpness: 92 },                  serverFilter: "retro", gradient: "from-orange-600 to-red-800", cssExtra: "sepia(28%) hue-rotate(-12deg)" },
-  { name: "Dramatic",    key: "dramatic",      f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 140, saturation: 110, sharpness: 120 },               serverFilter: "dramatic", gradient: "from-red-700 to-zinc-900" },
-  { name: "Warm Tone",   key: "warm_tone",     f: { ...DEFAULT_FILTERS, brightness: 104, saturation: 110, warmth: 20 },                                 serverFilter: "warm_tone", gradient: "from-orange-400 to-red-500", cssExtra: "sepia(15%)" },
-  { name: "Cool Tone",   key: "cool_tone",     f: { ...DEFAULT_FILTERS, brightness: 102, saturation: 95, warmth: -20 },                                 serverFilter: "cool_tone", gradient: "from-sky-400 to-blue-600", cssExtra: "hue-rotate(195deg) sepia(8%)" },
-  { name: "Sunset",      key: "sunset",        f: { ...DEFAULT_FILTERS, brightness: 103, saturation: 120, warmth: 25 },                                 serverFilter: "sunset", gradient: "from-orange-500 to-pink-600", cssExtra: "sepia(20%) hue-rotate(-15deg)" },
-  { name: "Matte",       key: "matte",         f: { ...DEFAULT_FILTERS, brightness: 102, contrast: 85, saturation: 70 },                                serverFilter: "matte", gradient: "from-stone-400 to-stone-600" },
-  { name: "Neon",        key: "neon",          f: { ...DEFAULT_FILTERS, contrast: 130, saturation: 160, sharpness: 115 },                               serverFilter: "neon", gradient: "from-violet-500 to-fuchsia-600" },
-  // Premium filters
-  { name: "Airy",        key: "airy",          f: { ...DEFAULT_FILTERS, brightness: 112, contrast: 90, saturation: 85 },                                serverFilter: "airy", gradient: "from-sky-200 to-blue-300", premium: true, cssExtra: "sepia(5%) hue-rotate(200deg)" },
-  { name: "Teal & Orange", key: "teal_orange", f: { ...DEFAULT_FILTERS, contrast: 115, saturation: 120 },                                              serverFilter: "teal_orange", gradient: "from-teal-500 to-orange-500", premium: true, cssExtra: "sepia(15%) hue-rotate(-5deg)" },
-  { name: "Pastel",      key: "pastel",        f: { ...DEFAULT_FILTERS, brightness: 115, contrast: 85, saturation: 55 },                                serverFilter: "pastel", gradient: "from-pink-300 to-violet-300", premium: true, cssExtra: "sepia(8%) hue-rotate(320deg)" },
-  { name: "Noir Color",  key: "noir_color",    f: { ...DEFAULT_FILTERS, brightness: 88, contrast: 125, saturation: 40 },                                serverFilter: "noir_color", gradient: "from-zinc-800 to-amber-900", premium: true },
-  { name: "Cross Process", key: "cross_process", f: { ...DEFAULT_FILTERS, contrast: 120, saturation: 130 },                                            serverFilter: "cross_process", gradient: "from-green-500 to-purple-600", premium: true, cssExtra: "hue-rotate(30deg) sepia(8%)" },
-  { name: "Cyberpunk",   key: "cyberpunk",     f: { ...DEFAULT_FILTERS, contrast: 130, saturation: 150 },                                               serverFilter: "cyberpunk", gradient: "from-cyan-400 to-fuchsia-600", premium: true, cssExtra: "hue-rotate(280deg) sepia(10%)" },
-  { name: "Arctic",      key: "arctic",        f: { ...DEFAULT_FILTERS, brightness: 110, contrast: 95, saturation: 60, warmth: -30 },                   serverFilter: "arctic", gradient: "from-cyan-200 to-blue-400", premium: true, cssExtra: "hue-rotate(195deg) sepia(5%)" },
-  { name: "Ember",       key: "ember",         f: { ...DEFAULT_FILTERS, brightness: 95, contrast: 115, saturation: 115, warmth: 30 },                   serverFilter: "ember", gradient: "from-orange-600 to-red-700", premium: true, cssExtra: "sepia(18%)" },
-  { name: "Chrome",      key: "chrome",        f: { ...DEFAULT_FILTERS, brightness: 108, contrast: 120, saturation: 30, sharpness: 115 },               serverFilter: "chrome", gradient: "from-zinc-300 to-zinc-500", premium: true },
-];
+const FILTER_PRESETS: FilterPreset[] = CANONICAL_FILTER_REGISTRY.map((filter): FilterPreset => ({
+  name: filter.name,
+  key: filter.id,
+  f: filter.previewState,
+  serverFilter: filter.id === "original" ? null : filter.id,
+  version: filter.version,
+  gradient: filter.gradient,
+  premium: filter.tier === "premium",
+  cssExtra: filter.previewCssExtra,
+}));
+
+const FILTER_PRESETS_BY_KEY = new Map<string, FilterPreset>(
+  FILTER_PRESETS.map((preset) => [preset.key, preset] as const),
+);
 
 // -- Simple-mode one-click presets (expanded) --
 const SIMPLE_PRESETS: { type: EnhanceMediaBodyEnhancementType; label: string; desc: string; icon: React.ReactNode; filterName?: string }[] = [
@@ -344,6 +328,34 @@ function buildPreviewStyle(
   };
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function isDefaultCropBox(crop: CropBox): boolean {
+  return crop.x === 0 && crop.y === 0 && crop.x2 === 100 && crop.y2 === 100;
+}
+
+function mergePreviewFilterState(
+  manualFilters: FilterState,
+  selectedFilterId: string | null,
+): FilterState {
+  const presetFilters = selectedFilterId
+    ? (FILTER_PRESETS_BY_KEY.get(selectedFilterId)?.f ?? DEFAULT_FILTERS)
+    : DEFAULT_FILTERS;
+
+  return {
+    brightness: clamp(presetFilters.brightness + (manualFilters.brightness - 100), 0, 200),
+    contrast: clamp(presetFilters.contrast + (manualFilters.contrast - 100), 0, 200),
+    saturation: clamp(presetFilters.saturation + (manualFilters.saturation - 100), 0, 200),
+    sharpness: clamp(presetFilters.sharpness + (manualFilters.sharpness - 100), 0, 200),
+    warmth: clamp(presetFilters.warmth + manualFilters.warmth, -100, 100),
+    highlights: clamp(presetFilters.highlights + manualFilters.highlights, -100, 100),
+    shadows: clamp(presetFilters.shadows + manualFilters.shadows, -100, 100),
+    hue: clamp(presetFilters.hue + manualFilters.hue, -180, 180),
+  };
+}
+
 async function applyTransformsToBase64(
   file: File,
   transform: TransformState,
@@ -466,10 +478,9 @@ export default function Editor() {
   const PREMIUM_FEATURES = new Set(["upscale_4x", "posture", "codeformer", "hybrid", "auto_face", "face_restore_hd", "esrgan_upscale_4x"]);
   const RESTORATION_FEATURES = new Set(["face_restore", "codeformer", "hybrid", "auto_face", "old_photo_restore", "esrgan_upscale_2x", "esrgan_upscale_4x", "face_restore_hd"]);
   const BASIC_PLUS_FEATURES = new Set(["stabilize", "trim"]);
-  const PREMIUM_FILTER_KEYS = new Set([
-    "airy", "teal_orange", "pastel", "noir_color", "cross_process",
-    "cyberpunk", "arctic", "ember", "chrome",
-  ]);
+  const PREMIUM_FILTER_KEYS = new Set(
+    FILTER_PRESETS.filter((preset) => preset.premium).map((preset) => preset.key),
+  );
   const canAccessPremium = isAdmin || planSlug === "premium";
   const canAccessBasic = canAccessPremium || planSlug === "basic";
 
@@ -498,6 +509,8 @@ export default function Editor() {
   const [file, setFile] = useState<File | null>(null);
   const [base64Data, setBase64Data] = useState<string>("");
   const [previewUrl, setPreviewUrl] = useState<string>("");
+  const [canonicalPreviewUrl, setCanonicalPreviewUrl] = useState<string | null>(null);
+  const [isRenderingPreview, setIsRenderingPreview] = useState(false);
   const [mediaType, setMediaType] = useState<UploadMediaBodyMediaType>(studioMode === "video" ? "video" : "photo");
   // Deep-link: /photo-studio?enhance=upscale_4x preselects the enhancement type (from the new Dashboard hub)
   const initialEnhanceFromQuery = React.useMemo<EnhanceMediaBodyEnhancementType | null>(() => {
@@ -556,6 +569,7 @@ export default function Editor() {
   const [upscaleAfter, setUpscaleAfter] = useState<"upscale" | "upscale_4x" | null>(null);
   const upscaleChainRef = useRef(false); // tracks whether we're in chained upscale step
   const pendingExportRef = useRef(false);  // auto-download after process+export flow
+  const previewRequestSeqRef = useRef(0);
 
   const { toast } = useToast();
 
@@ -736,6 +750,168 @@ export default function Editor() {
     );
   }, [analyzeMedia]);
 
+  const buildCanonicalEnhancementRequest = useCallback(() => {
+    let effectiveType = enhancementType;
+    const settings: Record<string, unknown> = {};
+    const selectedPreset = selectedFilter ? FILTER_PRESETS_BY_KEY.get(selectedFilter) : undefined;
+    const canonicalFilter = selectedFilter ? CANONICAL_FILTERS_BY_ID.get(selectedFilter) : undefined;
+
+    if (selectedPreset?.serverFilter) {
+      settings.filterId = selectedPreset.serverFilter;
+      settings.filterVersion = canonicalFilter?.version ?? selectedPreset.version;
+      if (editorMode === "simple") {
+        effectiveType = "filter";
+      }
+    }
+
+    if (skinSmoothing !== 50) {
+      settings.skinSmoothing = skinSmoothing;
+    }
+
+    if (mediaType === "video" && stabilize) {
+      effectiveType = "stabilize" as EnhanceMediaBodyEnhancementType;
+    }
+
+    if (mediaType === "video") {
+      if (videoSpeed !== 1.0) settings.speed = videoSpeed;
+      if (trimStart > 0 || trimEnd < 100) {
+        settings.trimStart = trimStart;
+        settings.trimEnd = trimEnd;
+      }
+      if (muteAudio) settings.muteAudio = true;
+      if (denoise) settings.denoise = true;
+      if (videoColorGrade) settings.videoColorGrade = videoColorGrade;
+    }
+
+    if (mediaType === "photo") {
+      if (transform.rotation !== 0) settings.rotation = transform.rotation;
+      if (transform.flipH) settings.flipH = true;
+      if (transform.flipV) settings.flipV = true;
+      if (cropEnabled && !isDefaultCropBox(cropBox)) settings.crop = cropBox;
+
+      if (filters.brightness !== 100) settings.brightness = filters.brightness;
+      if (filters.contrast !== 100) settings.contrast = filters.contrast;
+      if (filters.saturation !== 100) settings.saturation = filters.saturation;
+      if (filters.sharpness !== 100) settings.sharpness = filters.sharpness;
+      if (filters.warmth !== 0) settings.warmth = filters.warmth;
+      if (filters.highlights !== 0) settings.highlights = 100 + filters.highlights;
+      if (filters.shadows !== 0) settings.shadows = 100 + filters.shadows;
+      if (filters.hue !== 0) settings.hue = filters.hue;
+    }
+
+    const hasPreviewableConfig =
+      mediaType === "photo" &&
+      (
+        selectedFilter !== null ||
+        enhancementType !== "auto" ||
+        skinSmoothing !== 50 ||
+        transform.rotation !== 0 ||
+        transform.flipH ||
+        transform.flipV ||
+        (cropEnabled && !isDefaultCropBox(cropBox)) ||
+        filters.brightness !== 100 ||
+        filters.contrast !== 100 ||
+        filters.saturation !== 100 ||
+        filters.sharpness !== 100 ||
+        filters.warmth !== 0 ||
+        filters.highlights !== 0 ||
+        filters.shadows !== 0 ||
+        filters.hue !== 0
+      );
+
+    return {
+      effectiveType,
+      settings: Object.keys(settings).length > 0 ? settings : undefined,
+      hasPreviewableConfig,
+    };
+  }, [
+    enhancementType,
+    selectedFilter,
+    skinSmoothing,
+    mediaType,
+    stabilize,
+    videoSpeed,
+    trimStart,
+    trimEnd,
+    muteAudio,
+    denoise,
+    videoColorGrade,
+    transform,
+    cropEnabled,
+    cropBox,
+    filters,
+    editorMode,
+  ]);
+
+  useEffect(() => {
+    const currentlyProcessing = processStage === "uploading" || processStage === "processing";
+    const currentlyCompleted = processStage === "completed";
+
+    if (!file || !base64Data || mediaType !== "photo" || currentlyProcessing || currentlyCompleted) {
+      setIsRenderingPreview(false);
+      return;
+    }
+
+    const { effectiveType, settings, hasPreviewableConfig } = buildCanonicalEnhancementRequest();
+    if (!hasPreviewableConfig) {
+      setCanonicalPreviewUrl(null);
+      setIsRenderingPreview(false);
+      return;
+    }
+
+    const requestSeq = ++previewRequestSeqRef.current;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsRenderingPreview(true);
+      try {
+        const token = localStorage.getItem("glimpse_token");
+        const response = await fetch("/api/media/preview", {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            base64Data,
+            mimeType: file.type,
+            enhancementType: effectiveType,
+            settings,
+            previewMaxDimension: 1600,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Preview request failed (${response.status})`);
+        }
+
+        const payload = await response.json() as CanonicalPreviewResponse;
+        if (previewRequestSeqRef.current !== requestSeq) return;
+        setCanonicalPreviewUrl(`data:${payload.mimeType};base64,${payload.base64}`);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        if (previewRequestSeqRef.current !== requestSeq) return;
+        setCanonicalPreviewUrl(null);
+        console.warn("Canonical preview render failed", err);
+      } finally {
+        if (previewRequestSeqRef.current === requestSeq) {
+          setIsRenderingPreview(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    file,
+    base64Data,
+    mediaType,
+    processStage,
+    buildCanonicalEnhancementRequest,
+  ]);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const sel = e.target.files?.[0];
     if (!sel) return;
@@ -746,6 +922,8 @@ export default function Editor() {
     setFile(sel);
     setMediaType(sel.type.startsWith("video") ? "video" : "photo");
     setPreviewUrl(URL.createObjectURL(sel));
+    setCanonicalPreviewUrl(null);
+    setIsRenderingPreview(false);
     setCurrentJobId(null);
     setProcessStage("idle");
     setTransform(DEFAULT_TRANSFORM);
@@ -792,7 +970,6 @@ export default function Editor() {
       const fp = FILTER_PRESETS.find((p) => p.key === aiSuggestion.suggestedFilter || p.serverFilter === aiSuggestion.suggestedFilter);
       if (fp) {
         setSelectedFilter(fp.key);
-        setFilters(fp.f);
       }
     }
     // Mark last AI message as applied
@@ -854,73 +1031,17 @@ export default function Editor() {
 
   const handleProcess = useCallback(async () => {
     if (!file || !base64Data) return;
-
-    let effectiveType = enhancementType;
-    const settings: Record<string, unknown> = {};
-
-    // Simple mode: use selected filter for server-side
-    if (editorMode === "simple" && selectedFilter) {
-      const preset = FILTER_PRESETS.find((p) => p.key === selectedFilter);
-      if (preset?.serverFilter) {
-        effectiveType = "filter";
-        settings.filterName = preset.serverFilter;
-      }
-    }
-
-    // Skin smoothing
-    if (skinSmoothing !== 50) {
-      settings.skinSmoothing = skinSmoothing;
-    }
-
-    // Video stabilize
-    if (mediaType === "video" && stabilize) {
-      effectiveType = "stabilize" as EnhanceMediaBodyEnhancementType;
-    }
-
-    // Video-specific settings
-    if (mediaType === "video") {
-      if (videoSpeed !== 1.0) settings.speed = videoSpeed;
-      if (trimStart > 0 || trimEnd < 100) { settings.trimStart = trimStart; settings.trimEnd = trimEnd; }
-      if (muteAudio) settings.muteAudio = true;
-      if (denoise) settings.denoise = true;
-      if (videoColorGrade) settings.videoColorGrade = videoColorGrade;
-    }
-
-    let finalBase64 = base64Data;
-    const hasT = transform.rotation !== 0 || transform.flipH || transform.flipV;
-    const hasF = filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100 || filters.sharpness !== 100;
-    const hasC = cropEnabled && (cropBox.x !== 0 || cropBox.y !== 0 || cropBox.x2 !== 100 || cropBox.y2 !== 100);
-
-    if (editorMode === "advanced" && mediaType === "photo" && (hasT || hasF || hasC)) {
-      try {
-        const cssExtra = selectedFilter ? FILTER_PRESETS.find(p => p.key === selectedFilter)?.cssExtra : undefined;
-        finalBase64 = await applyTransformsToBase64(file, transform, cropEnabled ? cropBox : DEFAULT_CROP, filters, cssExtra);
-      } catch {
-        toast({ title: "Transform error", description: "Could not apply edits. Uploading original.", variant: "destructive" });
-      }
-    }
-
-    // Pass advanced slider settings
-    if (editorMode === "advanced") {
-      if (filters.brightness !== 100) settings.brightness = filters.brightness;
-      if (filters.contrast !== 100) settings.contrast = filters.contrast;
-      if (filters.saturation !== 100) settings.saturation = filters.saturation;
-      if (filters.sharpness !== 100) settings.sharpness = filters.sharpness;
-      if (filters.warmth !== 0) settings.warmth = filters.warmth;
-      if (filters.highlights !== 0) settings.highlights = filters.highlights;
-      if (filters.shadows !== 0) settings.shadows = filters.shadows;
-      if (filters.hue !== 0) settings.hue = filters.hue;
-    }
+    const { effectiveType, settings } = buildCanonicalEnhancementRequest();
 
     setProcessStage("uploading");
     uploadMedia.mutate(
-      { data: { filename: file.name, mimeType: file.type, size: file.size, mediaType, base64Data: finalBase64 } },
+      { data: { filename: file.name, mimeType: file.type, size: file.size, mediaType, base64Data } },
       {
         onSuccess: (job) => {
           setCurrentJobId(job.id);
           setProcessStage("processing");
           enhanceMedia.mutate(
-            { data: { jobId: job.id, enhancementType: effectiveType, presetId, settings: Object.keys(settings).length > 0 ? settings : undefined } },
+            { data: { jobId: job.id, enhancementType: effectiveType, presetId, settings } },
             {
               onError: (err: any) => {
                 setProcessStage("failed");
@@ -940,7 +1061,7 @@ export default function Editor() {
         },
       },
     );
-  }, [file, base64Data, enhancementType, mediaType, transform, filters, cropBox, cropEnabled, stabilize, presetId, editorMode, selectedFilter, skinSmoothing]);
+  }, [file, base64Data, mediaType, presetId, buildCanonicalEnhancementRequest, toast]);
 
   // Process & Export — for staged state: trigger processing then auto-download
   const handleProcessAndExport = useCallback(() => {
@@ -1009,7 +1130,7 @@ export default function Editor() {
   }, [handleExport, handleProcessAndExport, processStage, file]);
 
   const resetAll = () => {
-    setFile(null); setPreviewUrl(""); setBase64Data("");
+    setFile(null); setPreviewUrl(""); setBase64Data(""); setCanonicalPreviewUrl(null); setIsRenderingPreview(false);
     setCurrentJobId(null); setProcessStage("idle"); setZoomLevel(1);
     setTransform(DEFAULT_TRANSFORM); setFilters(DEFAULT_FILTERS);
     setCropBox(DEFAULT_CROP); setCropEnabled(false);
@@ -1028,8 +1149,10 @@ export default function Editor() {
     || filters.warmth !== 0 || filters.highlights !== 0 || filters.shadows !== 0 || filters.hue !== 0
     || (cropEnabled && (cropBox.x !== 0 || cropBox.y !== 0 || cropBox.x2 !== 100 || cropBox.y2 !== 100));
 
-  const activePresetCssExtra = selectedFilter ? FILTER_PRESETS.find(p => p.key === selectedFilter)?.cssExtra : undefined;
-  const previewStyle = buildPreviewStyle(transform, filters, cropEnabled ? cropBox : DEFAULT_CROP, activePresetCssExtra);
+  const activePresetCssExtra = selectedFilter ? FILTER_PRESETS_BY_KEY.get(selectedFilter)?.cssExtra : undefined;
+  const previewFallbackFilters = mergePreviewFilterState(filters, selectedFilter);
+  const previewStyle = buildPreviewStyle(transform, previewFallbackFilters, cropEnabled ? cropBox : DEFAULT_CROP, activePresetCssExtra);
+  const livePreviewSrc = canonicalPreviewUrl ?? previewUrl;
   const stageInfo = STAGE_INFO[processStage];
 
   const visibleFilters = showAllFilters ? FILTER_PRESETS : FILTER_PRESETS.slice(0, 12);
@@ -1236,12 +1359,7 @@ export default function Editor() {
                                   pushUndo();
                                   setEnhancementType(p.type);
                                   setSelectedFilter(null);
-                                  if (p.type === "color_grade_warm") setFilters({ ...DEFAULT_FILTERS, warmth: 20, saturation: 110 });
-                                  else if (p.type === "color_grade_cool") setFilters({ ...DEFAULT_FILTERS, warmth: -20, saturation: 95 });
-                                  else if (p.type === "color_grade_cinematic") setFilters({ ...DEFAULT_FILTERS, brightness: 96, contrast: 105, saturation: 85 });
-                                  else if (p.type === "lighting_enhance") setFilters({ ...DEFAULT_FILTERS, brightness: 108, contrast: 110 });
-                                  else if (p.type === "portrait") setFilters({ ...DEFAULT_FILTERS, brightness: 105, contrast: 95, saturation: 88 });
-                                  else setFilters(DEFAULT_FILTERS);
+                                  setFilters(DEFAULT_FILTERS);
                                 }}
                               >
                                 {locked && (
@@ -1513,7 +1631,8 @@ export default function Editor() {
                                   toast({ title: "Premium filter", description: `Upgrade to Premium to unlock ${p.name}.`, variant: "destructive" });
                                   return;
                                 }
-                                pushUndo(); setFilters(p.f); setSelectedFilter(p.key === "original" ? null : p.key);
+                                pushUndo();
+                                setSelectedFilter(p.key === "original" ? null : p.key);
                               }}>
                               <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
                               <div className="absolute inset-0 flex items-end p-1">
@@ -1726,7 +1845,7 @@ export default function Editor() {
 
           {/* Main Preview */}
           <main className="flex-1 bg-zinc-900 relative flex flex-col min-h-0 min-w-0">
-            <div className="flex-1 flex items-center justify-center px-10 py-4 overflow-hidden min-h-0">
+            <div className="flex-1 flex items-center justify-center py-4 pl-4 pr-4 sm:pl-6 sm:pr-6 lg:pl-12 lg:pr-8 xl:pl-16 xl:pr-10 2xl:pl-20 2xl:pr-12 overflow-hidden min-h-0">
               {!file ? (
                 <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full">
                   <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-all cursor-pointer relative overflow-hidden group">
@@ -1870,198 +1989,212 @@ export default function Editor() {
                     ) : null}
                   </div>
 
-                  {/* Image preview — fills remaining vertical space, fits any aspect ratio */}
-                  <div className="relative flex-1 min-h-0 w-full max-w-full rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
-                    <AnimatePresence>
-                      {isProcessing && (
-                        <motion.div
-                          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                          className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-20 rounded-xl"
-                        >
+                  <div className="w-full max-w-[70rem] mx-auto flex flex-col flex-1 min-h-0 gap-2">
+                    {/* Image preview — fills remaining vertical space, fits any aspect ratio */}
+                    <div className="relative flex-1 min-h-0 w-full rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-black flex items-center justify-center">
+                      <AnimatePresence>
+                        {isProcessing && (
                           <motion.div
-                            animate={{ rotate: 360 }}
-                            transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                            className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-20 rounded-xl"
                           >
-                            <Sparkles className="w-12 h-12 text-teal-500 mb-4" />
-                          </motion.div>
-                          <p className="text-lg font-semibold">{processStage === "uploading" ? "Uploading..." : (upscaleChainRef.current ? "Upscaling Image..." : "Applying AI Magic...")}</p>
-                          <p className="text-sm text-zinc-400 mt-1">This may take a few moments</p>
-                          <div className="mt-4 w-48 h-1 bg-zinc-800 rounded-full overflow-hidden">
                             <motion.div
-                              className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 rounded-full"
-                              animate={{ x: ["-100%", "100%"] }}
-                              transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
-                              style={{ width: "60%" }}
-                            />
-                          </div>
-                        </motion.div>
-                      )}
-                      {/* AI scan overlay — animated line sweeps over image during analysis */}
-                      {isAnalyzing && !isProcessing && (
-                        <motion.div
-                          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                          className="absolute inset-0 z-20 pointer-events-none rounded-xl"
-                        >
-                          {/* Scan line */}
-                          <motion.div
-                            className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent shadow-[0_0_12px_4px_rgba(20,184,166,0.4)]"
-                            animate={{ top: ["0%", "100%", "0%"] }}
-                            transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
-                          />
-                          {/* Corner brackets */}
-                          <div className="absolute top-2 left-2 w-5 h-5 border-t-2 border-l-2 border-teal-400/60 rounded-tl" />
-                          <div className="absolute top-2 right-2 w-5 h-5 border-t-2 border-r-2 border-teal-400/60 rounded-tr" />
-                          <div className="absolute bottom-2 left-2 w-5 h-5 border-b-2 border-l-2 border-teal-400/60 rounded-bl" />
-                          <div className="absolute bottom-2 right-2 w-5 h-5 border-b-2 border-r-2 border-teal-400/60 rounded-br" />
-                          {/* Label */}
-                          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-black/70 backdrop-blur px-3 py-1 rounded-full">
-                            <ScanEye className="w-3 h-3 text-teal-400" />
-                            <span className="text-[10px] font-medium text-teal-300">AI Scanning</span>
-                            <Loader2 className="w-2.5 h-2.5 text-teal-400 animate-spin" />
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    {splitCompare && isCompleted && currentJob?.processedUrl ? (
-                      <div className="grid grid-cols-2 gap-3 w-full h-full min-h-0">
-                        <div className="flex flex-col min-h-0 gap-1">
-                          <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider shrink-0">Original</span>
-                          <div className="rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center flex-1 min-h-0">
-                            {mediaType === "video"
-                              ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
-                              : <img src={previewUrl} alt="Original" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
-                          </div>
-                        </div>
-                        <div className="flex flex-col min-h-0 gap-1">
-                          <span className="text-[10px] font-medium text-teal-400 uppercase tracking-wider shrink-0">Enhanced</span>
-                          <div className="rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center flex-1 min-h-0">
-                            {mediaType === "video"
-                              ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
-                              : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
-                          </div>
-                        </div>
-                      </div>
-                    ) : isCompleted && currentJob?.processedUrl && !showCompare ? (
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center justify-center max-h-full">
-                        {mediaType === "video"
-                          ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
-                          : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />
-                        }
-                      </motion.div>
-                    ) : (
-                      mediaType === "video"
-                        ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
-                        : <div className="flex items-center justify-center max-h-full">
-                            <img src={previewUrl} alt="Original"
-                              className="max-w-full max-h-full object-contain transition-all duration-200"
-                              style={{ ...(isProcessing ? { opacity: 0.5 } : previewStyle), transform: `scale(${zoomLevel})`, transformOrigin: "center" }} />
-                          </div>
-                    )}
-                  </div>
-
-                  {/* Zoom controls */}
-                  {mediaType !== "video" && (
-                    <div className="flex items-center justify-center gap-2 mt-1 shrink-0">
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-zinc-400 hover:text-white" onClick={zoomOut} disabled={zoomLevel <= 0.25}>
-                        <ZoomOut className="w-3.5 h-3.5" />
-                      </Button>
-                      <button onClick={zoomReset} className="text-[10px] text-zinc-500 hover:text-zinc-300 min-w-[40px] text-center tabular-nums">
-                        {Math.round(zoomLevel * 100)}%
-                      </button>
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-zinc-400 hover:text-white" onClick={zoomIn} disabled={zoomLevel >= 4}>
-                        <ZoomIn className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  )}
-
-                  {/* Filter Gallery — 2-row grid beneath image preview (photo mode only) */}
-                  {mediaType !== "video" && (
-                    <div className="w-full shrink-0 space-y-1.5">
-                      <div className="flex items-center justify-between px-0.5">
-                        <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
-                        {selectedFilter && (
-                          <span className="text-[10px] text-teal-400 truncate ml-2">Active: {selectedFilter}</span>
+                              animate={{ rotate: 360 }}
+                              transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                            >
+                              <Sparkles className="w-12 h-12 text-teal-500 mb-4" />
+                            </motion.div>
+                            <p className="text-lg font-semibold">{processStage === "uploading" ? "Uploading..." : (upscaleChainRef.current ? "Upscaling Image..." : "Applying AI Magic...")}</p>
+                            <p className="text-sm text-zinc-400 mt-1">This may take a few moments</p>
+                            <div className="mt-4 w-48 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                              <motion.div
+                                className="h-full bg-gradient-to-r from-teal-500 to-cyan-500 rounded-full"
+                                animate={{ x: ["-100%", "100%"] }}
+                                transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
+                                style={{ width: "60%" }}
+                              />
+                            </div>
+                          </motion.div>
                         )}
-                      </div>
-                      <div
-                        role="list"
-                        aria-label="Filter gallery"
-                        className="grid grid-cols-[repeat(auto-fill,minmax(58px,68px))] gap-x-2 gap-y-1.5 overflow-hidden pb-0.5"
-                      >
-                        {FILTER_PRESETS.map((p) => {
-                          const filterLocked = isFeatureLocked("filter", p.key);
-                          return (
-                            <Tooltip key={p.key}>
-                              <TooltipTrigger asChild>
-                                <motion.button
-                                  whileTap={{ scale: 0.95 }}
-                                  role="listitem"
-                                  aria-label={`Apply ${p.name} filter${filterLocked ? " (Premium)" : p.premium ? " (Premium available)" : ""}`}
-                                  aria-pressed={selectedFilter === p.key}
-                                  className={cn(
-                                    "relative snap-start rounded-md border transition-all overflow-hidden w-full h-[52px] sm:h-[58px] group focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-900",
-                                    filterLocked
-                                      ? "border-zinc-800 opacity-50 cursor-not-allowed"
-                                      : selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-500",
-                                  )}
-                                  onClick={() => {
-                                    if (filterLocked) {
-                                      toast({ title: "Premium filter", description: `Upgrade to Premium to unlock the ${p.name} filter.`, variant: "destructive" });
-                                      return;
-                                    }
-                                    pushUndo();
-                                    setSelectedFilter(p.key === "original" ? null : p.key);
-                                    setFilters(p.f);
-                                    if (p.serverFilter) setEnhancementType("filter");
-                                  }}
-                                >
-                                  <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
-                                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-1 py-0.5">
-                                    <span className="text-[10px] font-medium text-white drop-shadow leading-tight block truncate">{p.name}</span>
-                                  </div>
-                                  {filterLocked ? (
-                                    <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-amber-500/90 flex items-center justify-center">
-                                      <Lock className="w-2.5 h-2.5 text-zinc-900" />
-                                    </div>
-                                  ) : p.premium && (
-                                    <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400" />
-                                  )}
-                                  {selectedFilter === p.key && (
-                                    <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="absolute top-1 left-1">
-                                      <CheckCircle2 className="w-3 h-3 text-teal-400" />
-                                    </motion.div>
-                                  )}
-                                </motion.button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="text-xs">
-                                {p.name}{filterLocked ? " 🔒 Premium" : p.premium ? " (Premium)" : ""}
-                              </TooltipContent>
-                            </Tooltip>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                        {/* AI scan overlay — animated line sweeps over image during analysis */}
+                        {isAnalyzing && !isProcessing && (
+                          <motion.div
+                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                            className="absolute inset-0 z-20 pointer-events-none rounded-xl"
+                          >
+                            {/* Scan line */}
+                            <motion.div
+                              className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-teal-400 to-transparent shadow-[0_0_12px_4px_rgba(20,184,166,0.4)]"
+                              animate={{ top: ["0%", "100%", "0%"] }}
+                              transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
+                            />
+                            {/* Corner brackets */}
+                            <div className="absolute top-2 left-2 w-5 h-5 border-t-2 border-l-2 border-teal-400/60 rounded-tl" />
+                            <div className="absolute top-2 right-2 w-5 h-5 border-t-2 border-r-2 border-teal-400/60 rounded-tr" />
+                            <div className="absolute bottom-2 left-2 w-5 h-5 border-b-2 border-l-2 border-teal-400/60 rounded-bl" />
+                            <div className="absolute bottom-2 right-2 w-5 h-5 border-b-2 border-r-2 border-teal-400/60 rounded-br" />
+                            {/* Label */}
+                            <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-black/70 backdrop-blur px-3 py-1 rounded-full">
+                              <ScanEye className="w-3 h-3 text-teal-400" />
+                              <span className="text-[10px] font-medium text-teal-300">AI Scanning</span>
+                              <Loader2 className="w-2.5 h-2.5 text-teal-400 animate-spin" />
+                            </div>
+                          </motion.div>
+                        )}
+                        {isRenderingPreview && canonicalPreviewUrl && !isProcessing && (
+                          <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="absolute top-3 right-3 z-20 rounded-full bg-black/70 px-3 py-1 text-[10px] font-medium text-teal-300 backdrop-blur"
+                          >
+                            Refreshing preview...
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
 
-                  {/* Bottom info bar */}
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
-                    <span className="truncate max-w-[200px]">{file.name}</span>
-                    <span>&#8226;</span>
-                    <span>{(file.size / 1024 / 1024).toFixed(1)} MB</span>
-                    <span>&#8226;</span>
-                    <Badge variant="outline" className="text-[9px] border-zinc-700 text-zinc-400 px-1 py-0 h-4">
-                      {editorMode === "simple" ? "Simple" : "Advanced"}
-                    </Badge>
-                    {hasEdits && <><span>&#8226;</span><span className="text-teal-400">Edits staged</span></>}
-                    {selectedFilter && <><span>&#8226;</span><span className="text-teal-400">Filter: {selectedFilter}</span></>}
-                    {isCompleted && (
-                      <><span>&#8226;</span>
-                      <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-teal-400 flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" />Enhanced
-                      </motion.span></>
+                      {splitCompare && isCompleted && currentJob?.processedUrl ? (
+                        <div className="grid grid-cols-2 gap-3 w-full h-full min-h-0">
+                          <div className="flex flex-col min-h-0 gap-1">
+                            <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider shrink-0">Original</span>
+                            <div className="rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center flex-1 min-h-0">
+                              {mediaType === "video"
+                                ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
+                                : <img src={previewUrl} alt="Original" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
+                            </div>
+                          </div>
+                          <div className="flex flex-col min-h-0 gap-1">
+                            <span className="text-[10px] font-medium text-teal-400 uppercase tracking-wider shrink-0">Enhanced</span>
+                            <div className="rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center flex-1 min-h-0">
+                              {mediaType === "video"
+                                ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
+                                : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
+                            </div>
+                          </div>
+                        </div>
+                      ) : isCompleted && currentJob?.processedUrl && !showCompare ? (
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center justify-center max-h-full">
+                          {mediaType === "video"
+                            ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
+                            : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />
+                          }
+                        </motion.div>
+                      ) : (
+                        mediaType === "video"
+                          ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
+                          : <div className="flex items-center justify-center max-h-full">
+                              <img src={livePreviewSrc} alt="Preview"
+                                className="max-w-full max-h-full object-contain transition-all duration-200"
+                                style={canonicalPreviewUrl && !isProcessing
+                                  ? { transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }
+                                  : { ...(isProcessing ? { opacity: 0.5 } : previewStyle), transform: `scale(${zoomLevel})`, transformOrigin: "center" }} />
+                            </div>
+                      )}
+                    </div>
+
+                    {/* Zoom controls */}
+                    {mediaType !== "video" && (
+                      <div className="flex items-center justify-center gap-2 mt-1 shrink-0">
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-zinc-400 hover:text-white" onClick={zoomOut} disabled={zoomLevel <= 0.25}>
+                          <ZoomOut className="w-3.5 h-3.5" />
+                        </Button>
+                        <button onClick={zoomReset} className="text-[10px] text-zinc-500 hover:text-zinc-300 min-w-[40px] text-center tabular-nums">
+                          {Math.round(zoomLevel * 100)}%
+                        </button>
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-zinc-400 hover:text-white" onClick={zoomIn} disabled={zoomLevel >= 4}>
+                          <ZoomIn className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
                     )}
-                    {showCompare && <><span>&#8226;</span><span className="text-amber-400">Showing original</span></>}
+
+                    {/* Filter Gallery — wrapping rows beneath image preview (photo mode only) */}
+                    {mediaType !== "video" && (
+                      <div className="w-full shrink-0 space-y-1.5">
+                        <div className="flex items-center justify-between px-0.5">
+                          <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
+                          {selectedFilter && (
+                            <span className="text-[10px] text-teal-400 truncate ml-2">Active: {selectedFilter}</span>
+                          )}
+                        </div>
+                        <div
+                          role="list"
+                          aria-label="Filter gallery"
+                          className="flex flex-wrap items-start gap-2 overflow-hidden pb-0.5"
+                        >
+                          {FILTER_PRESETS.map((p) => {
+                            const filterLocked = isFeatureLocked("filter", p.key);
+                            return (
+                              <Tooltip key={p.key}>
+                                <TooltipTrigger asChild>
+                                  <motion.button
+                                    whileTap={{ scale: 0.95 }}
+                                    role="listitem"
+                                    aria-label={`Apply ${p.name} filter${filterLocked ? " (Premium)" : p.premium ? " (Premium available)" : ""}`}
+                                    aria-pressed={selectedFilter === p.key}
+                                    className={cn(
+                                      "relative snap-start rounded-md border transition-all overflow-hidden w-[64px] sm:w-[68px] shrink-0 h-[52px] sm:h-[58px] group focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-900",
+                                      filterLocked
+                                        ? "border-zinc-800 opacity-50 cursor-not-allowed"
+                                        : selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-500",
+                                    )}
+                                    onClick={() => {
+                                      if (filterLocked) {
+                                        toast({ title: "Premium filter", description: `Upgrade to Premium to unlock the ${p.name} filter.`, variant: "destructive" });
+                                        return;
+                                      }
+                                      pushUndo();
+                                      setSelectedFilter(p.key === "original" ? null : p.key);
+                                      if (editorMode === "simple" && p.serverFilter) setEnhancementType("filter");
+                                    }}
+                                  >
+                                    <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
+                                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-1 py-0.5">
+                                      <span className="text-[10px] font-medium text-white drop-shadow leading-tight block truncate">{p.name}</span>
+                                    </div>
+                                    {filterLocked ? (
+                                      <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-amber-500/90 flex items-center justify-center">
+                                        <Lock className="w-2.5 h-2.5 text-zinc-900" />
+                                      </div>
+                                    ) : p.premium && (
+                                      <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400" />
+                                    )}
+                                    {selectedFilter === p.key && (
+                                      <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="absolute top-1 left-1">
+                                        <CheckCircle2 className="w-3 h-3 text-teal-400" />
+                                      </motion.div>
+                                    )}
+                                  </motion.button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="text-xs">
+                                  {p.name}{filterLocked ? " 🔒 Premium" : p.premium ? " (Premium)" : ""}
+                                </TooltipContent>
+                              </Tooltip>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Bottom info bar */}
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+                      <span className="truncate max-w-[200px]">{file.name}</span>
+                      <span>&#8226;</span>
+                      <span>{(file.size / 1024 / 1024).toFixed(1)} MB</span>
+                      <span>&#8226;</span>
+                      <Badge variant="outline" className="text-[9px] border-zinc-700 text-zinc-400 px-1 py-0 h-4">
+                        {editorMode === "simple" ? "Simple" : "Advanced"}
+                      </Badge>
+                      {hasEdits && <><span>&#8226;</span><span className="text-teal-400">Edits staged</span></>}
+                      {selectedFilter && <><span>&#8226;</span><span className="text-teal-400">Filter: {selectedFilter}</span></>}
+                      {isRenderingPreview && <><span>&#8226;</span><span className="text-cyan-400">Refreshing preview</span></>}
+                      {isCompleted && (
+                        <><span>&#8226;</span>
+                        <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-teal-400 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />Enhanced
+                        </motion.span></>
+                      )}
+                      {showCompare && <><span>&#8226;</span><span className="text-amber-400">Showing original</span></>}
+                    </div>
                   </div>
                 </div>
               )}

@@ -8,8 +8,9 @@ import {
   EnhanceMediaBody,
   ListMediaJobsQueryParams,
   ListPresetsQueryParams,
+  RenderMediaPreviewBody,
 } from "@workspace/api-zod";
-import { enhanceImage, callVideoRestoration, callBatchRestoration } from "../lib/image-enhancer";
+import { enhanceImage, renderPreviewImage, callVideoRestoration, callBatchRestoration } from "../lib/image-enhancer";
 import { aiProvider, feedbackAccumulator, type UserTier } from "../lib/ai-provider";
 import { formatApiError } from "../lib/api-errors";
 import { checkTierAccess, resolvePlanSlug } from "../lib/tier-config";
@@ -211,7 +212,8 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
       planSlug = plan?.slug ?? null;
     }
     const tierSlug = resolvePlanSlug(planSlug, false);
-    const filterName = (settings as Record<string, unknown> | undefined)?.filterName as string | undefined;
+    const filterId = (settings as Record<string, unknown> | undefined)?.filterId as string | undefined;
+    const filterName = filterId ?? ((settings as Record<string, unknown> | undefined)?.filterName as string | undefined);
     const tierError = checkTierAccess(tierSlug, enhancementType, filterName);
     if (tierError) {
       res.status(403).json({ error: tierError, code: "TIER_RESTRICTED" });
@@ -329,6 +331,50 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
       processingTimeMs: Date.now() - startTime,
       errorMessage: err instanceof Error ? err.message : "Enhancement failed",
     }).where(eq(mediaJobsTable.id, jobId));
+  }
+});
+
+// ─── Canonical preview render ────────────────────────────────
+router.post("/media/preview", requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const parsed = RenderMediaPreviewBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const { base64Data, mimeType, enhancementType, settings, previewMaxDimension } = parsed.data;
+
+  if (!isAdmin(req)) {
+    const [previewUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
+    let planSlug: string | null = null;
+    if (previewUser?.planId) {
+      const [plan] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, previewUser.planId));
+      planSlug = plan?.slug ?? null;
+    }
+    const tierSlug = resolvePlanSlug(planSlug, false);
+    const filterId = (settings as Record<string, unknown> | undefined)?.filterId as string | undefined;
+    const filterName = filterId ?? ((settings as Record<string, unknown> | undefined)?.filterName as string | undefined);
+    const tierError = checkTierAccess(tierSlug, enhancementType, filterName);
+    if (tierError) {
+      res.status(403).json({ error: tierError, code: "TIER_RESTRICTED" });
+      return;
+    }
+  }
+
+  try {
+    const result = await renderPreviewImage(
+      base64Data,
+      mimeType,
+      {
+        enhancementType,
+        settings: settings as Record<string, unknown> | undefined,
+      },
+      previewMaxDimension ?? 1600,
+    );
+    res.json(result);
+  } catch (err) {
+    logger.error({ err, enhancementType }, "Preview render failed");
+    res.status(500).json({ error: "Failed to render preview" });
   }
 });
 

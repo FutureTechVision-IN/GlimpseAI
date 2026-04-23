@@ -359,6 +359,19 @@ export async function handleDemoRequest(
     return ok(newJob);
   }
 
+  if (url === "/api/media/preview" && method === "POST") {
+    try {
+      const body = JSON.parse((init?.body as string) ?? "{}") as { base64Data?: string; mimeType?: string };
+      return ok({
+        base64: body.base64Data ?? "",
+        mimeType: body.mimeType ?? "image/jpeg",
+        renderKind: "preview",
+      });
+    } catch {
+      return err("Invalid preview request body");
+    }
+  }
+
   if (url === "/api/media/analyze" && method === "POST") {
     return ok({
       analysis: {

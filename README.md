@@ -52,6 +52,11 @@ GlimpseAI is structured as a **pnpm monorepo** with clear separation between sha
 └──────────────┴──────────────────┴───────────────────────┘
 ```
 
+### Related Design Docs
+
+- [`docs/ARCHITECTURE-AI-BACKEND.md`](docs/ARCHITECTURE-AI-BACKEND.md) — AI backend architecture proposal
+- [`docs/FILTER-PIPELINE-MODERNIZATION.md`](docs/FILTER-PIPELINE-MODERNIZATION.md) — canonical filter registry, preview/save consistency, and validation specification
+
 ### Technology Stack
 
 **Frontend** — `artifacts/glimpse-ai/`

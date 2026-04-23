@@ -1,12 +1,26 @@
 import sharp from "sharp";
+import {
+  CANONICAL_FILTERS_BY_ID,
+  type CropBox,
+  type FilterOperation,
+} from "@workspace/filter-registry";
 import { logger } from "./logger";
 import type { AIEnhancementGuidance } from "./ai-provider";
-import { createHash } from "crypto";
 
 export interface EnhanceOptions {
   enhancementType: string;
   settings?: Record<string, unknown>;
   aiGuidance?: AIEnhancementGuidance | null;
+}
+
+export interface RenderImageResult {
+  base64: string;
+  mimeType: string;
+  filterId: string | null;
+  filterVersion: string | null;
+  renderKind: "preview" | "export";
+  width?: number;
+  height?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,40 +148,109 @@ async function toneMap(
   return Buffer.from(await pipeline.toBuffer());
 }
 
-// Named filter presets (server-side sharp equivalents)
-const FILTER_PRESETS: Record<string, (p: sharp.Sharp) => sharp.Sharp> = {
-  // ── Classic ──
-  vivid: (p) => p.modulate({ saturation: 1.35, brightness: 1.03 }).normalize().sharpen({ sigma: 0.6 }),
-  portrait: (p) => p.modulate({ brightness: 1.04, saturation: 0.92 }).sharpen({ sigma: 0.7, m1: 0.6, m2: 0.3 }).gamma(1.06),
-  bw: (p) => p.grayscale().normalize().sharpen({ sigma: 1.0 }).gamma(1.1),
-  film: (p) => p.modulate({ saturation: 0.8, brightness: 0.97 }).gamma(1.12).tint({ r: 230, g: 215, b: 200 }).sharpen({ sigma: 0.5 }),
-  hdr: (p) => p.normalize().sharpen({ sigma: 1.8, m1: 2.0, m2: 1.0 }).modulate({ saturation: 1.2, brightness: 1.02 }),
-  vintage: (p) => p.modulate({ saturation: 0.7, brightness: 0.95 }).tint({ r: 210, g: 195, b: 170 }).gamma(1.15).sharpen({ sigma: 0.4 }),
-  cinematic: (p) => p.modulate({ saturation: 0.85, brightness: 0.96 }).tint({ r: 180, g: 195, b: 215 }).gamma(1.08).sharpen({ sigma: 0.7 }),
-  vibrant: (p) => p.modulate({ saturation: 1.45, brightness: 1.05 }).normalize().sharpen({ sigma: 0.8 }),
-  filmnoir: (p) => p.grayscale().normalize().gamma(1.3).sharpen({ sigma: 1.2, m1: 1.5, m2: 0.8 }),
-  goldenhour: (p) => p.modulate({ saturation: 1.1, brightness: 1.06 }).tint({ r: 255, g: 220, b: 180 }).gamma(1.05).sharpen({ sigma: 0.5 }),
-  moody: (p) => p.modulate({ saturation: 0.75, brightness: 0.92 }).tint({ r: 160, g: 170, b: 200 }).gamma(1.12).sharpen({ sigma: 0.6 }),
-  fresh: (p) => safeGamma(p.modulate({ saturation: 1.15, brightness: 1.08 }), 0.95).normalize().sharpen({ sigma: 0.5 }),
-  retro: (p) => p.modulate({ saturation: 0.65, brightness: 0.98 }).tint({ r: 200, g: 180, b: 150 }).gamma(1.18).sharpen({ sigma: 0.4 }),
-  dramatic: (p) => p.normalize().sharpen({ sigma: 2.0, m1: 2.5, m2: 1.2 }).modulate({ saturation: 1.1, brightness: 0.95 }).gamma(1.15),
-  warm_tone: (p) => p.modulate({ saturation: 1.1, brightness: 1.04 }).tint({ r: 245, g: 220, b: 185 }).gamma(1.04).sharpen({ sigma: 0.5 }),
-  cool_tone: (p) => p.modulate({ saturation: 0.95, brightness: 1.02 }).tint({ r: 170, g: 200, b: 230 }).gamma(1.06).sharpen({ sigma: 0.5 }),
-  sunset: (p) => p.modulate({ saturation: 1.2, brightness: 1.03 }).tint({ r: 255, g: 200, b: 160 }).gamma(1.05).sharpen({ sigma: 0.4 }),
-  matte: (p) => safeGamma(p.modulate({ saturation: 0.7, brightness: 1.02 }), 0.92).linear(0.9, 15).sharpen({ sigma: 0.3 }),
-  neon: (p) => p.modulate({ saturation: 1.6, brightness: 1.05 }).sharpen({ sigma: 1.0 }).normalize(),
-  // ── New premium filters ──
-  airy: (p) => safeGamma(p.modulate({ brightness: 1.12, saturation: 0.85 }), 0.88).sharpen({ sigma: 0.3 }).tint({ r: 240, g: 240, b: 250 }),
-  teal_orange: (p) => p.modulate({ saturation: 1.2, brightness: 1.02 }).tint({ r: 220, g: 195, b: 170 }).normalize().sharpen({ sigma: 0.6 }),
-  pastel: (p) => safeGamma(p.modulate({ saturation: 0.55, brightness: 1.15 }), 0.85).sharpen({ sigma: 0.3 }).tint({ r: 240, g: 230, b: 235 }),
-  noir_color: (p) => p.modulate({ saturation: 0.4, brightness: 0.88 }).gamma(1.25).sharpen({ sigma: 1.5, m1: 2.0, m2: 1.0 }).normalize(),
-  cross_process: (p) => p.modulate({ saturation: 1.3, brightness: 1.0 }).tint({ r: 200, g: 240, b: 180 }).gamma(1.1).sharpen({ sigma: 0.6 }),
-  cyberpunk: (p) => p.modulate({ saturation: 1.5, brightness: 0.95 }).tint({ r: 200, g: 150, b: 255 }).gamma(1.15).sharpen({ sigma: 0.8 }),
-  arctic: (p) => p.modulate({ saturation: 0.6, brightness: 1.1 }).tint({ r: 190, g: 215, b: 240 }).gamma(1.02).sharpen({ sigma: 0.4 }),
-  ember: (p) => p.modulate({ saturation: 1.15, brightness: 0.95 }).tint({ r: 255, g: 180, b: 140 }).gamma(1.1).sharpen({ sigma: 0.7 }),
-  forest: (p) => p.modulate({ saturation: 1.1, brightness: 0.97 }).tint({ r: 170, g: 210, b: 170 }).gamma(1.05).sharpen({ sigma: 0.5 }),
-  chrome: (p) => p.modulate({ saturation: 0.3, brightness: 1.08 }).normalize().sharpen({ sigma: 1.5, m1: 1.8, m2: 0.9 }).gamma(1.0),
-};
+function resolveCanonicalFilterId(settings: Record<string, unknown>): string | null {
+  const filterId = typeof settings.filterId === "string" ? settings.filterId : null;
+  if (filterId && CANONICAL_FILTERS_BY_ID.has(filterId)) return filterId;
+
+  const legacyFilterName = typeof settings.filterName === "string" ? settings.filterName : null;
+  if (legacyFilterName && CANONICAL_FILTERS_BY_ID.has(legacyFilterName)) return legacyFilterName;
+
+  return null;
+}
+
+function applyFilterOperations(
+  pipeline: sharp.Sharp,
+  operations: FilterOperation[],
+): sharp.Sharp {
+  let next = pipeline;
+  for (const operation of operations) {
+    switch (operation.type) {
+      case "modulate":
+        next = next.modulate({
+          ...(operation.brightness !== undefined ? { brightness: operation.brightness } : {}),
+          ...(operation.saturation !== undefined ? { saturation: operation.saturation } : {}),
+          ...(operation.hue !== undefined ? { hue: operation.hue } : {}),
+        });
+        break;
+      case "normalize":
+        next = next.normalize();
+        break;
+      case "sharpen":
+        next = next.sharpen({
+          sigma: operation.sigma,
+          ...(operation.m1 !== undefined ? { m1: operation.m1 } : {}),
+          ...(operation.m2 !== undefined ? { m2: operation.m2 } : {}),
+        });
+        break;
+      case "gamma":
+        next = next.gamma(operation.value);
+        break;
+      case "safeGamma":
+        next = safeGamma(next, operation.value);
+        break;
+      case "grayscale":
+        next = next.grayscale();
+        break;
+      case "tint":
+        next = next.tint({ r: operation.r, g: operation.g, b: operation.b });
+        break;
+      case "linear":
+        next = next.linear(operation.a, operation.b);
+        break;
+      case "recomb":
+        next = next.recomb(operation.matrix);
+        break;
+    }
+  }
+  return next;
+}
+
+function applyRegisteredFilterPipeline(
+  pipeline: sharp.Sharp,
+  filterId: string,
+): sharp.Sharp {
+  const filter = CANONICAL_FILTERS_BY_ID.get(filterId);
+  if (!filter) return pipeline;
+  return applyFilterOperations(pipeline, filter.operations);
+}
+
+function isCropBox(value: unknown): value is CropBox {
+  if (!value || typeof value !== "object") return false;
+  const crop = value as Record<string, unknown>;
+  return (
+    typeof crop.x === "number" &&
+    typeof crop.y === "number" &&
+    typeof crop.x2 === "number" &&
+    typeof crop.y2 === "number"
+  );
+}
+
+async function applyCanonicalPreprocess(
+  inputBuffer: Buffer,
+  settings: Record<string, unknown>,
+): Promise<Buffer> {
+  const meta = await sharp(inputBuffer).metadata();
+  const width = meta.width ?? 0;
+  const height = meta.height ?? 0;
+
+  let pipeline = sharp(inputBuffer);
+  const crop = isCropBox(settings.crop) ? settings.crop : null;
+  if (crop && width > 0 && height > 0) {
+    const left = Math.max(0, Math.min(width - 1, Math.round((crop.x / 100) * width)));
+    const top = Math.max(0, Math.min(height - 1, Math.round((crop.y / 100) * height)));
+    const extractWidth = Math.max(1, Math.min(width - left, Math.round(((crop.x2 - crop.x) / 100) * width)));
+    const extractHeight = Math.max(1, Math.min(height - top, Math.round(((crop.y2 - crop.y) / 100) * height)));
+    pipeline = pipeline.extract({ left, top, width: extractWidth, height: extractHeight });
+  }
+
+  if (typeof settings.rotation === "number" && settings.rotation % 360 !== 0) {
+    pipeline = pipeline.rotate(settings.rotation, { background: { r: 0, g: 0, b: 0, alpha: 0 } });
+  }
+  if (settings.flipH === true) pipeline = pipeline.flop();
+  if (settings.flipV === true) pipeline = pipeline.flip();
+
+  return pipeline.toBuffer();
+}
 
 // ---------------------------------------------------------------------------
 // AI Restoration Service Bridge (GFPGAN + CodeFormer + Real-ESRGAN)
@@ -211,7 +294,8 @@ let _sharedDispatcher: unknown | undefined;
 async function getSharedDispatcher(): Promise<unknown | undefined> {
   if (_sharedDispatcher) return _sharedDispatcher;
   try {
-    const undici = await import("undici");
+    const moduleName = "undici";
+    const undici = await import(moduleName);
     _sharedDispatcher = new undici.Agent({
       headersTimeout: 15 * 60 * 1000,
       bodyTimeout: 15 * 60 * 1000,
@@ -439,15 +523,20 @@ export async function callVideoRestoration(
 }
 
 /**
- * Real image enhancement using sharp (libvips).
- * Accepts raw base64 (no prefix), returns raw base64 (no prefix).
+ * Canonical image rendering using the shared filter registry and a single
+ * production pipeline for both preview and export.
  */
-export async function enhanceImage(
+async function renderCanonicalImage(
   base64Data: string,
   mimeType: string,
   options: EnhanceOptions,
-): Promise<{ base64: string; mimeType: string }> {
+  renderKind: "preview" | "export" = "export",
+  previewMaxDimension: number = 1600,
+): Promise<RenderImageResult> {
   const type = options.enhancementType;
+  const s = options.settings ?? {};
+  const filterId = resolveCanonicalFilterId(s);
+  const filterVersion = filterId ? (CANONICAL_FILTERS_BY_ID.get(filterId)?.version ?? null) : null;
 
   // Route restoration types to the Python sidecar
   if (RESTORATION_TYPES.has(type)) {
@@ -455,21 +544,32 @@ export async function enhanceImage(
     if (!available) {
       logger.warn({ type }, "Restoration service unreachable — falling back to local sharp processing");
     } else {
-      return callRestorationService(base64Data, type, options.settings as Record<string, unknown>);
+      const restored = await callRestorationService(base64Data, type, s);
+      return {
+        ...restored,
+        filterId,
+        filterVersion,
+        renderKind,
+      };
     }
   }
 
-  const inputBuffer = Buffer.from(base64Data, "base64");
+  const originalInputBuffer = Buffer.from(base64Data, "base64");
+  const inputBuffer = await applyCanonicalPreprocess(originalInputBuffer, s);
   let pipeline = sharp(inputBuffer);
   const meta = await sharp(inputBuffer).metadata();
-  const s = options.settings ?? {};
 
-  logger.info({ type, width: meta.width, height: meta.height, format: meta.format }, "Enhancing image");
+  logger.info({
+    type,
+    filterId,
+    width: meta.width,
+    height: meta.height,
+    format: meta.format,
+    renderKind,
+  }, "Enhancing image");
 
-  // Check for named filter in settings
-  const filterName = typeof s.filterName === "string" ? s.filterName : null;
-  if (filterName && FILTER_PRESETS[filterName]) {
-    pipeline = FILTER_PRESETS[filterName](pipeline);
+  if (type === "filter" && filterId) {
+    pipeline = applyRegisteredFilterPipeline(pipeline, filterId);
   } else {
     switch (type) {
       case "auto": {
@@ -838,17 +938,12 @@ export async function enhanceImage(
         break;
       }
       case "filter": {
-        // Default cinematic if no filterName
+        // Default cinematic fallback if no canonical filter id was provided.
         pipeline = pipeline.modulate({ brightness: 0.98, saturation: 0.85 }).gamma(1.1).tint({ r: 220, g: 210, b: 195 }).sharpen({ sigma: 0.6 });
         break;
       }
       case "custom": {
-        // Geometric adjustments
-        if (typeof s.rotation === "number") {
-          pipeline = pipeline.rotate(s.rotation as number, { background: { r: 0, g: 0, b: 0, alpha: 0 } });
-        }
-        if (s.flipH === true) pipeline = pipeline.flop();
-        if (s.flipV === true) pipeline = pipeline.flip();
+        // Geometry is now handled in the canonical preprocess stage.
         pipeline = pipeline.normalize().sharpen({ sigma: 0.8 });
         break;
       }
@@ -914,6 +1009,10 @@ export async function enhanceImage(
     }
   }
 
+  if (filterId && type !== "filter") {
+    pipeline = applyRegisteredFilterPipeline(pipeline, filterId);
+  }
+
   // Apply granular settings overrides
   if (typeof s.brightness === "number" && s.brightness !== 100) {
     pipeline = pipeline.modulate({ brightness: (s.brightness as number) / 100 });
@@ -925,9 +1024,14 @@ export async function enhanceImage(
   if (typeof s.saturation === "number" && s.saturation !== 100) {
     pipeline = pipeline.modulate({ saturation: (s.saturation as number) / 100 });
   }
-  if (typeof s.sharpness === "number" && (s.sharpness as number) > 100) {
-    const sig = Math.min(10, Math.max(0.1, ((s.sharpness as number) - 100) / 50));
-    pipeline = pipeline.sharpen({ sigma: sig });
+  if (typeof s.sharpness === "number" && s.sharpness !== 100) {
+    if ((s.sharpness as number) > 100) {
+      const sig = Math.min(10, Math.max(0.1, ((s.sharpness as number) - 100) / 50));
+      pipeline = pipeline.sharpen({ sigma: sig });
+    } else {
+      const blurSigma = Math.min(3, Math.max(0.1, (100 - (s.sharpness as number)) / 30));
+      pipeline = pipeline.blur(blurSigma);
+    }
   }
   if (typeof s.warmth === "number" && s.warmth !== 0) {
     const w = Math.max(-100, Math.min(100, s.warmth as number));
@@ -1036,23 +1140,38 @@ export async function enhanceImage(
     }
   }
 
-  // Output: preserve PNG for transparent images, JPEG for photos
+  // Output: preserve PNG for transparent images, JPEG for photos.
+  // Preview uses the same pipeline and only downsizes after processing.
   const stats = await analyzeImageStats(inputBuffer);
+  const renderedBuffer = await pipeline.toBuffer();
+  let outputPipeline = sharp(renderedBuffer);
+  if (renderKind === "preview") {
+    outputPipeline = outputPipeline.resize({
+      width: previewMaxDimension,
+      height: previewMaxDimension,
+      fit: "inside",
+      withoutEnlargement: true,
+    });
+  }
+
   let outputBuffer: Buffer;
   let outputMime: string;
-
   if (stats.hasTransparency) {
-    outputBuffer = await pipeline.png({ compressionLevel: 6 }).toBuffer();
+    outputBuffer = await outputPipeline.png({ compressionLevel: 6 }).toBuffer();
     outputMime = "image/png";
   } else {
-    outputBuffer = await pipeline.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+    outputBuffer = await outputPipeline.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
     outputMime = "image/jpeg";
   }
 
+  const outputMeta = await sharp(outputBuffer).metadata();
   const outBase64 = outputBuffer.toString("base64");
 
   logger.info({
-    type, filterName,
+    type,
+    filterId,
+    filterVersion,
+    renderKind,
     aiGuided: !!guidance,
     aiSource: guidance?.source ?? "none",
     inputBytes: inputBuffer.length,
@@ -1060,7 +1179,37 @@ export async function enhanceImage(
     ratio: (outputBuffer.length / inputBuffer.length).toFixed(2),
   }, "Image enhancement complete");
 
-  return { base64: outBase64, mimeType: outputMime };
+  return {
+    base64: outBase64,
+    mimeType: outputMime,
+    filterId,
+    filterVersion,
+    renderKind,
+    width: outputMeta.width,
+    height: outputMeta.height,
+  };
+}
+
+/**
+ * Real image enhancement using sharp (libvips).
+ * Accepts raw base64 (no prefix), returns raw base64 (no prefix).
+ */
+export async function enhanceImage(
+  base64Data: string,
+  mimeType: string,
+  options: EnhanceOptions,
+): Promise<{ base64: string; mimeType: string }> {
+  const result = await renderCanonicalImage(base64Data, mimeType, options, "export");
+  return { base64: result.base64, mimeType: result.mimeType };
+}
+
+export async function renderPreviewImage(
+  base64Data: string,
+  mimeType: string,
+  options: EnhanceOptions,
+  previewMaxDimension: number = 1600,
+): Promise<RenderImageResult> {
+  return renderCanonicalImage(base64Data, mimeType, options, "preview", previewMaxDimension);
 }
 
 /**

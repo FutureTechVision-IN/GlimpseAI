@@ -177,6 +177,9 @@ importers:
       '@workspace/db':
         specifier: workspace:*
         version: link:../../lib/db
+      '@workspace/filter-registry':
+        specifier: workspace:*
+        version: link:../../lib/filter-registry
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3
@@ -358,6 +361,9 @@ importers:
       '@workspace/api-client-react':
         specifier: workspace:*
         version: link:../../lib/api-client-react
+      '@workspace/filter-registry':
+        specifier: workspace:*
+        version: link:../../lib/filter-registry
       class-variance-authority:
         specifier: 'catalog:'
         version: 0.7.1
@@ -660,7 +666,16 @@ importers:
         specifier: ^0.31.10
         version: 0.31.10
 
+  lib/filter-registry: {}
+
   scripts:
+    dependencies:
+      '@workspace/filter-registry':
+        specifier: workspace:*
+        version: link:../lib/filter-registry
+      sharp:
+        specifier: ^0.34.5
+        version: 0.34.5
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
