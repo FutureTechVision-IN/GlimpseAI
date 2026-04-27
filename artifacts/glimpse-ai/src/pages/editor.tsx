@@ -1189,7 +1189,7 @@ export default function Editor() {
         <div className="flex flex-col lg:flex-row h-[calc(100vh-4rem)] overflow-hidden">
 
           {/* Sidebar */}
-          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-10 max-h-[60vh] lg:max-h-full lg:h-full overflow-hidden">
+          <aside className="w-full lg:w-80 xl:w-[22rem] border-r border-white/10 bg-zinc-950 flex flex-col shrink-0 z-20 lg:max-h-full lg:h-full overflow-hidden">
             <div className="p-3 border-b border-white/10">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="font-semibold text-base flex items-center gap-2">
@@ -1221,7 +1221,7 @@ export default function Editor() {
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: "auto" }}
                       exit={{ opacity: 0, height: 0 }}
-                      className="mb-4 overflow-hidden"
+                      className="mb-4 overflow-hidden max-w-full"
                     >
                       {isAnalyzing ? (
                         <div className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-3 flex items-center gap-3">
@@ -1252,7 +1252,7 @@ export default function Editor() {
                                   <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
                                 ))}
                               </div>
-                              <Button size="sm" className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white w-full font-medium" onClick={applyAiSuggestion}>
+                              <Button size="sm" className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white font-medium whitespace-normal" onClick={applyAiSuggestion}>
                                 <Sparkles className="w-4 h-4 mr-1.5" />
                                 Apply: {aiSuggestion.suggestedEnhancement}
                                 {aiSuggestion.suggestedFilter && ` + ${aiSuggestion.suggestedFilter}`}
@@ -1364,7 +1364,7 @@ export default function Editor() {
                               >
                                 {locked && (
                                   <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500/90 flex items-center justify-center z-10">
-                                    <Lock className="w-2.5 h-2.5 text-zinc-900" />
+                                    <Lock className="w-2.5 h-2.5 text-zinc-900 z-30" />
                                   </div>
                                 )}
                                 <div className={cn(
@@ -2153,7 +2153,7 @@ export default function Editor() {
                                     </div>
                                     {filterLocked ? (
                                       <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-amber-500/90 flex items-center justify-center">
-                                        <Lock className="w-2.5 h-2.5 text-zinc-900" />
+                                        <Lock className="w-2.5 h-2.5 text-zinc-900 z-30" />
                                       </div>
                                     ) : p.premium && (
                                       <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400" />
