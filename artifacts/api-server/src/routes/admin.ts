@@ -3,6 +3,8 @@ import { db, usersTable, mediaJobsTable, paymentsTable, plansTable, providersTab
 import { eq, desc, count, sum, and, ilike, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin, AuthRequest } from "../middlewares/auth";
 import { aiProvider } from "../lib/ai-provider";
+import { parseMediaReferenceCode } from "../lib/media-reference";
+import { z } from "zod";
 import {
   SuspendUserBody,
   SuspendUserParams,
@@ -18,6 +20,12 @@ import {
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
+
+const AssignUserPlanBodySchema = z.object({
+  planId: z.number().int().positive().nullable(),
+  /** ISO-8601 datetime or null to clear; omit to leave expiry unchanged */
+  planExpiresAt: z.union([z.string(), z.null()]).optional(),
+});
 
 router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
   const [userStats] = await db.select({
@@ -154,6 +162,115 @@ router.patch("/admin/users/:id/suspend", requireAuth, requireAdmin, async (req: 
   res.json({ success: true, message: parsed.data.suspend ? "User suspended" : "User unsuspended" });
 });
 
+router.patch("/admin/users/:id/premium-trial", requireAuth, requireAdmin, async (req: AuthRequest, res): Promise<void> => {
+  const paramsRaw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(paramsRaw, 10);
+  const raw = req.body as { premiumTrialEndsAt?: string | null };
+  let ends: Date | null;
+  if (raw.premiumTrialEndsAt === null || raw.premiumTrialEndsAt === "") {
+    ends = null;
+  } else if (typeof raw.premiumTrialEndsAt === "string") {
+    ends = new Date(raw.premiumTrialEndsAt);
+    if (Number.isNaN(ends.getTime())) {
+      res.status(400).json({ error: "Invalid premiumTrialEndsAt date" });
+      return;
+    }
+  } else {
+    res.status(400).json({ error: "premiumTrialEndsAt must be an ISO date string or null" });
+    return;
+  }
+
+  const [updated] = await db
+    .update(usersTable)
+    .set({ premiumTrialEndsAt: ends })
+    .where(eq(usersTable.id, id))
+    .returning();
+
+  if (!updated) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  res.json({
+    success: true,
+    userId: updated.id,
+    premiumTrialEndsAt: updated.premiumTrialEndsAt?.toISOString() ?? null,
+  });
+});
+
+/**
+ * Assign or clear subscription plan + optional expiry (admin override).
+ * Complements PATCH …/premium-trial (marketing trial → premium tier until date).
+ */
+router.patch("/admin/users/:id/plan", requireAuth, requireAdmin, async (req: AuthRequest, res): Promise<void> => {
+  const paramsRaw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(paramsRaw, 10);
+  const parsed = AssignUserPlanBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const { planId, planExpiresAt } = parsed.data;
+
+  if (planId === null) {
+    const [freePlan] = await db.select().from(plansTable).where(eq(plansTable.slug, "free"));
+    const [updated] = await db
+      .update(usersTable)
+      .set({
+        planId: null,
+        planExpiresAt: null,
+        creditsLimit: freePlan?.creditsPerMonth ?? 5,
+      })
+      .where(eq(usersTable.id, id))
+      .returning();
+
+    if (!updated) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      userId: updated.id,
+      planId: updated.planId,
+      planExpiresAt: updated.planExpiresAt?.toISOString() ?? null,
+      creditsLimit: updated.creditsLimit,
+    });
+    return;
+  }
+
+  const [plan] = await db.select().from(plansTable).where(eq(plansTable.id, planId));
+  if (!plan) {
+    res.status(400).json({ error: "Unknown planId" });
+    return;
+  }
+
+  const updates: Record<string, unknown> = {
+    planId: plan.id,
+    creditsLimit: plan.creditsPerMonth,
+  };
+  if (planExpiresAt !== undefined) {
+    updates.planExpiresAt = planExpiresAt === null ? null : new Date(planExpiresAt);
+  }
+
+  const [updated] = await db.update(usersTable).set(updates).where(eq(usersTable.id, id)).returning();
+
+  if (!updated) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  res.json({
+    success: true,
+    userId: updated.id,
+    planId: updated.planId,
+    planExpiresAt: updated.planExpiresAt?.toISOString() ?? null,
+    creditsLimit: updated.creditsLimit,
+    message: `Assigned plan "${plan.slug}"`,
+  });
+});
+
 router.patch("/admin/users/:id/credits", requireAuth, requireAdmin, async (req: AuthRequest, res): Promise<void> => {
   const paramsRaw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(paramsRaw, 10);
@@ -184,6 +301,39 @@ router.patch("/admin/users/:id/credits", requireAuth, requireAdmin, async (req: 
     message: "Quota adjusted",
     creditsLimit: updated.creditsLimit,
     dailyLimit: updated.dailyLimit,
+  });
+});
+
+router.get("/admin/reference/:code", requireAuth, requireAdmin, async (req: AuthRequest, res): Promise<void> => {
+  const codeParam = req.params.code;
+  const code = Array.isArray(codeParam) ? codeParam[0] : codeParam;
+  const parsed = parseMediaReferenceCode(code ?? "");
+  if (!parsed) {
+    res.status(400).json({ error: "Invalid reference code format" });
+    return;
+  }
+
+  const [job] = await db.select().from(mediaJobsTable).where(eq(mediaJobsTable.id, parsed.jobId));
+  if (!job) {
+    res.status(404).json({ error: "Job not found for reference" });
+    return;
+  }
+
+  res.json({
+    parsed,
+    job: {
+      id: job.id,
+      userId: job.userId,
+      status: job.status,
+      filename: job.filename,
+      enhancementType: job.enhancementType,
+      referenceCode: job.referenceCode,
+      processingTimeMs: job.processingTimeMs,
+      completedAt: job.completedAt?.toISOString() ?? null,
+      createdAt: job.createdAt.toISOString(),
+      errorMessage: job.errorMessage,
+      mediaPurgedAt: job.mediaPurgedAt?.toISOString() ?? null,
+    },
   });
 });
 

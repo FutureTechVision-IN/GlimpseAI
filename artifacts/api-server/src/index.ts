@@ -1,5 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { assertProductionSecrets } from "./lib/env-validation";
+import { purgeExpiredMediaBlobs } from "./lib/media-retention";
 import { ensureInitialAdmin, ensureDefaultPlans, initProviderKeys, validateAdminLogins, selfTestAdminLogin } from "./lib/bootstrap";
 
 const rawPort = process.env["PORT"];
@@ -17,6 +19,7 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 async function start() {
+  assertProductionSecrets();
   await ensureInitialAdmin();
   await validateAdminLogins();
   await ensureDefaultPlans();
@@ -24,6 +27,15 @@ async function start() {
   await initProviderKeys().catch((err) =>
     logger.warn({ err }, "Provider key init failed (non-fatal)")
   );
+
+  const retentionMs = Number(process.env.MEDIA_RETENTION_INTERVAL_MS ?? `${60 * 60 * 1000}`);
+  if (retentionMs > 0) {
+    const tick = () => {
+      purgeExpiredMediaBlobs().catch((e) => logger.error({ err: e }, "Media retention purge failed"));
+    };
+    tick();
+    setInterval(tick, retentionMs);
+  }
 
   app.listen(port, async (err) => {
     if (err) {

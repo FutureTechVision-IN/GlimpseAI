@@ -1100,6 +1100,14 @@ components:
             type: string
         confidence:
           type: number
+        servedBy:
+          type: string
+          enum: [sidecar, native, unknown]
+          description: |
+            Where the recommended enhancement will run.
+              - sidecar: restoration Python service is reachable and exposes the model.
+              - native:  Sharp-only fallback (no Docker required).
+              - unknown: not yet probed.
       required:
         - description
         - suggestedEnhancement

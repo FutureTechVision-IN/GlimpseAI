@@ -30,6 +30,14 @@ export interface LocalHistoryItem {
   createdAt: string;
   /** Processing time in milliseconds */
   processingTimeMs?: number;
+  /** Server-side trace code when available */
+  referenceCode?: string;
+  /** Filter id stacked on top of the enhancement (chain stage 2) */
+  filterId?: string | null;
+  /** Upscale operation applied as the last chain stage */
+  upscale?: string | null;
+  /** Where the chain ran: sidecar = premium model; native = Sharp-only fallback */
+  servedBy?: "sidecar" | "native";
 }
 
 function openDB(): Promise<IDBDatabase> {

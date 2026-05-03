@@ -359,6 +359,47 @@ export async function handleDemoRequest(
     return ok(newJob);
   }
 
+  // POST /api/media/enhance-chain — server-side enhance → filter → upscale chain.
+  // In demo mode we just echo back a completed job whose errorMessage encodes
+  // the chain metadata so the History row badges render correctly.
+  if (url === "/api/media/enhance-chain" && method === "POST") {
+    let chainMeta: string | null = null;
+    try {
+      const body = JSON.parse((init?.body as string) ?? "{}") as {
+        enhance?: string | null;
+        filterId?: string | null;
+        upscale?: string | null;
+      };
+      const stages: Array<{ stage: string; op: string }> = [];
+      if (body.enhance) stages.push({ stage: "enhance", op: body.enhance });
+      if (body.filterId) stages.push({ stage: "filter", op: body.filterId });
+      if (body.upscale) stages.push({ stage: "upscale", op: body.upscale });
+      chainMeta = JSON.stringify({ chain: stages, servedBy: "native" });
+    } catch { /* fall through */ }
+    const newJob = {
+      ...DEMO_JOBS[0],
+      id: 103,
+      filename: "demo_chain.jpg",
+      status: "completed",
+      enhancementType: "auto_face",
+      errorMessage: chainMeta,
+      createdAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    };
+    return ok(newJob);
+  }
+
+  // POST /api/media/enhance-batch — multi-file batch enhancement.
+  // Demo mode pretends each jobId is now processing and will complete.
+  if (url === "/api/media/enhance-batch" && method === "POST") {
+    let jobIds: number[] = [];
+    try {
+      const body = JSON.parse((init?.body as string) ?? "{}") as { jobIds?: number[] };
+      jobIds = Array.isArray(body.jobIds) ? body.jobIds : [];
+    } catch { /* ignore */ }
+    return ok({ status: "processing", jobIds, count: jobIds.length });
+  }
+
   if (url === "/api/media/preview" && method === "POST") {
     try {
       const body = JSON.parse((init?.body as string) ?? "{}") as { base64Data?: string; mimeType?: string };
@@ -373,14 +414,17 @@ export async function handleDemoRequest(
   }
 
   if (url === "/api/media/analyze" && method === "POST") {
+    // Default the demo to a portrait/auto_face recommendation so testers see
+    // the new "Auto-Face" default and the "Native fallback" badge wired up.
     return ok({
-      analysis: {
-        brightness: 0.62,
-        contrast: 0.71,
-        saturation: 0.55,
-        sharpness: 0.80,
-        suggestions: ["Increase brightness by 15%", "Boost saturation slightly", "Apply light sharpening"],
-      },
+      description:
+        "Portrait scene detected. Auto-Face AI will auto-select the best face model (GFPGAN / CodeFormer / hybrid) for the cleanest result. (Native fallback in use — install the restoration service for premium GFPGAN / CodeFormer quality.)",
+      suggestedEnhancement: "auto_face",
+      suggestedFilter: null,
+      detectedSubjects: ["portrait", "person", "face"],
+      confidence: 0.87,
+      analysisSource: "local",
+      servedBy: "native",
     });
   }
 
@@ -419,7 +463,11 @@ export async function handleDemoRequest(
     return ok({ registered: 1284, activated: 987, converted: 393, retained: 312 });
   }
 
-  if (url.startsWith("/api/admin/users") && !url.includes("/suspend") && !url.includes("/credits")) {
+  if (url.match(/\/api\/admin\/users\/\d+\/plan$/) && method === "PATCH") {
+    return ok({ success: true, userId: 1, planId: 2, planExpiresAt: null, creditsLimit: 600, message: "Assigned plan" });
+  }
+
+  if (url.startsWith("/api/admin/users") && !url.includes("/suspend") && !url.includes("/credits") && !url.includes("/plan")) {
     return ok({ users: DEMO_ADMIN_USERS, total: DEMO_ADMIN_USERS.length, page: 1, totalPages: 1 });
   }
 

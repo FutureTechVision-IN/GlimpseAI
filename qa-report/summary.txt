@@ -1,0 +1,12 @@
+QA Runner summary
+=================
+Timestamp:        2026-05-02T14:40:57Z
+Iterations used:  1 / 2
+Image suite exit: 0
+Video suite exit: 0 (skipped=0)
+Smoke suite exit: 0
+
+Image failure log: (none)
+Video failure log: (none)
+Chain failure log: (none)
+Smoke failure log: (none)

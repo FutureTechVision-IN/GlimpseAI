@@ -11,7 +11,11 @@ import {
   CheckCircle2, XCircle, Loader2, Crown, Upload, Star, Layers,
   Image as ImageIcon, Video as VideoIcon, TrendingUp,
 } from "lucide-react";
-import { getEnhancementMeta, formatProcessingTime } from "@/lib/enhancement-labels";
+import {
+  getEnhancementMeta,
+  groupEnhancementsForDashboardByCategory,
+  enhancementStudioHref,
+} from "@/lib/enhancement-labels";
 import { cn } from "@/lib/utils";
 import AiChatWidget from "../components/ai-chat-widget";
 
@@ -22,7 +26,7 @@ function getGreeting() {
   return "Good evening";
 }
 
-type ActionKey = "upscale" | "enhance" | "restore" | "video";
+type ActionKey = "upscale" | "enhance" | "restore" | "video" | "batch";
 
 interface ActionDef {
   key: ActionKey;
@@ -35,6 +39,8 @@ interface ActionDef {
   iconBg: string;
   iconFg: string;
   badge?: string;      // e.g. "★ Most used"
+  /** When true, the file input accepts multiple files at once (Batch). */
+  multiple?: boolean;
 }
 
 const ACTIONS: ActionDef[] = [
@@ -54,8 +60,8 @@ const ACTIONS: ActionDef[] = [
     key: "enhance",
     icon: Wand2,
     title: "Enhance",
-    tagline: "One-click auto-polish",
-    href: "/photo-studio?enhance=auto",
+    tagline: "Auto Face AI — balanced faces & detail",
+    href: "/photo-studio?enhance=auto_face",
     accept: "image/*",
     accent: "border-zinc-800/70 hover:border-cyan-500/40 shadow-transparent hover:shadow-cyan-500/20",
     iconBg: "bg-cyan-500/15",
@@ -76,12 +82,25 @@ const ACTIONS: ActionDef[] = [
     key: "video",
     icon: Film,
     title: "Video",
-    tagline: "Stabilize & color grade",
+    tagline: "Trim, stabilize & AI video restore",
     href: "/video-studio",
     accept: "video/*",
     accent: "border-zinc-800/70 hover:border-purple-500/40 shadow-transparent hover:shadow-purple-500/20",
     iconBg: "bg-purple-500/15",
     iconFg: "text-purple-400",
+  },
+  {
+    key: "batch",
+    icon: Layers,
+    title: "Batch",
+    tagline: "Enhance many photos or videos at once",
+    href: "/photo-studio?mode=batch",
+    accept: "image/*,video/*",
+    accent: "border-zinc-800/70 hover:border-amber-500/40 shadow-transparent hover:shadow-amber-500/20",
+    iconBg: "bg-amber-500/15",
+    iconFg: "text-amber-400",
+    badge: "New",
+    multiple: true,
   },
 ];
 
@@ -115,11 +134,55 @@ function ActionCard({ action }: { action: ActionDef }) {
     [action.href, navigate],
   );
 
+  /**
+   * Multi-file router used by the Batch action card. Reads each file as a
+   * data URL, stashes them as glimpse:pending-batch, and routes to the
+   * studio in batch mode. Limited to a sane maximum (12) to avoid stalling
+   * sessionStorage; the editor surfaces the user's plan limit on top of this.
+   */
+  const routeWithFiles = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) {
+        navigate(action.href);
+        return;
+      }
+      const MAX_BATCH = 12;
+      const trimmed = files.slice(0, MAX_BATCH);
+      const readAll = trimmed.map(
+        (f) =>
+          new Promise<{ name: string; type: string; dataUrl: string }>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+              resolve({ name: f.name, type: f.type, dataUrl: String(reader.result ?? "") });
+            reader.onerror = () => reject(new Error("Read failed"));
+            reader.readAsDataURL(f);
+          }),
+      );
+      Promise.all(readAll)
+        .then((items) => {
+          try {
+            sessionStorage.setItem("glimpse:pending-batch", JSON.stringify(items));
+          } catch {
+            // Quota exceeded — drop to single-file route silently.
+            sessionStorage.setItem(
+              "glimpse:pending-upload",
+              JSON.stringify(items[0]),
+            );
+          }
+          navigate(action.href);
+        })
+        .catch(() => navigate(action.href));
+    },
+    [action.href, navigate],
+  );
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) routeWithFile(f);
+    const list = Array.from(e.dataTransfer.files ?? []);
+    if (list.length === 0) return;
+    if (action.multiple) routeWithFiles(list);
+    else routeWithFile(list[0] ?? null);
   };
 
   const Icon = action.icon;
@@ -164,10 +227,10 @@ function ActionCard({ action }: { action: ActionDef }) {
             ? "bg-gradient-to-r from-teal-500 to-cyan-500 text-zinc-950 hover:from-teal-400 hover:to-cyan-400 focus-visible:ring-teal-300"
             : "bg-zinc-800 text-zinc-100 hover:bg-zinc-700 focus-visible:ring-zinc-400",
         )}
-        aria-label={`Upload ${action.accept.includes("video") ? "video" : "image"} for ${action.title}`}
+        aria-label={`Upload ${action.multiple ? "multiple files" : (action.accept.includes("video") ? "video" : "image")} for ${action.title}`}
       >
         <Upload className="h-3.5 w-3.5" />
-        Upload {action.accept.includes("video") ? "video" : "image"}
+        Upload {action.multiple ? "multiple files" : (action.accept.includes("video") ? "video" : "image")}
       </button>
 
       <div
@@ -183,10 +246,15 @@ function ActionCard({ action }: { action: ActionDef }) {
         ref={inputRef}
         type="file"
         accept={action.accept}
+        multiple={action.multiple ?? false}
         className="sr-only"
         onChange={(e) => {
-          const f = e.target.files?.[0] ?? null;
-          routeWithFile(f);
+          const files = Array.from(e.target.files ?? []);
+          if (action.multiple) {
+            routeWithFiles(files);
+          } else {
+            routeWithFile(files[0] ?? null);
+          }
         }}
       />
 
@@ -221,6 +289,8 @@ export default function Dashboard() {
   const { user } = useAuth();
   const { data: usage, isLoading: isLoadingUsage } = useGetUserUsage();
   const { data: recentJobs, isLoading: isLoadingJobs } = useListMediaJobs({ status: "all" });
+
+  const enhancementSections = useMemo(() => groupEnhancementsForDashboardByCategory(), []);
 
   const creditsUsed  = usage?.creditsUsed  || 0;
   const creditsLimit = usage?.creditsLimit || 1;
@@ -313,6 +383,51 @@ export default function Dashboard() {
           </div>
         </section>
 
+        {/* ── Full enhancement library (deep-links into Photo / Video Studio) ─ */}
+        <section aria-labelledby="enhancement-library" className="space-y-6">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 id="enhancement-library" className="text-lg font-semibold text-white">
+                Browse every enhancement
+              </h2>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                Jump straight into Photo Studio or Video Studio with the mode pre-selected.
+              </p>
+            </div>
+            <Link
+              href="/photo-studio"
+              className="text-xs text-teal-400 hover:text-teal-300 focus:outline-none focus-visible:underline"
+            >
+              Open Photo Studio
+            </Link>
+          </div>
+          <div className="space-y-6">
+            {enhancementSections.map(({ category, sectionTitle, items }) => (
+              <div key={category}>
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                  {sectionTitle}
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {items.map(({ id, meta }) => (
+                    <Link
+                      key={id}
+                      href={enhancementStudioHref(id, meta.category)}
+                      className={cn(
+                        "inline-flex max-w-full items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors hover:border-teal-500/50 hover:bg-teal-500/10 hover:text-teal-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400",
+                        meta.borderColor,
+                        meta.bgColor,
+                        meta.color,
+                      )}
+                    >
+                      <span className="truncate">{meta.label}</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {/* ── Continue where you left off ───────────────────────────────── */}
         <section aria-labelledby="continue" className="space-y-3">
           <div className="flex items-end justify-between">
@@ -351,6 +466,17 @@ export default function Dashboard() {
               {recentDone.map((job) => {
                 const meta = getEnhancementMeta(job.enhancementType);
                 const thumb = (job as any).processedUrl || (job as any).thumbnailUrl || (job as any).sourceUrl;
+                // Parse chain metadata stored in errorMessage by /media/enhance-chain.
+                let chainStages: Array<{ stage: string; op: string }> = [];
+                try {
+                  const raw = (job as { errorMessage?: string | null }).errorMessage;
+                  if (raw && typeof raw === "string" && raw.startsWith("{")) {
+                    const parsed = JSON.parse(raw) as { chain?: Array<{ stage: string; op: string }> };
+                    chainStages = Array.isArray(parsed.chain) ? parsed.chain : [];
+                  }
+                } catch { /* not chain metadata, ignore */ }
+                const filterStage = chainStages.find((s) => s.stage === "filter");
+                const upscaleStage = chainStages.find((s) => s.stage === "upscale");
                 return (
                   <Link key={job.id} href="/history">
                     <a className="group relative block h-32 w-44 flex-shrink-0 snap-start overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 transition-colors hover:border-teal-500/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
@@ -371,10 +497,20 @@ export default function Dashboard() {
                         </div>
                       )}
                       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-2">
-                        <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-center justify-between gap-1 flex-wrap">
                           <span className={cn("truncate rounded px-1 py-0.5 text-[9px] font-semibold", meta.bgColor, meta.color, "border", meta.borderColor)}>
                             {meta.shortLabel}
                           </span>
+                          {filterStage && (
+                            <span className="rounded border border-violet-500/40 bg-violet-500/10 px-1 py-0.5 text-[9px] font-semibold text-violet-300">
+                              + {filterStage.op}
+                            </span>
+                          )}
+                          {upscaleStage && (
+                            <span className="rounded border border-cyan-500/40 bg-cyan-500/10 px-1 py-0.5 text-[9px] font-semibold text-cyan-300">
+                              + {upscaleStage.op === "upscale_4x" || upscaleStage.op === "esrgan_upscale_4x" ? "4×" : "2×"}
+                            </span>
+                          )}
                           {statusIcon(job.status)}
                         </div>
                         <div className="mt-1 truncate text-[10px] text-zinc-300">

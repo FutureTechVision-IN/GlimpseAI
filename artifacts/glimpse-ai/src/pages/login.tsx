@@ -45,7 +45,9 @@ export default function Login() {
       
       <div className="w-full max-w-md bg-zinc-950 border border-white/10 rounded-2xl p-8 shadow-xl">
         <h1 className="text-2xl font-semibold text-white mb-2">Welcome back</h1>
-        <p className="text-white/60 mb-6">Log in to your account to continue editing.</p>
+        <p className="text-white/60 mb-6">
+          Log in with your account email and password (including admin accounts).
+        </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">

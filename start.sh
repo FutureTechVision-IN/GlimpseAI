@@ -238,15 +238,43 @@ ensure_database() {
   fi
 }
 
+run_sql_compat_migrations() {
+  local sql_dir="${ROOT_DIR}/lib/db/migrations"
+  if ! has_cmd psql; then
+    warn "psql not found — skipping SQL compat migrations (run lib/db/migrations/*.sql manually if API fails on missing columns)"
+    return 0
+  fi
+  local f
+  shopt -s nullglob
+  for f in "${sql_dir}"/*.sql; do
+    log "Applying SQL migration $(basename "${f}")..."
+    set +e
+    PGPASSWORD="${POSTGRES_PASSWORD}" psql -v ON_ERROR_STOP=1 \
+      -U "${POSTGRES_USER}" -h 127.0.0.1 -p "${DB_PORT}" -d "${POSTGRES_DB}" -f "${f}" 2>&1 | sed 's/^/  /'
+    local psql_ec="${PIPESTATUS[0]}"
+    set -e
+    if [ "${psql_ec}" -ne 0 ]; then
+      die "SQL migration failed: ${f} (exit ${psql_ec}). Fix the database or migration file."
+    fi
+    log_ok "Applied $(basename "${f}")"
+  done
+  shopt -u nullglob
+}
+
 run_db_push() {
   log "Applying database schema (drizzle-kit push)..."
-  (
-    cd "${ROOT_DIR}/lib/db"
-    # --force skips interactive confirmation prompts
-    DATABASE_URL="${DATABASE_URL}" npx drizzle-kit push --force --config ./drizzle.config.ts 2>&1 \
-      | while IFS= read -r line; do printf '  %s\n' "$line"; done
-  ) && log_ok "Database schema applied" \
-    || die "Database schema push failed. Check DATABASE_URL and DB connectivity."
+  local tmp push_ec
+  tmp="$(mktemp)"
+  set +e
+  ( cd "${ROOT_DIR}/lib/db" && DATABASE_URL="${DATABASE_URL}" npx drizzle-kit push --force --config ./drizzle.config.ts >"${tmp}" 2>&1 )
+  push_ec=$?
+  set -e
+  sed 's/^/  /' "${tmp}"
+  rm -f "${tmp}"
+  if [ "${push_ec}" -ne 0 ]; then
+    die "Database schema push failed (exit ${push_ec}). Check DATABASE_URL and logs above."
+  fi
+  log_ok "Database schema applied"
 }
 
 # ---------------------------------------------------------------------------
@@ -265,6 +293,41 @@ check_health() {
 
   warn "${label} did not respond at ${url} after ${retries} attempts"
   return 1
+}
+
+probe_autoface_capability() {
+  # Reports which path the user-facing "Auto-Face" recommendation will run on:
+  #   - "sidecar" (Docker / hybrid / explicitly-running Python service)
+  #   - "native fallback" (Sharp-only, no Docker required)
+  if [ "${SKIP_RESTORATION}" -eq 1 ]; then
+    log_ok "Studio ready, Auto-Face served by native fallback (Sharp pipeline, no Python sidecar)"
+    return
+  fi
+
+  local body
+  body="$(curl -sf --max-time 3 "http://127.0.0.1:${RESTORATION_PORT}/health" 2>/dev/null || true)"
+
+  if [ -z "${body}" ]; then
+    log_ok "Studio ready, Auto-Face served by native fallback (Sharp pipeline; sidecar unreachable)"
+    return
+  fi
+
+  local caps
+  caps="$(printf '%s' "${body}" | tr -d '[:space:]' | sed -n 's/.*"capabilities":\[\([^]]*\)\].*/\1/p' | tr -d '"')"
+
+  if [ -z "${caps}" ]; then
+    log_ok "Studio ready, Auto-Face served by native fallback (sidecar reachable but reports no capabilities)"
+    return
+  fi
+
+  case ",${caps}," in
+    *,auto_face,*|*,face_restore,*|*,codeformer,*|*,gfpgan,*)
+      log_ok "Studio ready, Auto-Face served by sidecar (capabilities: ${caps})"
+      ;;
+    *)
+      log_ok "Studio ready, Auto-Face served by native fallback (sidecar capabilities=${caps} — face models not available)"
+      ;;
+  esac
 }
 
 run_health_checks() {
@@ -293,6 +356,8 @@ run_health_checks() {
   else
     warn "Some services may not be ready yet — check logs above"
   fi
+
+  probe_autoface_capability
 }
 
 # ---------------------------------------------------------------------------
@@ -359,6 +424,7 @@ run_native_stack() {
   fi
 
   ensure_database
+  run_sql_compat_migrations
   run_db_push
 
   # Start restoration service (non-blocking)

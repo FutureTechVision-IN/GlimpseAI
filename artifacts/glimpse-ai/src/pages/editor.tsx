@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import Layout from "../components/layout";
@@ -26,6 +26,9 @@ import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { saveToHistory } from "@/lib/local-history";
+import { buildEnhancedDownloadName } from "@/lib/export-filename";
+import { buildStoreZip, base64ToBytes, type ZipEntry } from "@/lib/zip-store";
+import { getEnhancementMeta } from "@/lib/enhancement-labels";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -107,6 +110,15 @@ interface AISuggestion {
   suggestedFilter?: string | null;
   detectedSubjects: string[];
   confidence: number;
+  /**
+   * Where the recommended enhancement will run.
+   *  - "sidecar": restoration Python service (Docker / native) is reachable
+   *    and exposes the premium model.
+   *  - "native":  Sharp-only fallback (no Docker required); for face scenes
+   *    this still produces a usable result.
+   *  - "unknown": not yet probed.
+   */
+  servedBy?: "sidecar" | "native" | "unknown";
 }
 
 interface EditorSnapshot {
@@ -158,6 +170,18 @@ const DEFAULT_CROP: CropBox = DEFAULT_CROP_BOX;
 const MAX_FILE_MB = 100;
 const ONBOARDING_KEY = "glimpse_onboarding_done";
 
+/** Must match server `RESTORATION_TYPES` in image-enhancer — keep enhancement + stylistic filter */
+const RESTORATION_ENHANCEMENT_TYPES = new Set<string>([
+  "face_restore",
+  "face_restore_hd",
+  "codeformer",
+  "auto_face",
+  "hybrid",
+  "esrgan_upscale_2x",
+  "esrgan_upscale_4x",
+  "old_photo_restore",
+]);
+
 const FILTER_PRESETS: FilterPreset[] = CANONICAL_FILTER_REGISTRY.map((filter): FilterPreset => ({
   name: filter.name,
   key: filter.id,
@@ -174,7 +198,10 @@ const FILTER_PRESETS_BY_KEY = new Map<string, FilterPreset>(
 );
 
 // -- Simple-mode one-click presets (expanded) --
+// Auto Face AI leads: it auto-selects the best face model (GFPGAN / CodeFormer / hybrid)
+// based on detected degradation and is the safest, highest-quality default for everyone.
 const SIMPLE_PRESETS: { type: EnhanceMediaBodyEnhancementType; label: string; desc: string; icon: React.ReactNode; filterName?: string }[] = [
+  { type: "auto_face",               label: "Auto Face AI",     desc: "Auto-select best face model",         icon: <Sparkles     className="w-5 h-5" /> },
   { type: "auto",                   label: "Auto Enhance",     desc: "AI-powered one-click fix",            icon: <Wand2        className="w-5 h-5" /> },
   { type: "portrait",               label: "Portrait Polish",  desc: "Smooth skin & warm tones",            icon: <Eye          className="w-5 h-5" /> },
   { type: "lighting_enhance",       label: "Fix Lighting",     desc: "Mood-aware shadow & highlight fix",   icon: <Sun          className="w-5 h-5" /> },
@@ -188,7 +215,6 @@ const SIMPLE_PRESETS: { type: EnhanceMediaBodyEnhancementType; label: string; de
   { type: "face_restore",            label: "Face Restore",     desc: "GFPGAN AI face restoration",          icon: <ScanFace     className="w-5 h-5" /> },
   { type: "codeformer",              label: "CodeFormer",       desc: "CodeFormer face restoration",         icon: <ScanEye      className="w-5 h-5" /> },
   { type: "hybrid",                  label: "Hybrid Restore",   desc: "CodeFormer + GFPGAN max quality",     icon: <Sparkles     className="w-5 h-5" /> },
-  { type: "auto_face",               label: "Auto Face AI",     desc: "Auto-select best face model",         icon: <Sparkles     className="w-5 h-5" /> },
   { type: "old_photo_restore",       label: "Old Photo Fix",    desc: "Restore old/damaged photos",          icon: <ImageUp      className="w-5 h-5" /> },
   { type: "esrgan_upscale_2x",       label: "ESRGAN 2x",        desc: "Real-ESRGAN super-resolution 2×",     icon: <ZoomIn       className="w-5 h-5" /> },
   { type: "esrgan_upscale_4x",       label: "ESRGAN 4x",        desc: "Real-ESRGAN super-resolution 4×",     icon: <Layers       className="w-5 h-5" /> },
@@ -255,11 +281,12 @@ function inferImageType(subjects: string[]): string {
 function getAlternatives(imageType: string, primary: string): { type: EnhanceMediaBodyEnhancementType; label: string }[] {
   const pool: Record<string, { type: EnhanceMediaBodyEnhancementType; label: string }[]> = {
     portrait: [
-      { type: "portrait", label: "Portrait Polish" },
-      { type: "beauty", label: "Beauty" },
+      { type: "auto_face", label: "Auto-Face" },
+      { type: "color_grade_cinematic", label: "Cinematic Grade" },
+      { type: "color_grade_warm", label: "Warm Tones" },
+      { type: "lighting_enhance", label: "Fix Lighting" },
       { type: "skin_retouch", label: "Skin Retouch" },
       { type: "blur_background", label: "Background Blur" },
-      { type: "lighting_enhance", label: "Fix Lighting" },
     ],
     landscape: [
       { type: "auto", label: "Auto Enhance" },
@@ -303,7 +330,7 @@ function buildCssFilter(f: FilterState, cssExtra?: string): string {
     warmthShift > 0 ? `sepia(${Math.min(warmthShift * 2, 50)}%)` : "",
     warmthShift < 0 ? `hue-rotate(${Math.max(warmthShift * 3, -60)}deg)` : "",
     // cssExtra = per-filter CSS string that approximates Sharp's .tint() / .gamma()
-    cssExtra ?? "",
+    (cssExtra ?? "").replace(/^filter:\s*/, ""),
   ];
   return parts.filter(Boolean).join(" ");
 }
@@ -475,7 +502,15 @@ export default function Editor() {
   const planSlug: string | null = (user as any)?.planSlug ?? null;
   const isAdmin = user?.role === "admin";
   // Premium-only features
-  const PREMIUM_FEATURES = new Set(["upscale_4x", "posture", "codeformer", "hybrid", "auto_face", "face_restore_hd", "esrgan_upscale_4x"]);
+  const PREMIUM_FEATURES = new Set([
+    "upscale_4x",
+    "posture",
+    "codeformer",
+    "hybrid",
+    "face_restore_hd",
+    "esrgan_upscale_4x",
+    "video_restore",
+  ]);
   const RESTORATION_FEATURES = new Set(["face_restore", "codeformer", "hybrid", "auto_face", "old_photo_restore", "esrgan_upscale_2x", "esrgan_upscale_4x", "face_restore_hd"]);
   const BASIC_PLUS_FEATURES = new Set(["stabilize", "trim"]);
   const PREMIUM_FILTER_KEYS = new Set(
@@ -518,17 +553,77 @@ export default function Editor() {
     const q = new URLSearchParams(window.location.search).get("enhance");
     return (q as EnhanceMediaBodyEnhancementType) || null;
   }, []);
-  const [enhancementType, setEnhancementType] = useState<EnhanceMediaBodyEnhancementType>(initialEnhanceFromQuery || "auto");
+  const defaultEnhancementForStudio = React.useMemo<EnhanceMediaBodyEnhancementType>(() => {
+    if (initialEnhanceFromQuery) return initialEnhanceFromQuery;
+    /** Video: trim is tier-safe; premium users choose AI Enhance. Photo: auto-select face model baseline. */
+    return studioMode === "video" ? "trim" : "auto_face";
+  }, [initialEnhanceFromQuery, studioMode]);
+  const [enhancementType, setEnhancementType] = useState<EnhanceMediaBodyEnhancementType>(defaultEnhancementForStudio);
   const [selectedFilter, setSelectedFilter] = useState<string | null>(null);
   const [presetId, setPresetId] = useState<number | undefined>(undefined);
   const [currentJobId, setCurrentJobId] = useState<number | null>(null);
   const [processStage, setProcessStage] = useState<ProcessStage>("idle");
 
+  // Auto-process trigger: when set, the next render's useEffect calls
+  // handleProcess() with the latest enhancementType / selectedFilter / upscaleAfter
+  // closures. Used by "Apply: auto_face" / "Or try" alternatives / filter chips
+  // / upscale chips to behave as one-click actions. The ref + counter pattern
+  // ensures the same trigger source can fire multiple times in a session.
+  const pendingAutoProcessRef = useRef<{ source: string } | null>(null);
+  const [autoProcessTick, setAutoProcessTick] = useState(0);
+
   // Image zoom
   const [zoomLevel, setZoomLevel] = useState(1);
+  // Pan offset in CSS pixels — only meaningful when zoomLevel > 1, otherwise
+  // the image fits the frame and panning is a no-op. The handlers below
+  // attach to every image preview path (single, split-compare, batch hero)
+  // so the experience is uniform: click-drag to move, release to settle.
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const zoomIn = () => setZoomLevel((z) => Math.min(z + 0.25, 4));
-  const zoomOut = () => setZoomLevel((z) => Math.max(z - 0.25, 0.25));
-  const zoomReset = () => setZoomLevel(1);
+  const zoomOut = () =>
+    setZoomLevel((z) => {
+      const next = Math.max(z - 0.25, 0.25);
+      if (next <= 1) setPanOffset({ x: 0, y: 0 });
+      return next;
+    });
+  const zoomReset = () => {
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
+  };
+  const canPan = zoomLevel > 1;
+  const panHandlers = useMemo(
+    () => ({
+      onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+        if (zoomLevel <= 1) return;
+        setIsPanning(true);
+        panStartRef.current = { x: e.clientX, y: e.clientY, ox: panOffset.x, oy: panOffset.y };
+        try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+      },
+      onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+        if (!panStartRef.current) return;
+        const { x, y, ox, oy } = panStartRef.current;
+        setPanOffset({ x: ox + (e.clientX - x), y: oy + (e.clientY - y) });
+      },
+      onPointerUp: (e: React.PointerEvent<HTMLElement>) => {
+        if (!panStartRef.current) return;
+        panStartRef.current = null;
+        setIsPanning(false);
+        try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+      },
+      onPointerCancel: () => {
+        panStartRef.current = null;
+        setIsPanning(false);
+      },
+    }),
+    [zoomLevel, panOffset.x, panOffset.y],
+  );
+  // Combined zoom + pan transform — preserves the existing scale-only behaviour
+  // when zoomLevel === 1, so single-file previews look unchanged from before.
+  const zoomTransform = `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel})`;
+  const zoomTransition = isPanning ? "none" : "transform 0.2s";
+  const panCursor = canPan ? (isPanning ? "grabbing" : "grab") : "default";
   // Advanced controls
   const [transform, setTransform] = useState<TransformState>(DEFAULT_TRANSFORM);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
@@ -570,6 +665,33 @@ export default function Editor() {
   const upscaleChainRef = useRef(false); // tracks whether we're in chained upscale step
   const pendingExportRef = useRef(false);  // auto-download after process+export flow
   const previewRequestSeqRef = useRef(0);
+
+  // ── Batch mode (multi-file enhancement) ───────────────────────────────
+  // Activated by ?mode=batch deep-link from the dashboard Batch action card.
+  // The dashboard stashes selected files in sessionStorage:glimpse:pending-batch;
+  // we pick them up on mount, render a queue panel, and on "Process Batch"
+  // upload each file (one at a time) then call /media/enhance-batch with the
+  // full jobIds[] array using the shared (enhance / filter / upscale) spec.
+  const isBatchMode = React.useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("mode") === "batch";
+  }, []);
+  type BatchItem = {
+    id: string;
+    name: string;
+    type: string;
+    dataUrl: string;
+    jobId: number | null;
+    status: "queued" | "uploading" | "processing" | "completed" | "failed";
+    error?: string;
+  };
+  const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  // Which queued image is rendered as the live "sample" preview. Filters and
+  // CSS adjustments are applied to this image in real time, locally — no API
+  // calls are made for filter/preset switching. Only Process Batch hits the
+  // server. We index into the photo-only subset (videos can't be CSS-previewed).
+  const [batchPreviewIndex, setBatchPreviewIndex] = useState(0);
 
   const { toast } = useToast();
 
@@ -631,6 +753,29 @@ export default function Editor() {
   //    Runs once on mount — the key is consumed so re-navigation is clean.
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // Batch deep-link wins over single — drains glimpse:pending-batch.
+    const rawBatch = sessionStorage.getItem("glimpse:pending-batch");
+    if (rawBatch) {
+      sessionStorage.removeItem("glimpse:pending-batch");
+      try {
+        const parsed = JSON.parse(rawBatch) as Array<{ name: string; type: string; dataUrl: string }>;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setBatchItems(
+            parsed.map((p, idx) => ({
+              id: `batch-${Date.now()}-${idx}`,
+              name: p.name,
+              type: p.type,
+              dataUrl: p.dataUrl,
+              jobId: null,
+              status: "queued",
+            })),
+          );
+          return;
+        }
+      } catch { /* fall through to single-file */ }
+    }
+
     const raw = sessionStorage.getItem("glimpse:pending-upload");
     if (!raw) return;
     sessionStorage.removeItem("glimpse:pending-upload");
@@ -659,57 +804,55 @@ export default function Editor() {
   useEffect(() => {
     if (!currentJob) return;
     if (currentJob.status === "completed" && processStage !== "completed") {
-      // Check if we need to chain an upscale step
-      if (upscaleAfter && !upscaleChainRef.current) {
-        upscaleChainRef.current = true;
-        setProcessStage("processing");
-        toast({ title: "Step 2: Upscaling...", description: `Applying ${upscaleAfter === "upscale_4x" ? "4x" : "2x"} upscale to enhanced image.` });
-        // Extract processed base64 (strip data URI prefix)
-        const processedUri = currentJob.processedUrl ?? "";
-        const rawB64 = processedUri.replace(/^data:[^;]+;base64,/, "");
-        if (!rawB64) {
-          setProcessStage("completed");
-          upscaleChainRef.current = false;
-          return;
-        }
-        // Re-upload the processed image, then enhance with upscale
-        const fname = `upscale-${file?.name ?? "image.jpg"}`;
-        uploadMedia.mutate(
-          { data: { filename: fname, mimeType: file?.type ?? "image/jpeg", size: rawB64.length, mediaType: "photo", base64Data: rawB64 } },
-          {
-            onSuccess: (newJob) => {
-              setCurrentJobId(newJob.id);
-              enhanceMedia.mutate(
-                { data: { jobId: newJob.id, enhancementType: upscaleAfter } },
-                {
-                  onError: () => {
-                    setProcessStage("failed");
-                    upscaleChainRef.current = false;
-                    toast({ title: "Upscale failed", description: "The chained upscale step failed.", variant: "destructive" });
-                  },
-                },
-              );
-            },
-            onError: () => {
-              setProcessStage("failed");
-              upscaleChainRef.current = false;
-              toast({ title: "Upscale failed", description: "Failed to upload for upscale chain.", variant: "destructive" });
-            },
-          },
-        );
-        return;
-      }
+      // The server-side /media/enhance-chain endpoint produces ONE completed
+      // job for the full enhance → filter → upscale chain, so we no longer
+      // need a client-side re-upload+upscale loop. (upscaleChainRef is kept
+      // to silence ref-reset semantics elsewhere but is never set true now.)
       setProcessStage("completed");
       upscaleChainRef.current = false;
-      toast({ title: "Enhancement complete!", description: upscaleAfter ? "Enhancement + upscale applied!" : "Your media has been successfully enhanced." });
+      const completionParts = [
+        "Enhancement",
+        selectedFilter ? "filter" : null,
+        upscaleAfter ? "upscale" : null,
+      ].filter(Boolean) as string[];
+      const completionDesc = completionParts.length > 1
+        ? `${completionParts.join(" + ")} applied!`
+        : "Your media has been successfully enhanced.";
+      toast({ title: "Enhancement complete!", description: completionDesc });
 
-      // Save to local history (photos only, max 5)
+      // Save to local history (photos only, max 5).
+      // Decode chain metadata if the server stored it in errorMessage so the
+      // History row can show enhance + filter + upscale badges in one row.
       if (studioMode === "photo" && currentJob.processedUrl) {
+        if (!currentJob.processedUrl.startsWith("data:image")) {
+          console.warn("Received malformed processedUrl from backend:", currentJob.processedUrl);
+        }
+        let chainMeta: { servedBy?: "sidecar" | "native"; filterId?: string | null; upscale?: string | null } = {};
+        try {
+          const raw = (currentJob as { errorMessage?: string | null }).errorMessage;
+          if (raw && raw.startsWith("{")) {
+            const parsed = JSON.parse(raw) as {
+              servedBy?: "sidecar" | "native";
+              chain?: Array<{ stage: string; op: string }>;
+            };
+            const filterStage = parsed.chain?.find((s) => s.stage === "filter");
+            const upscaleStage = parsed.chain?.find((s) => s.stage === "upscale");
+            chainMeta = {
+              servedBy: parsed.servedBy,
+              filterId: filterStage?.op ?? null,
+              upscale: upscaleStage?.op ?? null,
+            };
+          }
+        } catch { /* not chain metadata, ignore */ }
         saveToHistory({
           filename: file?.name ?? "image.jpg",
-          enhancementType: enhancementType ?? "auto",
+          enhancementType: enhancementType ?? "auto_face",
           dataUri: currentJob.processedUrl,
           mimeType: file?.type ?? "image/jpeg",
+          referenceCode: (currentJob as { referenceCode?: string | null }).referenceCode ?? undefined,
+          filterId: chainMeta.filterId ?? selectedFilter ?? null,
+          upscale: chainMeta.upscale ?? upscaleAfter ?? null,
+          servedBy: chainMeta.servedBy,
         }).catch(() => {}); // silent fail — local storage only
       }
     } else if (currentJob.status === "failed" && processStage !== "failed") {
@@ -759,9 +902,12 @@ export default function Editor() {
     if (selectedPreset?.serverFilter) {
       settings.filterId = selectedPreset.serverFilter;
       settings.filterVersion = canonicalFilter?.version ?? selectedPreset.version;
-      if (editorMode === "simple") {
-        effectiveType = "filter";
-      }
+      // NOTE: Previously we downgraded effectiveType to "filter" for non-restoration
+      // enhancements when a filter was selected. That made the chain spec drop the
+      // enhance stage. The /media/enhance-chain endpoint runs enhance → filter →
+      // upscale natively, so we keep the user's chosen enhancement intact and let
+      // the chain orchestrator handle stacking. If no enhancement was chosen, the
+      // chain is filter-only, which is also correct.
     }
 
     if (skinSmoothing !== 50) {
@@ -781,6 +927,12 @@ export default function Editor() {
       if (muteAudio) settings.muteAudio = true;
       if (denoise) settings.denoise = true;
       if (videoColorGrade) settings.videoColorGrade = videoColorGrade;
+      settings.restorationModel = "auto";
+      // Video parity: forward selectedFilter + upscaleAfter so the sidecar
+      // applies them on the restored frames (mapped color_grade or
+      // per-frame approximation for unmapped filter ids).
+      if (selectedFilter) settings.filterId = selectedFilter;
+      if (upscaleAfter) settings.upscale = upscaleAfter;
     }
 
     if (mediaType === "photo") {
@@ -803,7 +955,7 @@ export default function Editor() {
       mediaType === "photo" &&
       (
         selectedFilter !== null ||
-        enhancementType !== "auto" ||
+        (enhancementType !== "auto" && enhancementType !== "auto_face") ||
         skinSmoothing !== 50 ||
         transform.rotation !== 0 ||
         transform.flipH ||
@@ -841,6 +993,7 @@ export default function Editor() {
     cropBox,
     filters,
     editorMode,
+    upscaleAfter,
   ]);
 
   useEffect(() => {
@@ -960,7 +1113,11 @@ export default function Editor() {
     reader.readAsDataURL(sel);
   };
 
-  // Apply AI suggestion
+  // Apply AI suggestion — IMMEDIATELY runs the enhancement (queues an
+  // auto-process tick). The user no longer needs to click "Enhance Media"
+  // after picking a suggestion. The actual fetch happens in the
+  // pendingAutoProcessRef useEffect below, which runs after React has
+  // committed the new enhancementType / selectedFilter state.
   const applyAiSuggestion = useCallback(() => {
     if (!aiSuggestion) return;
     pushUndo();
@@ -981,10 +1138,12 @@ export default function Editor() {
       imageType: inferImageType(aiSuggestion.detectedSubjects),
       confidence: aiSuggestion.confidence,
     });
-    toast({ title: "AI suggestion applied", description: `Using ${et} enhancement` });
+    toast({ title: "Applying " + et, description: "Running enhancement now…" });
+    pendingAutoProcessRef.current = { source: "ai-suggestion" };
+    setAutoProcessTick(t => t + 1);
   }, [aiSuggestion, pushUndo, toast]);
 
-  // Apply a specific alternative enhancement
+  // Apply a specific alternative enhancement — also auto-runs immediately.
   const applyAlternative = useCallback((et: EnhanceMediaBodyEnhancementType) => {
     pushUndo();
     setEnhancementType(et);
@@ -996,7 +1155,9 @@ export default function Editor() {
         confidence: aiSuggestion.confidence,
       });
     }
-    toast({ title: "Enhancement selected", description: `Switched to ${et}` });
+    toast({ title: "Applying " + et, description: "Running enhancement now…" });
+    pendingAutoProcessRef.current = { source: "alternative" };
+    setAutoProcessTick(t => t + 1);
   }, [aiSuggestion, pushUndo, toast]);
 
   // Export handler — extracted for reuse by button + keyboard shortcut
@@ -1015,9 +1176,13 @@ export default function Editor() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const ext = mime === "image/png" ? ".png" : mime === "image/webp" ? ".webp" : ".jpg";
-      const baseName = (file?.name ?? "image.jpg").replace(/\.[^.]+$/, "");
-      a.download = `enhanced-${baseName}${ext}`;
+      const ref = (currentJob as { referenceCode?: string | null }).referenceCode;
+      a.download = buildEnhancedDownloadName({
+        originalFilename: file?.name ?? (studioMode === "video" ? "video.mp4" : "image.jpg"),
+        enhancementType: enhancementType ?? (studioMode === "video" ? "trim" : "auto_face"),
+        referenceCode: ref,
+        mime,
+      });
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -1027,7 +1192,7 @@ export default function Editor() {
       window.open(currentJob.processedUrl!, "_blank");
       toast({ title: "Download", description: "Image opened in a new tab. Right-click to save." });
     }
-  }, [processStage, currentJob?.processedUrl, file?.name, toast]);
+  }, [processStage, currentJob, file?.name, enhancementType, studioMode, toast]);
 
   const handleProcess = useCallback(async () => {
     if (!file || !base64Data) return;
@@ -1037,9 +1202,51 @@ export default function Editor() {
     uploadMedia.mutate(
       { data: { filename: file.name, mimeType: file.type, size: file.size, mediaType, base64Data } },
       {
-        onSuccess: (job) => {
+        onSuccess: async (job) => {
           setCurrentJobId(job.id);
           setProcessStage("processing");
+
+          // ── Decide: chain or single? ───────────────────────────────────
+          // If the user picked a filter or an upscale step (or both) in
+          // Photo Studio, we run the full enhance → filter → upscale chain
+          // server-side via /media/enhance-chain (returns ONE final job).
+          // Video and single-step calls keep using the legacy /media/enhance.
+          const wantsChain =
+            mediaType === "photo" &&
+            (selectedFilter !== null || upscaleAfter !== null);
+
+          if (wantsChain) {
+            try {
+              const token = localStorage.getItem("glimpse_token");
+              const chainBody = {
+                jobId: job.id,
+                enhance: effectiveType === "filter" ? null : effectiveType,
+                filterId: selectedFilter ?? null,
+                upscale: upscaleAfter ?? null,
+                settings,
+              };
+              const resp = await fetch("/api/media/enhance-chain", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+                body: JSON.stringify(chainBody),
+              });
+              if (!resp.ok) {
+                const errBody = await resp.json().catch(() => ({})) as { error?: string };
+                throw new Error(errBody.error ?? `Chain request failed (${resp.status})`);
+              }
+              // Server starts processing; useGetMediaJob polling will pick up
+              // status updates exactly like the single-step path.
+            } catch (err) {
+              const message = err instanceof Error ? err.message : "Failed to start chain.";
+              setProcessStage("failed");
+              toast({ title: "Enhancement failed", description: message, variant: "destructive" });
+            }
+            return;
+          }
+
           enhanceMedia.mutate(
             { data: { jobId: job.id, enhancementType: effectiveType, presetId, settings } },
             {
@@ -1061,13 +1268,291 @@ export default function Editor() {
         },
       },
     );
-  }, [file, base64Data, mediaType, presetId, buildCanonicalEnhancementRequest, toast]);
+  }, [file, base64Data, mediaType, presetId, buildCanonicalEnhancementRequest, toast, selectedFilter, upscaleAfter, enhanceMedia, uploadMedia]);
+
+  // Auto-process effect: when applyAiSuggestion / applyAlternative / a filter
+  // chip queues a tick, run handleProcess() with the latest state. The ref
+  // gate (`pendingAutoProcessRef.current`) ensures we ONLY fire when an
+  // action handler explicitly requested a run — not on every render. We pull
+  // dependencies legitimately so handleProcess always has the freshest state.
+  useEffect(() => {
+    if (!pendingAutoProcessRef.current) return;
+    if (!file || !base64Data) return;
+    const isProcessingNow = processStage === "uploading" || processStage === "processing";
+    if (isProcessingNow) return;
+    const reason = pendingAutoProcessRef.current.source;
+    pendingAutoProcessRef.current = null;
+    void reason;
+    void handleProcess();
+  }, [autoProcessTick, file, base64Data, processStage, handleProcess, enhancementType, selectedFilter, upscaleAfter]);
 
   // Process & Export — for staged state: trigger processing then auto-download
   const handleProcessAndExport = useCallback(() => {
     pendingExportRef.current = true;
     void handleProcess();
   }, [handleProcess]);
+
+  /**
+   * Process all queued batch items.
+   *
+   * Flow:
+   *   1) For each item, upload via /media/upload and capture jobId.
+   *   2) Once every jobId is known, call /media/enhance-batch with the
+   *      shared (enhance / filter / upscale) settings. The server enforces
+   *      tier-aware maxBatchJobsForPlan; the UI surfaces failure clearly.
+   *   3) Per-file status flips queued → uploading → processing → completed.
+   *
+   * Uses the same buildCanonicalEnhancementRequest() as single-file mode so
+   * the chain spec (filterId / videoColorGrade / etc.) matches.
+   */
+  const handleBatchProcess = useCallback(async () => {
+    if (batchItems.length === 0) return;
+    if (isBatchProcessing) return;
+    setIsBatchProcessing(true);
+
+    const { effectiveType, settings } = buildCanonicalEnhancementRequest();
+    const token = localStorage.getItem("glimpse_token");
+    const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+    // 1. Upload each file sequentially (sessionStorage and server upload are
+    //    both rate-limited; serial keeps memory usage predictable).
+    const updatedItems = [...batchItems];
+    for (let i = 0; i < updatedItems.length; i++) {
+      const item = updatedItems[i];
+      if (item.jobId) continue;
+      updatedItems[i] = { ...item, status: "uploading" };
+      setBatchItems([...updatedItems]);
+      try {
+        const blob = await fetch(item.dataUrl).then((r) => r.blob());
+        const base64 = item.dataUrl.split(",")[1] ?? "";
+        const isVideo = (item.type || "").startsWith("video/");
+        const uploadResp = await fetch("/api/media/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({
+            filename: item.name,
+            mimeType: item.type || (isVideo ? "video/mp4" : "image/jpeg"),
+            size: blob.size,
+            mediaType: isVideo ? "video" : "photo",
+            base64Data: base64,
+          }),
+        });
+        if (!uploadResp.ok) {
+          const err = await uploadResp.json().catch(() => ({})) as { error?: string };
+          throw new Error(err.error ?? `Upload failed (${uploadResp.status})`);
+        }
+        const job = await uploadResp.json() as { id: number };
+        updatedItems[i] = { ...updatedItems[i], jobId: job.id, status: "processing" };
+        setBatchItems([...updatedItems]);
+      } catch (err) {
+        updatedItems[i] = {
+          ...updatedItems[i],
+          status: "failed",
+          error: err instanceof Error ? err.message : "Upload failed",
+        };
+        setBatchItems([...updatedItems]);
+      }
+    }
+
+    // 2. Send the full jobId list to /media/enhance-batch in one call.
+    const ids = updatedItems.filter((it) => it.jobId !== null).map((it) => it.jobId as number);
+    if (ids.length === 0) {
+      setIsBatchProcessing(false);
+      toast({ title: "Batch failed", description: "No files were uploaded successfully.", variant: "destructive" });
+      return;
+    }
+    try {
+      const resp = await fetch("/api/media/enhance-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({ jobIds: ids, enhancementType: effectiveType, settings }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({})) as { error?: string; code?: string };
+        throw new Error(err.error ?? `Batch enhance failed (${resp.status})`);
+      }
+      toast({
+        title: `Batch started: ${ids.length} files`,
+        description: "Each file's progress is shown in the queue. View results in History when complete.",
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Batch failed";
+      toast({ title: "Batch failed", description: message, variant: "destructive" });
+      setBatchItems((prev) =>
+        prev.map((it) => (it.status === "processing" ? { ...it, status: "failed", error: message } : it)),
+      );
+    }
+    setIsBatchProcessing(false);
+  }, [batchItems, isBatchProcessing, buildCanonicalEnhancementRequest, toast]);
+
+  /** Remove a single file from the batch queue (only when not yet uploading). */
+  const removeBatchItem = useCallback((id: string) => {
+    setBatchItems((prev) =>
+      prev.filter((it) => !(it.id === id && it.status === "queued")),
+    );
+  }, []);
+
+  // ── Batch "Download All" ──────────────────────────────────────────────────
+  // Once batch jobs finish, users want to grab every enhanced result without
+  // clicking through History one-by-one. We zip the completed entries
+  // client-side (STORE method, see lib/zip-store.ts) and trigger a single
+  // browser download. Failed/in-flight items are skipped silently; the toast
+  // surfaces the actual count of files included.
+  const [isDownloadingBatch, setIsDownloadingBatch] = useState(false);
+  const completedBatchCount = useMemo(
+    () => batchItems.filter((it) => it.status === "completed" && it.jobId !== null).length,
+    [batchItems],
+  );
+
+  const handleBatchDownloadAll = useCallback(async () => {
+    if (isDownloadingBatch) return;
+    const completed = batchItems.filter(
+      (it) => it.status === "completed" && it.jobId !== null,
+    );
+    if (completed.length === 0) {
+      toast({
+        title: "Nothing to download yet",
+        description: "Wait for at least one file to finish processing.",
+      });
+      return;
+    }
+
+    setIsDownloadingBatch(true);
+    const token = localStorage.getItem("glimpse_token");
+    const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+    try {
+      const entries: ZipEntry[] = [];
+      const seenNames = new Set<string>();
+      let skippedNoData = 0;
+
+      for (const it of completed) {
+        try {
+          const r = await fetch(`/api/media/jobs/${it.jobId}`, { headers: authHeader });
+          if (!r.ok) {
+            skippedNoData++;
+            continue;
+          }
+          const job = (await r.json()) as {
+            processedUrl?: string | null;
+            referenceCode?: string | null;
+            enhancementType?: string | null;
+          };
+          if (!job.processedUrl) {
+            skippedNoData++;
+            continue;
+          }
+          const dataUri = job.processedUrl;
+          const mimeMatch = dataUri.match(/^data:([^;]+);/);
+          const mime = mimeMatch?.[1] ?? (it.type || "image/jpeg");
+          const bytes = base64ToBytes(dataUri);
+
+          let name = buildEnhancedDownloadName({
+            originalFilename: it.name,
+            enhancementType: job.enhancementType ?? enhancementType ?? "auto",
+            referenceCode: job.referenceCode ?? null,
+            mime,
+          });
+          if (seenNames.has(name)) {
+            const dot = name.lastIndexOf(".");
+            const stem = dot > 0 ? name.slice(0, dot) : name;
+            const ext = dot > 0 ? name.slice(dot) : "";
+            let n = 2;
+            while (seenNames.has(`${stem}-${n}${ext}`)) n++;
+            name = `${stem}-${n}${ext}`;
+          }
+          seenNames.add(name);
+          entries.push({ name, data: bytes });
+        } catch {
+          skippedNoData++;
+        }
+      }
+
+      if (entries.length === 0) {
+        toast({
+          title: "Download unavailable",
+          description:
+            "No completed batch results have downloadable data yet. Try again in a moment, or open History to grab them individually.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const blob = buildStoreZip(entries);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const stamp = new Date()
+        .toISOString()
+        .replace(/[:.]/g, "")
+        .replace("T", "-")
+        .slice(0, 15);
+      a.download = `glimpse-batch-${stamp}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      const detail =
+        skippedNoData > 0
+          ? `${entries.length} file${entries.length === 1 ? "" : "s"} zipped (${skippedNoData} skipped — not yet ready).`
+          : `${entries.length} file${entries.length === 1 ? "" : "s"} zipped and saved to your Downloads folder.`;
+      toast({ title: "Batch download started", description: detail });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Download failed";
+      toast({ title: "Download failed", description: message, variant: "destructive" });
+    } finally {
+      setIsDownloadingBatch(false);
+    }
+  }, [batchItems, isDownloadingBatch, enhancementType, toast]);
+
+  /**
+   * Poll status for in-flight batch jobs every 2.5s. Stops once all items
+   * are in a terminal state (completed/failed). The /api/media/jobs/:id
+   * endpoint is the same one the History page uses, so we get parity with
+   * single-file enhancement progress.
+   */
+  useEffect(() => {
+    const inflight = batchItems.filter(
+      (it) => it.jobId !== null && (it.status === "processing" || it.status === "uploading"),
+    );
+    if (inflight.length === 0) return;
+
+    const token = localStorage.getItem("glimpse_token");
+    const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    let cancelled = false;
+
+    const tick = async () => {
+      const updates = await Promise.all(
+        inflight.map(async (it) => {
+          try {
+            const r = await fetch(`/api/media/jobs/${it.jobId}`, { headers: authHeader });
+            if (!r.ok) return null;
+            const j = await r.json() as { status?: string; errorMessage?: string };
+            return { id: it.id, status: j.status, error: j.errorMessage };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (cancelled) return;
+      setBatchItems((prev) =>
+        prev.map((it) => {
+          const u = updates.find((x) => x?.id === it.id);
+          if (!u || !u.status) return it;
+          if (u.status === "completed") return { ...it, status: "completed" };
+          if (u.status === "failed") return { ...it, status: "failed", error: u.error ?? "Failed" };
+          return it;
+        }),
+      );
+    };
+
+    const interval = window.setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [batchItems]);
 
   // ── Contextual post-enhance Upscale toast ──────────────────────────────
   //    When a non-upscale enhancement completes, invite the user to upscale
@@ -1131,7 +1616,7 @@ export default function Editor() {
 
   const resetAll = () => {
     setFile(null); setPreviewUrl(""); setBase64Data(""); setCanonicalPreviewUrl(null); setIsRenderingPreview(false);
-    setCurrentJobId(null); setProcessStage("idle"); setZoomLevel(1);
+    setCurrentJobId(null); setProcessStage("idle"); setZoomLevel(1); setPanOffset({ x: 0, y: 0 });
     setTransform(DEFAULT_TRANSFORM); setFilters(DEFAULT_FILTERS);
     setCropBox(DEFAULT_CROP); setCropEnabled(false);
     setStabilize(false); setDenoise(false);
@@ -1141,6 +1626,21 @@ export default function Editor() {
     setUndoStack([]); setChatMessages([]); setShowAiChat(false);
     setUpscaleAfter(null); upscaleChainRef.current = false;
   };
+
+  // Reset just the batch session — keeps the editor open (no page reload),
+  // clears every queued/processed item, drops batch-only UI state, and
+  // returns the user straight to the upload prompt with the side panel
+  // settings reverted to safe defaults so the next batch starts clean.
+  const resetBatchSession = useCallback(() => {
+    setBatchItems([]);
+    setBatchPreviewIndex(0);
+    setSelectedFilter(null);
+    setEnhancementType("auto_face");
+    setUpscaleAfter(null);
+    upscaleChainRef.current = false;
+    setIsBatchProcessing(false);
+    toast({ title: "Batch reset", description: "Drop or pick new files to start another batch." });
+  }, [batchItems.length, enhancementType, selectedFilter, upscaleAfter, toast]);
 
   const isProcessing = processStage === "uploading" || processStage === "processing";
   const isCompleted = processStage === "completed";
@@ -1155,9 +1655,50 @@ export default function Editor() {
   const livePreviewSrc = canonicalPreviewUrl ?? previewUrl;
   const stageInfo = STAGE_INFO[processStage];
 
+  // ── Batch preview helpers ─────────────────────────────────────────────────
+  // We only render image items in the live CSS preview (videos need their own
+  // playback layer — they fall through to the queue strip but aren't shown as
+  // the "sample"). The activeBatchPreview flag is what every render branch
+  // below uses to decide between (a) the standalone empty Batch Studio card,
+  // (b) the integrated Studio-with-queue layout, or (c) the normal single-
+  // file flow.
+  const imageBatchItems = useMemo(
+    () => batchItems.filter((it) => (it.type || "").startsWith("image/")),
+    [batchItems],
+  );
+  const safeBatchPreviewIndex =
+    imageBatchItems.length === 0
+      ? 0
+      : Math.min(batchPreviewIndex, imageBatchItems.length - 1);
+  const batchPreviewItem = imageBatchItems[safeBatchPreviewIndex] ?? null;
+  // True when we're in the integrated batch view: batch mode active OR the
+  // user has at least one queued image, AND no single-file is loaded (single-
+  // file view always wins to avoid cross-contamination of state).
+  const showBatchPreview = !file && batchPreviewItem !== null;
+  // Any active batch session (with items, regardless of preview availability)
+  // — used to swap the bottom action button to "Process Batch (N)".
+  const isBatchActive = (isBatchMode || batchItems.length > 0) && batchItems.length > 0;
+  const batchProcessableCount = batchItems.filter(
+    (it) => it.status === "queued" || it.status === "failed",
+  ).length;
+
+  // Keep the preview index inside the photo subset when items are added or
+  // removed. Resetting to 0 mirrors the "first image" default the user sees
+  // on first entry; it never silently jumps to a different photo while the
+  // user is interacting with one (we only correct out-of-bounds).
+  useEffect(() => {
+    if (imageBatchItems.length === 0) {
+      if (batchPreviewIndex !== 0) setBatchPreviewIndex(0);
+      return;
+    }
+    if (batchPreviewIndex >= imageBatchItems.length) {
+      setBatchPreviewIndex(imageBatchItems.length - 1);
+    }
+  }, [imageBatchItems.length, batchPreviewIndex]);
+
   const visibleFilters = showAllFilters ? FILTER_PRESETS : FILTER_PRESETS.slice(0, 12);
 
-  const ENHANCEMENT_TYPES: { type: EnhanceMediaBodyEnhancementType; label: string; icon: React.ReactNode }[] = [
+  const PHOTO_ENHANCEMENT_TYPES: { type: EnhanceMediaBodyEnhancementType; label: string; icon: React.ReactNode }[] = [
     { type: "auto",                   label: "Auto",        icon: <Wand2       className="w-3 h-3" /> },
     { type: "upscale",                label: "2x Up",       icon: <ZoomIn      className="w-3 h-3" /> },
     { type: "upscale_4x",             label: "4x Up",       icon: <Layers      className="w-3 h-3" /> },
@@ -1180,6 +1721,15 @@ export default function Editor() {
     { type: "esrgan_upscale_2x",       label: "SR 2×",       icon: <ZoomIn      className="w-3 h-3" /> },
     { type: "esrgan_upscale_4x",       label: "SR 4×",       icon: <Layers      className="w-3 h-3" /> },
   ];
+
+  const ENHANCEMENT_TYPES: { type: EnhanceMediaBodyEnhancementType; label: string; icon: React.ReactNode }[] =
+    mediaType === "video"
+      ? [
+          { type: "video_restore", label: "AI Enhance", icon: <Film className="w-3 h-3" /> },
+          { type: "stabilize", label: "Stabilize", icon: <Camera className="w-3 h-3" /> },
+          { type: "trim", label: "Trim polish", icon: <Scissors className="w-3 h-3" /> },
+        ]
+      : PHOTO_ENHANCEMENT_TYPES;
 
   return (
     <Layout>
@@ -1240,11 +1790,21 @@ export default function Editor() {
                               <ScanEye className="w-4 h-4 text-teal-400" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
                                 <p className="text-xs font-semibold text-teal-200 tracking-wide">AI Recommendation</p>
                                 <Badge variant="outline" className="text-[9px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-4 capitalize">
                                   {inferImageType(aiSuggestion.detectedSubjects)}
                                 </Badge>
+                                {aiSuggestion.servedBy === "sidecar" && (
+                                  <Badge variant="outline" className="text-[9px] border-emerald-500/40 text-emerald-300 px-1.5 py-0 h-4">
+                                    Premium model
+                                  </Badge>
+                                )}
+                                {aiSuggestion.servedBy === "native" && aiSuggestion.suggestedEnhancement === "auto_face" && (
+                                  <Badge variant="outline" className="text-[9px] border-amber-500/40 text-amber-300 px-1.5 py-0 h-4">
+                                    Native fallback
+                                  </Badge>
+                                )}
                               </div>
                               <p className="text-xs text-zinc-300 leading-relaxed mb-2">{aiSuggestion.description}</p>
                               <div className="flex flex-wrap gap-1 mb-2">
@@ -1330,11 +1890,180 @@ export default function Editor() {
                   )}
                 </AnimatePresence>
 
+                {/* Workflow stepper — interactive 3-step wizard:
+                    1) Enhance: pick a primary enhancement (auto_face is default for portraits)
+                    2) Filter:  optionally stack a creative filter on top
+                    3) Upscale: optionally upscale 2x or 4x as the last step
+                    Each chip is a button that scrolls to its section AND
+                    sets the "current step" highlight. Photo runs all three
+                    stages via POST /media/enhance-chain (single job). Video
+                    forwards filterId + upscale through /media/enhance →
+                    /restore-video so users get parity with images. */}
+                {file && (() => {
+                  // Derived current step: 1 until enhancement is set, then
+                  // 2 until a filter is picked, then 3 once upscale appears.
+                  const currentStep: 1 | 2 | 3 =
+                    upscaleAfter ? 3 : selectedFilter ? 2 : 1;
+                  const scrollTo = (id: string) => {
+                    const el = document.getElementById(id);
+                    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                  };
+                  return (
+                    <div
+                      className="mb-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2"
+                      aria-label="Editing workflow"
+                    >
+                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5 px-0.5">
+                        <span>Workflow</span>
+                        <span className="text-zinc-700">·</span>
+                        <span className="text-zinc-600">Enhance, then filter, then upscale</span>
+                      </div>
+                      <div className="flex items-center gap-1" role="tablist">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={currentStep === 1}
+                          onClick={() => scrollTo("workflow-step-enhance")}
+                          className={cn(
+                            "flex-1 flex items-center gap-1 rounded-md px-1.5 py-1 border text-[10px] transition-colors",
+                            currentStep === 1
+                              ? "border-teal-400 bg-teal-500/20 text-teal-100 ring-1 ring-teal-400/40"
+                              : enhancementType
+                                ? "border-teal-500/50 bg-teal-500/10 text-teal-200 hover:border-teal-400"
+                                : "border-zinc-800 text-zinc-500 hover:border-zinc-600",
+                          )}
+                        >
+                          <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-zinc-800 text-[9px] font-bold">1</span>
+                          <Sparkles className="w-3 h-3 shrink-0" />
+                          <span className="truncate">Enhance</span>
+                        </button>
+                        <ChevronRight className="w-3 h-3 text-zinc-700 shrink-0" aria-hidden />
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={currentStep === 2}
+                          onClick={() => scrollTo("workflow-step-filter")}
+                          className={cn(
+                            "flex-1 flex items-center gap-1 rounded-md px-1.5 py-1 border text-[10px] transition-colors",
+                            currentStep === 2
+                              ? "border-violet-400 bg-violet-500/20 text-violet-100 ring-1 ring-violet-400/40"
+                              : selectedFilter
+                                ? "border-violet-500/50 bg-violet-500/10 text-violet-200 hover:border-violet-400"
+                                : "border-zinc-800 text-zinc-500 hover:border-zinc-600",
+                          )}
+                        >
+                          <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-zinc-800 text-[9px] font-bold">2</span>
+                          <Palette className="w-3 h-3 shrink-0" />
+                          <span className="truncate">Filter</span>
+                        </button>
+                        <ChevronRight className="w-3 h-3 text-zinc-700 shrink-0" aria-hidden />
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={currentStep === 3}
+                          onClick={() => scrollTo("workflow-step-upscale")}
+                          className={cn(
+                            "flex-1 flex items-center gap-1 rounded-md px-1.5 py-1 border text-[10px] transition-colors",
+                            currentStep === 3
+                              ? "border-cyan-400 bg-cyan-500/20 text-cyan-100 ring-1 ring-cyan-400/40"
+                              : upscaleAfter
+                                ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400"
+                                : "border-zinc-800 text-zinc-500 hover:border-zinc-600",
+                          )}
+                        >
+                          <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-zinc-800 text-[9px] font-bold">3</span>
+                          <ZoomIn className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{upscaleAfter === "upscale_4x" ? "4x" : upscaleAfter === "upscale" ? "2x" : "Upscale"}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* SIMPLE MODE */}
                 {editorMode === "simple" && (
                   <div className="space-y-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Quick Enhance</Label>
+                    {/* ── Face Restoration Model selector ────────────────────
+                        A dedicated, always-visible toggle row that exposes the
+                        four face-restoration paths the backend already routes
+                        through (auto-face / GFPGAN / CodeFormer / Hybrid).
+                        Picking a pill flips `enhancementType` and — if a file
+                        is already loaded — auto-triggers `handleProcess` via
+                        the same `pendingAutoProcessRef + autoProcessTick`
+                        mechanism used elsewhere in the editor, so the result
+                        appears without a second click. Tooltips spell out the
+                        expected effect of each model in plain language. */}
+                    <div id="workflow-step-face-model" className="space-y-1.5 scroll-mt-4">
+                      <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                        Face Restoration Model
+                      </Label>
+                      <div role="radiogroup" aria-label="Face restoration model" className="grid grid-cols-4 gap-1.5">
+                        {([
+                          { type: "auto_face" as EnhanceMediaBodyEnhancementType, label: "Auto", icon: <Sparkles className="w-3.5 h-3.5" />, desc: "Auto-pick best model based on detected degradation. Safe default for any portrait." },
+                          { type: "face_restore" as EnhanceMediaBodyEnhancementType, label: "GFPGAN", icon: <ScanFace className="w-3.5 h-3.5" />, desc: "GFPGAN — natural skin tones, restores soft facial details. Best for everyday portraits." },
+                          { type: "codeformer" as EnhanceMediaBodyEnhancementType, label: "CodeFormer", icon: <ScanEye className="w-3.5 h-3.5" />, desc: "CodeFormer — sharper identity reconstruction. Best for low-resolution or pixelated faces." },
+                          { type: "hybrid" as EnhanceMediaBodyEnhancementType, label: "Hybrid", icon: <Layers className="w-3.5 h-3.5" />, desc: "GFPGAN + CodeFormer combined. Reduces age marks and scratches on old/damaged photos." },
+                        ]).map((m) => {
+                          const locked = isFeatureLocked(m.type);
+                          const active = enhancementType === m.type;
+                          return (
+                            <Tooltip key={m.type}>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={active}
+                                  aria-label={`${m.label} face restoration model`}
+                                  disabled={locked}
+                                  onClick={() => {
+                                    if (locked) {
+                                      toast({ title: `${tierLabel(m.type)} feature`, description: `Upgrade to ${tierLabel(m.type)} to unlock ${m.label}.`, variant: "destructive" });
+                                      return;
+                                    }
+                                    pushUndo();
+                                    setEnhancementType(m.type);
+                                    setSelectedFilter(null);
+                                    setFilters(DEFAULT_FILTERS);
+                                    if (file && processStage !== "uploading" && processStage !== "processing") {
+                                      pendingAutoProcessRef.current = { source: `face-model:${m.type}` };
+                                      setAutoProcessTick((t) => t + 1);
+                                    }
+                                  }}
+                                  className={cn(
+                                    "flex flex-col items-center justify-center gap-1 h-12 rounded-md border text-[10px] font-medium transition-all",
+                                    locked
+                                      ? "border-zinc-800 bg-zinc-900/30 text-zinc-600 opacity-60 cursor-not-allowed"
+                                      : active
+                                      ? "border-teal-500 bg-teal-500/10 text-teal-200 shadow shadow-teal-500/10"
+                                      : "border-zinc-800 bg-zinc-900/50 text-zinc-300 hover:bg-zinc-800 hover:border-zinc-700",
+                                  )}
+                                >
+                                  <span className={cn("inline-flex items-center justify-center", active ? "text-teal-300" : "text-zinc-400")}>
+                                    {m.icon}
+                                  </span>
+                                  <span className="leading-none">{m.label}</span>
+                                  {locked && (
+                                    <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-amber-500/90 flex items-center justify-center">
+                                      <Lock className="w-2 h-2 text-zinc-900" />
+                                    </span>
+                                  )}
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom" className="max-w-[220px] text-xs leading-snug">
+                                {locked ? `🔒 ${tierLabel(m.type)} — Upgrade to unlock` : m.desc}
+                              </TooltipContent>
+                            </Tooltip>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-zinc-500 leading-snug">
+                        Pick a model or leave on <span className="text-teal-300">Auto</span> — the backend
+                        routes each face to GFPGAN, CodeFormer, or both based on detected degradation.
+                      </p>
+                    </div>
+
+                    <div id="workflow-step-enhance" className="space-y-1.5 scroll-mt-4">
+                      <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">1. Enhance — Quick presets</Label>
                       <div className="grid grid-cols-5 gap-1.5">
                         {SIMPLE_PRESETS.map((p) => {
                           const locked = isFeatureLocked(p.type);
@@ -1383,49 +2112,6 @@ export default function Editor() {
                         })}
                       </div>
                     </div>
-
-                    {/* Combo: Also Upscale toggle */}
-                    {enhancementType !== "upscale" && enhancementType !== "upscale_4x" && file && (
-                      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <ZoomIn className="w-3.5 h-3.5 text-teal-400" />
-                          <Label className="text-[11px] font-medium text-zinc-300">Also Upscale</Label>
-                          {upscaleAfter && (
-                            <div className="flex gap-1 ml-1">
-                              <button
-                                className={cn(
-                                  "text-[10px] py-0.5 px-1.5 rounded border transition-all font-medium",
-                                  upscaleAfter === "upscale"
-                                    ? "border-teal-500 bg-teal-500/10 text-teal-300"
-                                    : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
-                                )}
-                                onClick={() => setUpscaleAfter("upscale")}
-                              >2x</button>
-                              <button
-                                className={cn(
-                                  "text-[10px] py-0.5 px-1.5 rounded border transition-all font-medium",
-                                  isFeatureLocked("upscale_4x") ? "opacity-40 cursor-not-allowed border-zinc-700 text-zinc-600" :
-                                  upscaleAfter === "upscale_4x"
-                                    ? "border-teal-500 bg-teal-500/10 text-teal-300"
-                                    : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
-                                )}
-                                onClick={() => {
-                                  if (isFeatureLocked("upscale_4x")) {
-                                    toast({ title: "Premium feature", description: "Upgrade to Premium to unlock 4x upscaling.", variant: "destructive" });
-                                    return;
-                                  }
-                                  setUpscaleAfter("upscale_4x");
-                                }}
-                              >4x{isFeatureLocked("upscale_4x") && <Lock className="w-2.5 h-2.5 inline ml-0.5" />}</button>
-                            </div>
-                          )}
-                        </div>
-                        <Switch
-                          checked={upscaleAfter !== null}
-                          onCheckedChange={(checked) => setUpscaleAfter(checked ? "upscale" : null)}
-                        />
-                      </div>
-                    )}
 
                     {mediaType === "video" && (
                       <>
@@ -1830,23 +2516,407 @@ export default function Editor() {
                   </motion.div>
                 )}
               </AnimatePresence>
-              <Button
-                className="w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20 h-11"
-                onClick={handleProcess}
-                disabled={!file || isProcessing}
-              >
-                {isProcessing
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />{upscaleChainRef.current ? "Upscaling..." : "Processing..."}</>
-                  : <><Wand2   className="w-4 h-4 mr-2" />{isCompleted ? "Enhance Again" : (upscaleAfter ? `Enhance + ${upscaleAfter === "upscale_4x" ? "4x" : "2x"} Upscale` : "Enhance Media")}</>
-                }
-              </Button>
+              {/* In batch mode the bottom action triggers the queue, not a
+                  single-file enhancement. handleBatchProcess uses the same
+                  enhancement / filter / upscale settings the side panel
+                  drives (selectedFilter is shared state), so picking "No
+                  Filter" or any chip here applies to every queued file. */}
+              {isBatchActive && !file ? (
+                /* When every queued image has been processed (or failed) the
+                   primary action flips from "Process Batch" to "Start New
+                   Batch" — a single, prominent control right where the user
+                   is already looking. Clicking it clears the queue without a
+                   page reload so they can drop new files immediately. */
+                batchProcessableCount === 0 && batchItems.length > 0 && !isBatchProcessing ? (
+                  <Button
+                    className="w-full bg-emerald-500 hover:bg-emerald-600 text-zinc-950 font-semibold shadow-lg shadow-emerald-500/20 h-11"
+                    onClick={resetBatchSession}
+                  >
+                    <RefreshCw className="w-4 h-4 mr-2" /> Start New Batch
+                  </Button>
+                ) : (
+                  <Button
+                    className="w-full bg-amber-500 hover:bg-amber-600 text-zinc-950 font-semibold shadow-lg shadow-amber-500/20 h-11"
+                    onClick={handleBatchProcess}
+                    disabled={isBatchProcessing || batchProcessableCount === 0}
+                  >
+                    {isBatchProcessing ? (
+                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processing batch…</>
+                    ) : (
+                      <><Layers className="w-4 h-4 mr-2" /> Process Batch ({batchProcessableCount})</>
+                    )}
+                  </Button>
+                )
+              ) : (
+                <Button
+                  className="w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-500/20 h-11"
+                  onClick={handleProcess}
+                  disabled={!file || isProcessing}
+                >
+                  {isProcessing
+                    ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />{upscaleChainRef.current ? "Upscaling..." : "Processing..."}</>
+                    : <><Wand2   className="w-4 h-4 mr-2" />{isCompleted ? "Enhance Again" : (upscaleAfter ? `Enhance + ${upscaleAfter === "upscale_4x" ? "4x" : "2x"} Upscale` : "Enhance Media")}</>
+                  }
+                </Button>
+              )}
             </div>
           </aside>
 
           {/* Main Preview */}
           <main className="flex-1 bg-zinc-900 relative flex flex-col min-h-0 min-w-0">
             <div className="flex-1 flex items-center justify-center py-4 pl-4 pr-4 sm:pl-6 sm:pr-6 lg:pl-12 lg:pr-8 xl:pl-16 xl:pr-10 2xl:pl-20 2xl:pr-12 overflow-hidden min-h-0">
-              {!file ? (
+              {(isBatchMode || batchItems.length > 0) && !file ? (
+                /* Single outer rail (`max-w-5xl mx-auto`) shared by BOTH the
+                   preview and the Batch Studio card so their left/right edges
+                   line up exactly. `h-full overflow-y-auto` keeps everything
+                   inside the main panel — if combined content is taller than
+                   the viewport, the rail scrolls instead of bleeding into the
+                   header. `pr-1` reserves room for the scrollbar so it never
+                   overlaps the rounded preview frame. */
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.97 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="w-full max-w-5xl mx-auto flex flex-col gap-3 min-h-0 h-full overflow-y-auto pr-1"
+                >
+                  {/* ── Batch sample preview ────────────────────────────────────
+                      Renders ONE queued image as the live "what will it look
+                      like?" preview. The same `previewStyle` (CSS filter +
+                      transform stack) used by the single-file flow is applied
+                      locally — every chip click is instant and never hits the
+                      API. The thumbnail strip below lets users canary-check
+                      the chosen filter against any other image in the queue
+                      without touching the network. */}
+                  {showBatchPreview && batchPreviewItem && (
+                    <div className="shrink-0 flex flex-col w-full">
+                      <div className="flex items-center justify-between mb-1.5 px-1">
+                        <div className="text-[11px] text-amber-300 inline-flex items-center gap-2">
+                          <Layers className="w-3.5 h-3.5" />
+                          Batch preview · sample {safeBatchPreviewIndex + 1} of {imageBatchItems.length}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 hidden sm:block">
+                          filter applied locally — no API calls
+                        </div>
+                      </div>
+
+                      {/* Hero preview frame: large, edge-to-edge, isolated.
+                          `relative` + `overflow-hidden` keeps the image (and
+                          its CSS filter) strictly inside the rounded border —
+                          nothing can spill onto the side panel or header. The
+                          height clamp uses min() of (56vh, 560px) so on tall
+                          screens the preview doesn't dwarf everything else,
+                          and on short screens it still leaves room for the
+                          batch settings below. */}
+                      <div
+                        className="relative w-full bg-black/40 rounded-lg border border-zinc-800 overflow-hidden flex items-center justify-center"
+                        style={{ minHeight: 240, maxHeight: "min(56vh, 560px)" }}
+                      >
+                        <img
+                          src={batchPreviewItem.dataUrl}
+                          alt={batchPreviewItem.name}
+                          className="block max-w-full max-h-full object-contain transition-all duration-200"
+                          style={previewStyle}
+                        />
+                      </div>
+
+                      {/* Thumbnail rail — full width of the preview frame, its
+                          own row so it never visually overlaps the hero. When
+                          there are more thumbs than fit, `overflow-x-auto`
+                          gives a native horizontal scroll. */}
+                      {imageBatchItems.length > 1 && (
+                        <div className="w-full flex items-center gap-1.5 overflow-x-auto py-2">
+                          {imageBatchItems.map((it, i) => {
+                            const active = i === safeBatchPreviewIndex;
+                            return (
+                              <button
+                                key={it.id}
+                                type="button"
+                                onClick={() => setBatchPreviewIndex(i)}
+                                aria-label={`Preview ${it.name}`}
+                                aria-pressed={active}
+                                className={cn(
+                                  "relative shrink-0 w-14 h-14 rounded-md overflow-hidden border-2 transition-all",
+                                  active
+                                    ? "border-amber-400 ring-2 ring-amber-400/30"
+                                    : "border-zinc-700 hover:border-zinc-500",
+                                )}
+                              >
+                                <img src={it.dataUrl} alt="" className="w-full h-full object-cover" />
+                                {it.status === "completed" && (
+                                  <span className="absolute inset-x-0 bottom-0 bg-emerald-500/85 text-white text-[8px] py-0.5 text-center font-semibold leading-none">
+                                    DONE
+                                  </span>
+                                )}
+                                {it.status === "failed" && (
+                                  <span className="absolute inset-x-0 bottom-0 bg-red-500/85 text-white text-[8px] py-0.5 text-center font-semibold leading-none">
+                                    FAIL
+                                  </span>
+                                )}
+                                {(it.status === "uploading" || it.status === "processing") && (
+                                  <span className="absolute inset-x-0 bottom-0 bg-amber-500/85 text-white text-[8px] py-0.5 text-center font-semibold leading-none">
+                                    …
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <Card className="border border-amber-500/30 bg-zinc-950/80 shrink-0 overflow-hidden">
+                    <CardContent className="p-4 max-h-[60vh] overflow-y-auto">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <Layers className="w-4 h-4 text-amber-400" />
+                          <h3 className="text-sm font-semibold text-amber-200">Batch Studio</h3>
+                          <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-300">
+                            {batchItems.length} file{batchItems.length === 1 ? "" : "s"}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="file"
+                            id="batch-add-more"
+                            multiple
+                            accept="image/*,video/*"
+                            className="sr-only"
+                            onChange={(e) => {
+                              const files = Array.from(e.target.files ?? []);
+                              if (files.length === 0) return;
+                              Promise.all(
+                                files.map(
+                                  (f) =>
+                                    new Promise<BatchItem>((resolve, reject) => {
+                                      const reader = new FileReader();
+                                      reader.onload = () =>
+                                        resolve({
+                                          id: `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                                          name: f.name,
+                                          type: f.type,
+                                          dataUrl: String(reader.result ?? ""),
+                                          jobId: null,
+                                          status: "queued",
+                                        });
+                                      reader.onerror = () => reject(new Error("read failed"));
+                                      reader.readAsDataURL(f);
+                                    }),
+                                ),
+                              )
+                                .then((items) => setBatchItems((prev) => [...prev, ...items]))
+                                .catch(() => {});
+                              e.target.value = ""; // allow re-selecting the same files
+                            }}
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => document.getElementById("batch-add-more")?.click()}
+                          >
+                            <UploadCloud className="w-3 h-3 mr-1" />
+                            Add files
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs bg-amber-500 hover:bg-amber-600 text-zinc-950 font-semibold"
+                            disabled={isBatchProcessing || batchItems.length === 0}
+                            onClick={handleBatchProcess}
+                          >
+                            {isBatchProcessing ? (
+                              <><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Processing…</>
+                            ) : (
+                              <>Process Batch ({batchItems.length})</>
+                            )}
+                          </Button>
+                          {completedBatchCount > 0 && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
+                              disabled={isDownloadingBatch}
+                              onClick={handleBatchDownloadAll}
+                            >
+                              {isDownloadingBatch ? (
+                                <><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Zipping…</>
+                              ) : (
+                                <><Download className="w-3 h-3 mr-1" /> Download all ({completedBatchCount})</>
+                              )}
+                            </Button>
+                          )}
+                          {batchItems.length > 0 && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                              disabled={isBatchProcessing}
+                              onClick={resetBatchSession}
+                              title="Clear the queue and start a fresh batch (no reload)"
+                            >
+                              <RefreshCw className="w-3 h-3 mr-1" /> Start new batch
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-zinc-500 mb-2">
+                        All files share the same enhancement, filter, and upscale settings.
+                        Pick a filter below (or "No Filter") and click Process Batch. Progress shows per-file; results appear in History.
+                      </p>
+
+                      {/* ── Optional filter pre-selection ───────────────────────
+                          Single source of truth: same `selectedFilter` state the
+                          side panel and single-file flow already use. Picking a
+                          chip here just toggles that state (`null` ↔ filterId);
+                          it never auto-triggers Process Batch the way single-
+                          file filter chips trigger handleProcess() — the user
+                          still has to click "Process Batch" to start. */}
+                      <div className="mb-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
+                          Filter (optional)
+                        </p>
+                        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 -mx-0.5 px-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFilter(null)}
+                            aria-pressed={selectedFilter === null}
+                            className={cn(
+                              "shrink-0 inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-[11px] border transition-colors",
+                              selectedFilter === null
+                                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-200"
+                                : "bg-zinc-900/60 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600",
+                            )}
+                          >
+                            <X className="w-3 h-3" />
+                            No Filter
+                          </button>
+                          {FILTER_PRESETS.filter((p) => p.key !== "original").map((p) => {
+                            const active = selectedFilter === p.key;
+                            return (
+                              <button
+                                key={p.key}
+                                type="button"
+                                onClick={() => setSelectedFilter(p.key)}
+                                aria-pressed={active}
+                                className={cn(
+                                  "shrink-0 inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[11px] border transition-colors",
+                                  active
+                                    ? "bg-amber-500/15 border-amber-500/40 text-amber-200"
+                                    : "bg-zinc-900/60 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600",
+                                )}
+                              >
+                                <span
+                                  className="w-3 h-3 rounded-full ring-1 ring-zinc-700"
+                                  style={{ background: p.gradient }}
+                                  aria-hidden
+                                />
+                                {p.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[10px] text-zinc-500 mt-1.5">
+                          Will apply:{" "}
+                          <span className="text-zinc-300">
+                            {getEnhancementMeta(enhancementType ?? "auto_face").label}
+                          </span>
+                          {" · "}
+                          <span className={selectedFilter ? "text-amber-300" : "text-emerald-300"}>
+                            {selectedFilter
+                              ? (FILTER_PRESETS_BY_KEY.get(selectedFilter)?.name ?? selectedFilter)
+                              : "No Filter"}
+                          </span>
+                          {upscaleAfter && (
+                            <>
+                              {" · "}
+                              <span className="text-indigo-300">
+                                {upscaleAfter === "upscale_4x" ? "4× Upscale" : "2× Upscale"}
+                              </span>
+                            </>
+                          )}
+                        </p>
+                      </div>
+
+                      <div
+                        className="rounded-md border border-zinc-800 bg-zinc-950/60 max-h-[60vh] overflow-y-auto divide-y divide-zinc-900"
+                        role="list"
+                        aria-label="Batch queue"
+                      >
+                        {batchItems.length === 0 ? (
+                          <div className="p-6 text-center text-xs text-zinc-500">
+                            Drop or pick files to start a batch.
+                          </div>
+                        ) : (
+                          batchItems.map((it) => (
+                            <div
+                              key={it.id}
+                              role="listitem"
+                              className="flex items-center gap-3 px-3 py-2 text-xs"
+                            >
+                              <div className="w-10 h-10 rounded bg-zinc-800 overflow-hidden shrink-0 flex items-center justify-center">
+                                {it.type.startsWith("image/") ? (
+                                  <img src={it.dataUrl} alt={it.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <Video className="w-4 h-4 text-zinc-500" />
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-zinc-200 truncate">{it.name}</p>
+                                <p className="text-[10px] text-zinc-500">
+                                  {it.type || (it.name.split(".").pop() ?? "file")}
+                                </p>
+                              </div>
+                              <div className="shrink-0 flex items-center gap-2">
+                                {it.status === "queued" && (
+                                  <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-400">Queued</Badge>
+                                )}
+                                {it.status === "uploading" && (
+                                  <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-300 inline-flex items-center gap-1">
+                                    <Loader2 className="w-3 h-3 animate-spin" /> Uploading
+                                  </Badge>
+                                )}
+                                {it.status === "processing" && (
+                                  <Badge variant="outline" className="text-[10px] border-cyan-500/40 text-cyan-300 inline-flex items-center gap-1">
+                                    <Loader2 className="w-3 h-3 animate-spin" /> Processing
+                                  </Badge>
+                                )}
+                                {it.status === "completed" && (
+                                  <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-300 inline-flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3" /> Done
+                                  </Badge>
+                                )}
+                                {it.status === "failed" && (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Badge variant="outline" className="text-[10px] border-red-500/40 text-red-300 inline-flex items-center gap-1 cursor-help">
+                                        <AlertCircle className="w-3 h-3" /> Failed
+                                      </Badge>
+                                    </TooltipTrigger>
+                                    {it.error && (
+                                      <TooltipContent side="left" className="text-xs max-w-[240px]">
+                                        {it.error}
+                                      </TooltipContent>
+                                    )}
+                                  </Tooltip>
+                                )}
+                                {it.status === "queued" && (
+                                  <button
+                                    type="button"
+                                    aria-label={`Remove ${it.name}`}
+                                    className="text-zinc-500 hover:text-red-400 transition-colors"
+                                    onClick={() => removeBatchItem(it.id)}
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ) : !file ? (
                 <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full">
                   <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-all cursor-pointer relative overflow-hidden group">
                     <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
@@ -2060,7 +3130,7 @@ export default function Editor() {
                             <div className="rounded-lg border border-zinc-800 overflow-hidden bg-zinc-900 flex items-center justify-center flex-1 min-h-0">
                               {mediaType === "video"
                                 ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
-                                : <img src={previewUrl} alt="Original" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
+                                : <img src={previewUrl} alt="Original" className="max-w-full max-h-full object-contain select-none touch-none" draggable={false} {...panHandlers} style={{ transform: zoomTransform, transformOrigin: "center", transition: zoomTransition, cursor: panCursor }} />}
                             </div>
                           </div>
                           <div className="flex flex-col min-h-0 gap-1">
@@ -2068,7 +3138,7 @@ export default function Editor() {
                             <div className="rounded-lg border border-teal-500/30 overflow-hidden bg-zinc-900 flex items-center justify-center flex-1 min-h-0">
                               {mediaType === "video"
                                 ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
-                                : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />}
+                                : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain select-none touch-none" draggable={false} {...panHandlers} style={{ transform: zoomTransform, transformOrigin: "center", transition: zoomTransition, cursor: panCursor }} />}
                             </div>
                           </div>
                         </div>
@@ -2076,7 +3146,7 @@ export default function Editor() {
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center justify-center max-h-full">
                           {mediaType === "video"
                             ? <video src={currentJob.processedUrl} controls autoPlay loop muted className="max-w-full max-h-full object-contain" />
-                            : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain" style={{ transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }} />
+                            : <img src={currentJob.processedUrl} alt="Enhanced" className="max-w-full max-h-full object-contain select-none touch-none" draggable={false} {...panHandlers} style={{ transform: zoomTransform, transformOrigin: "center", transition: zoomTransition, cursor: panCursor }} />
                           }
                         </motion.div>
                       ) : (
@@ -2084,10 +3154,12 @@ export default function Editor() {
                           ? <video src={previewUrl} controls className="max-w-full max-h-full object-contain" />
                           : <div className="flex items-center justify-center max-h-full">
                               <img src={livePreviewSrc} alt="Preview"
-                                className="max-w-full max-h-full object-contain transition-all duration-200"
+                                className="max-w-full max-h-full object-contain transition-all duration-200 select-none touch-none"
+                                draggable={false}
+                                {...panHandlers}
                                 style={canonicalPreviewUrl && !isProcessing
-                                  ? { transform: `scale(${zoomLevel})`, transformOrigin: "center", transition: "transform 0.2s" }
-                                  : { ...(isProcessing ? { opacity: 0.5 } : previewStyle), transform: `scale(${zoomLevel})`, transformOrigin: "center" }} />
+                                  ? { transform: zoomTransform, transformOrigin: "center", transition: zoomTransition, cursor: panCursor }
+                                  : { ...(isProcessing ? { opacity: 0.5 } : previewStyle), transform: zoomTransform, transformOrigin: "center", transition: zoomTransition, cursor: panCursor }} />
                             </div>
                       )}
                     </div>
@@ -2098,20 +3170,31 @@ export default function Editor() {
                         <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-zinc-400 hover:text-white" onClick={zoomOut} disabled={zoomLevel <= 0.25}>
                           <ZoomOut className="w-3.5 h-3.5" />
                         </Button>
-                        <button onClick={zoomReset} className="text-[10px] text-zinc-500 hover:text-zinc-300 min-w-[40px] text-center tabular-nums">
+                        <button onClick={zoomReset} className="text-[10px] text-zinc-500 hover:text-zinc-300 min-w-[40px] text-center tabular-nums" title={canPan ? "Reset zoom & pan" : "Reset zoom"}>
                           {Math.round(zoomLevel * 100)}%
                         </button>
                         <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-zinc-400 hover:text-white" onClick={zoomIn} disabled={zoomLevel >= 4}>
                           <ZoomIn className="w-3.5 h-3.5" />
                         </Button>
+                        {canPan && (
+                          <span className="text-[10px] text-zinc-500 ml-2 inline-flex items-center gap-1" aria-live="polite">
+                            <ArrowLeftRight className="w-3 h-3" />
+                            Drag to pan
+                          </span>
+                        )}
                       </div>
                     )}
 
-                    {/* Filter Gallery — wrapping rows beneath image preview (photo mode only) */}
-                    {mediaType !== "video" && (
-                      <div className="w-full shrink-0 space-y-1.5">
+                    {/* Filter Gallery — applied after the primary enhancement.
+                        For video, the sidecar maps known filters to a built-in
+                        color_grade and approximates unmapped ones per-frame. */}
+                    {(
+                      <div id="workflow-step-filter" className="w-full shrink-0 space-y-1.5 scroll-mt-4">
                         <div className="flex items-center justify-between px-0.5">
-                          <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Filter Gallery</Label>
+                          <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">2. Filter — applied after enhancement</Label>
+                          {mediaType === "video" && (
+                            <span className="text-[10px] text-amber-400 ml-2">Approximate filter on video</span>
+                          )}
                           {selectedFilter && (
                             <span className="text-[10px] text-teal-400 truncate ml-2">Active: {selectedFilter}</span>
                           )}
@@ -2144,7 +3227,20 @@ export default function Editor() {
                                       }
                                       pushUndo();
                                       setSelectedFilter(p.key === "original" ? null : p.key);
-                                      if (editorMode === "simple" && p.serverFilter) setEnhancementType("filter");
+                                      // NOTE: We deliberately do NOT call setEnhancementType("filter") here.
+                                      // The /media/enhance-chain endpoint can run BOTH the user's chosen
+                                      // enhancement (e.g. auto_face) AND a filter on top of it. Forcing
+                                      // enhancementType to "filter" here previously caused the chain spec
+                                      // to drop the enhance stage, so the filter ran on the original buffer
+                                      // instead of layering on top of the enhanced buffer.
+                                      //
+                                      // Auto-run: if the user already has a media file loaded, immediately
+                                      // run the chain so the new filter is layered on top of the chosen
+                                      // enhancement without requiring an extra "Enhance Media" click.
+                                      if (file && base64Data) {
+                                        pendingAutoProcessRef.current = { source: "filter-chip" };
+                                        setAutoProcessTick(t => t + 1);
+                                      }
                                     }}
                                   >
                                     <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
@@ -2172,6 +3268,50 @@ export default function Editor() {
                             );
                           })}
                         </div>
+
+                        {/* Step 3: Also Upscale — visible in both Simple and Advanced photo modes */}
+                        {enhancementType !== "upscale" && enhancementType !== "upscale_4x" && enhancementType !== "esrgan_upscale_2x" && enhancementType !== "esrgan_upscale_4x" && (
+                          <div id="workflow-step-upscale" className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 flex items-center justify-between scroll-mt-4">
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-zinc-800 text-[9px] font-bold text-zinc-300">3</span>
+                              <ZoomIn className="w-3.5 h-3.5 text-cyan-400" />
+                              <Label className="text-[11px] font-medium text-zinc-300">Also Upscale</Label>
+                              {upscaleAfter && (
+                                <div className="flex gap-1 ml-1">
+                                  <button
+                                    className={cn(
+                                      "text-[10px] py-0.5 px-1.5 rounded border transition-all font-medium",
+                                      upscaleAfter === "upscale"
+                                        ? "border-cyan-500 bg-cyan-500/10 text-cyan-300"
+                                        : "border-zinc-700 text-zinc-500 hover:border-zinc-600",
+                                    )}
+                                    onClick={() => setUpscaleAfter("upscale")}
+                                  >2x</button>
+                                  <button
+                                    className={cn(
+                                      "text-[10px] py-0.5 px-1.5 rounded border transition-all font-medium",
+                                      isFeatureLocked("upscale_4x") ? "opacity-40 cursor-not-allowed border-zinc-700 text-zinc-600" :
+                                      upscaleAfter === "upscale_4x"
+                                        ? "border-cyan-500 bg-cyan-500/10 text-cyan-300"
+                                        : "border-zinc-700 text-zinc-500 hover:border-zinc-600",
+                                    )}
+                                    onClick={() => {
+                                      if (isFeatureLocked("upscale_4x")) {
+                                        toast({ title: "Premium feature", description: "Upgrade to Premium to unlock 4x upscaling.", variant: "destructive" });
+                                        return;
+                                      }
+                                      setUpscaleAfter("upscale_4x");
+                                    }}
+                                  >4x{isFeatureLocked("upscale_4x") && <Lock className="w-2.5 h-2.5 inline ml-0.5" />}</button>
+                                </div>
+                              )}
+                            </div>
+                            <Switch
+                              checked={upscaleAfter !== null}
+                              onCheckedChange={(checked) => setUpscaleAfter(checked ? "upscale" : null)}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
 

@@ -25,7 +25,7 @@ router.post("/admin/provider-keys/load-env", requireAuth, requireAdmin, async (_
 router.post("/admin/provider-keys/bulk-import", requireAuth, requireAdmin, async (req, res): Promise<void> => {
   const { keys, provider, model, tier } = req.body as {
     keys: string[];
-    provider: "openrouter" | "gemini";
+    provider: "openrouter" | "gemini" | "nvidia";
     model: string;
     tier?: "free" | "premium";
   };

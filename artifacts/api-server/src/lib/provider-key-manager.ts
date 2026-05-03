@@ -49,6 +49,7 @@ const PRIMARY_MODELS: Record<string, string> = {
 /** Standard tier: text/vision models, proven free-tier availability */
 const STANDARD_MODELS: Record<string, string> = {
   STEPFUN_STEP_3_5_FLASH_FREE:              "stepfun/step-3.5-flash:free",
+  TENCENT_HY3_PREVIEW_FREE:                 "tencent/hy3-preview:free",
   NVIDIA_NEMOTRON_3_SUPER_120B_A12B_FREE:   "nvidia/nemotron-3-super-120b-a12b:free",
   NVIDIA_NEMOTRON_3_NANO_30B_A3B_FREE:      "nvidia/nemotron-3-nano-30b-a3b:free",
   ZAI_GLM_4_5_AIR_FREE:                    "z-ai/glm-4.5-air:free",
@@ -88,9 +89,10 @@ const NVIDIA_BASE = "https://integrate.api.nvidia.com/v1";
 const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_CONSECUTIVE_ERRORS = 3;
 
-/** Validates that a string looks like an OpenRouter, Gemini, or NVIDIA API key */
+/** Validates that a string looks like an OpenRouter, Gemini, or NVIDIA API key (single key, not concatenated) */
 function isValidKeyFormat(k: string): boolean {
   const t = k.trim();
+  if (!t || /[,;]/.test(t)) return false;
   return t.startsWith("sk-or-") || t.startsWith("AIza") || (t.startsWith("AQ.") && t.length > 20) || t.startsWith("nvapi-");
 }
 
@@ -247,24 +249,23 @@ class ProviderKeyManager {
       Array.from(this.keys.values()).map((k) => k.key.slice(-8))
     );
 
-    // FIX: Tokenize each entry by whitespace so space-separated pastes work.
-    // Also filter out non-key tokens (model names, labels, blank lines).
+    // Tokenize: newlines, commas, semicolons, or whitespace (common .env / CSV pastes).
     const tokens: string[] = [];
     for (const raw of keys) {
-      // Split each element by whitespace and collect valid-looking keys
-      for (const token of raw.split(/\s+/)) {
+      for (const token of raw.split(/[\s,;]+/)) {
         const t = token.trim();
         if (isValidKeyFormat(t)) tokens.push(t);
       }
     }
 
-    const group: "primary" | "standard" = MODEL_GROUP[model] === "primary"
-      ? "primary"
-      : "standard";
+    let routingGroup: KeyEntry["group"] = "standard";
+    if (provider === "nvidia") routingGroup = "nvidia";
+    else if (provider === "gemini") routingGroup = "gemini";
+    else if (MODEL_GROUP[model] === "primary") routingGroup = "primary";
 
     for (const key of tokens) {
       if (existingHashes.has(key.slice(-8))) continue;
-      await this.upsertKey(key, provider, model, tier, group);
+      await this.upsertKey(key, provider, model, tier, routingGroup);
       existingHashes.add(key.slice(-8)); // prevent in-batch duplicates
       added++;
     }

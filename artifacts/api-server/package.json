@@ -7,6 +7,8 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "test": "vitest run --exclude src/lib/enhancement-smoke.test.ts",
+    "test:smoke": "vitest run src/lib/enhancement-smoke.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -22,9 +24,11 @@
     "pino": "^10",
     "pino-http": "^11",
     "razorpay": "^2.9.6",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "zod": "catalog:"
   },
   "devDependencies": {
+    "vitest": "^3.2.4",
     "@types/bcryptjs": "^3.0.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",

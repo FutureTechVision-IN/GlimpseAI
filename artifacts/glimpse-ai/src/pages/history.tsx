@@ -12,6 +12,7 @@ import {
   LocalHistoryItem,
 } from "@/lib/local-history";
 import { getEnhancementMeta, formatProcessingTime } from "@/lib/enhancement-labels";
+import { buildEnhancedDownloadName } from "@/lib/export-filename";
 import { Link } from "wouter";
 
 function CompareDialog({ item, onClose }: { item: LocalHistoryItem; onClose: () => void }) {
@@ -93,9 +94,12 @@ export default function History() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const ext = item.mimeType === "image/png" ? ".png" : item.mimeType === "image/webp" ? ".webp" : ".jpg";
-      const baseName = item.filename.replace(/\.[^.]+$/, "");
-      a.download = `enhanced-${baseName}${ext}`;
+      a.download = buildEnhancedDownloadName({
+        originalFilename: item.filename,
+        enhancementType: item.enhancementType,
+        referenceCode: item.referenceCode,
+        mime: item.mimeType,
+      });
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -235,6 +239,23 @@ export default function History() {
                     )}>
                       {meta.category}
                     </span>
+                    {/* Chain badges: filter and upscale stages stacked on
+                        top of the primary enhancement on a single row. */}
+                    {item.filterId && (
+                      <span className="text-[9px] font-semibold uppercase px-1 py-0.5 rounded border text-violet-300 bg-violet-500/10 border-violet-500/30">
+                        + {item.filterId}
+                      </span>
+                    )}
+                    {item.upscale && (
+                      <span className="text-[9px] font-semibold uppercase px-1 py-0.5 rounded border text-cyan-300 bg-cyan-500/10 border-cyan-500/30">
+                        + {item.upscale === "upscale_4x" || item.upscale === "esrgan_upscale_4x" ? "4×" : "2×"}
+                      </span>
+                    )}
+                    {item.servedBy === "sidecar" && (
+                      <span className="text-[9px] font-semibold uppercase px-1 py-0.5 rounded border text-emerald-300 bg-emerald-500/10 border-emerald-500/30">
+                        Premium
+                      </span>
+                    )}
                     <span className="text-[9px] text-zinc-600">{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                   {item.processingTimeMs && (

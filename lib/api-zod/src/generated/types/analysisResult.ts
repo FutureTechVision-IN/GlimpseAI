@@ -6,6 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export type AnalysisResultServedBy = (typeof AnalysisResultServedBy)[keyof typeof AnalysisResultServedBy];
+
+export const AnalysisResultServedBy = {
+  sidecar: "sidecar",
+  native: "native",
+  unknown: "unknown",
+} as const;
+
 export interface AnalysisResult {
   description: string;
   suggestedEnhancement: string;
@@ -13,4 +21,11 @@ export interface AnalysisResult {
   suggestedFilter?: string | null;
   detectedSubjects: string[];
   confidence: number;
+  /**
+   * Where the recommended enhancement will run.
+   *  - sidecar: restoration Python service is reachable and exposes the model.
+   *  - native:  Sharp-only fallback (no Docker required).
+   *  - unknown: not yet probed.
+   */
+  servedBy?: AnalysisResultServedBy;
 }

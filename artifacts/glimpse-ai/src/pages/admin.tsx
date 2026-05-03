@@ -24,6 +24,7 @@ import { useAuth } from "../lib/auth-context";
 import {
   LayoutDashboard, Users, Image as ImageIcon, CreditCard, Settings2,
   Cpu, ChevronRight, AlertCircle, CheckCircle, XCircle, RefreshCw,
+  Briefcase,
   Plus, Pencil, Trash2, Eye, EyeOff, LogOut, Shield, TrendingUp,
   Activity, BarChart3, ArrowUpRight, ArrowDownRight, Search, Filter,
   Loader2, MoreHorizontal, Ban, BadgeDollarSign, Key, ToggleLeft, ToggleRight,
@@ -357,10 +358,15 @@ function UsersSection() {
   } | null>(null);
   const [creditAmount, setCreditAmount] = useState("");
   const [dailyAmount, setDailyAmount] = useState("");
+  const [planDialog, setPlanDialog] = useState<{ userId: number; name: string } | null>(null);
+  const [planSelectId, setPlanSelectId] = useState<string>("");
+  const [planExpiryLocal, setPlanExpiryLocal] = useState("");
+  const [planSaving, setPlanSaving] = useState(false);
   const { toast } = useToast();
   const qc = useQueryClient();
 
   const { data, isLoading } = useListAdminUsers({ page, limit: 20, search: search || undefined });
+  const { data: adminPlans } = useListAdminPlans();
   const suspendMutation = useSuspendUser();
   const creditMutation = useAdjustUserCredits();
 
@@ -385,6 +391,45 @@ function UsersSection() {
     setCreditDialog(null);
     setCreditAmount("");
     setDailyAmount("");
+  };
+
+  const handleAssignPlan = async () => {
+    if (!planDialog) return;
+    setPlanSaving(true);
+    try {
+      const token = localStorage.getItem("glimpse_token");
+      const clearFree = planSelectId === "__free__";
+      const body: { planId: number | null; planExpiresAt?: string | null } = clearFree
+        ? { planId: null }
+        : { planId: parseInt(planSelectId, 10) };
+      if (!clearFree && planExpiryLocal.trim() !== "") {
+        body.planExpiresAt = new Date(planExpiryLocal).toISOString();
+      }
+      if (!clearFree && Number.isNaN(body.planId as number)) {
+        toast({ title: "Select a plan", variant: "destructive" });
+        return;
+      }
+      const res = await fetch(`/api/admin/users/${planDialog.userId}/plan`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ title: "Plan update failed", description: (data as { error?: string }).error ?? res.statusText, variant: "destructive" });
+        return;
+      }
+      toast({ title: "Plan updated", description: (data as { message?: string }).message ?? `User ${planDialog.name}` });
+      qc.invalidateQueries({ queryKey: getListAdminUsersQueryKey() });
+      setPlanDialog(null);
+      setPlanSelectId("");
+      setPlanExpiryLocal("");
+    } finally {
+      setPlanSaving(false);
+    }
   };
 
   return (
@@ -462,7 +507,15 @@ function UsersSection() {
                   </TableCell>
                   <TableCell className="text-xs text-zinc-500 hidden sm:table-cell">{new Date(user.createdAt).toLocaleDateString("en-IN")}</TableCell>
                   <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-2 flex-wrap">
+                      <Button size="sm" variant="ghost" className="text-zinc-400 hover:text-teal-400 hover:bg-teal-500/10 text-xs h-7 px-2"
+                        onClick={() => {
+                          setPlanDialog({ userId: user.id, name: user.name });
+                          setPlanSelectId(user.planId ? String(user.planId) : "__free__");
+                          setPlanExpiryLocal("");
+                        }}>
+                        <Briefcase className="w-3 h-3 mr-1" /> Plan
+                      </Button>
                       <Button size="sm" variant="ghost" className="text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 text-xs h-7 px-2"
                         onClick={() => {
                           setCreditDialog({ userId: user.id, name: user.name, currentMonthly: user.creditsLimit, currentDaily: (user as any).dailyLimit ?? 5 });
@@ -497,6 +550,52 @@ function UsersSection() {
           )}
         </Card>
       )}
+
+      {/* Subscription plan override */}
+      <Dialog open={!!planDialog} onOpenChange={(open) => { if (!open) { setPlanDialog(null); setPlanSelectId(""); setPlanExpiryLocal(""); } }}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 max-w-sm w-full">
+          <DialogHeader>
+            <DialogTitle>Assign plan</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Set paid plan and optional expiry for <span className="text-white font-medium">{planDialog?.name}</span>.
+              Use <span className="text-zinc-300">Free</span> to remove subscription. Premium trial dates use the separate premium-trial API.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-sm text-zinc-300">Plan</Label>
+              <select
+                className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-200"
+                value={planSelectId}
+                onChange={(e) => setPlanSelectId(e.target.value)}
+              >
+                <option value="__free__">Free (clear subscription)</option>
+                {(adminPlans ?? []).filter((p: Plan) => p.slug !== "free").map((p: Plan) => (
+                  <option key={p.id} value={String(p.id)}>{p.name} ({p.slug})</option>
+                ))}
+              </select>
+            </div>
+            {planSelectId !== "" && planSelectId !== "__free__" && (
+              <div className="space-y-1.5">
+                <Label className="text-sm text-zinc-300">Expires (optional)</Label>
+                <Input
+                  type="datetime-local"
+                  value={planExpiryLocal}
+                  onChange={(e) => setPlanExpiryLocal(e.target.value)}
+                  className="bg-zinc-800 border-zinc-700"
+                />
+                <p className="text-[10px] text-zinc-500">Leave empty to keep the user&apos;s current expiry unchanged. Set a date to override.</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="border-zinc-700" onClick={() => { setPlanDialog(null); setPlanSelectId(""); setPlanExpiryLocal(""); }}>Cancel</Button>
+            <Button className="bg-teal-600 hover:bg-teal-500" onClick={() => void handleAssignPlan()} disabled={planSaving}>
+              {planSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Quota adjustment dialog — monthly + daily */}
       <Dialog open={!!creditDialog} onOpenChange={open => { if (!open) { setCreditDialog(null); setCreditAmount(""); setDailyAmount(""); } }}>
@@ -993,6 +1092,9 @@ function ApiKeysSection() {
     { id: "nvidia/nemotron-3-nano-30b-a3b:free", label: "Nemotron Nano 30B (Standard — free)", group: "standard" },
     { id: "z-ai/glm-4.5-air:free", label: "GLM 4.5 Air (Standard — free)", group: "standard" },
     { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash (Gemini — last resort)", group: "gemini" },
+    { id: "moonshotai/kimi-k2.5", label: "Kimi K2.5 (NVIDIA direct — nvapi-)", group: "nvidia" },
+    { id: "minimaxai/minimax-m2.5", label: "MiniMax M2.5 (NVIDIA direct)", group: "nvidia" },
+    { id: "nvidia/nemotron-3-super-120b-a12b", label: "Nemotron Super 120B (NVIDIA direct)", group: "nvidia" },
   ];
 
   const fetchKeys = async () => {
@@ -1049,14 +1151,16 @@ function ApiKeysSection() {
 
   /**
    * Smart bulk import:
-   * - Accepts keys one-per-line OR space-separated OR mixed paste with model names
-   * - Automatically filters out non-key tokens (model names, labels, blank tokens)
-   * - Sends the raw text to backend which tokenizes correctly
+   * - Accepts one-per-line, comma-separated, semicolon-separated, or space-separated keys
+   * - Backend splits on whitespace and punctuation; non-key tokens are dropped
    */
   const handleBulkImport = async () => {
     if (!bulkForm.keys.trim()) return;
-    // Send all lines as array — backend will tokenize by whitespace and filter non-keys
-    const lines = bulkForm.keys.split("\n").map(k => k.trim()).filter(k => k.length > 0);
+    const lines = bulkForm.keys
+      .split(/\r?\n/)
+      .flatMap((line) => line.split(/[,;]/))
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
     if (lines.length === 0) return;
     const res = await fetch("/api/admin/provider-keys/bulk-import", {
       method: "POST", headers,
@@ -1255,17 +1359,26 @@ function ApiKeysSection() {
           <DialogHeader>
             <DialogTitle>Bulk Import API Keys</DialogTitle>
             <DialogDescription className="text-zinc-400">
-              Paste keys one per line, space-separated, or mixed. Model names in the paste are automatically ignored.
+              Paste keys one per line, comma-separated, or space-separated. Invalid fragments are ignored; run Validate All after import.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs text-zinc-400">Provider</Label>
-                <select value={bulkForm.provider} onChange={e => setBulkForm(f => ({ ...f, provider: e.target.value }))}
+                <select value={bulkForm.provider} onChange={e => {
+                  const provider = e.target.value;
+                  const pick = (g: string) => AVAILABLE_MODELS.find(m => m.group === g)?.id ?? bulkForm.model;
+                  let model = bulkForm.model;
+                  if (provider === "nvidia") model = pick("nvidia");
+                  else if (provider === "gemini") model = pick("gemini");
+                  else model = pick("primary");
+                  setBulkForm(f => ({ ...f, provider, model }));
+                }}
                   className="w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm">
                   <option value="openrouter">OpenRouter</option>
                   <option value="gemini">Gemini</option>
+                  <option value="nvidia">NVIDIA (direct nvapi-)</option>
                 </select>
               </div>
               <div>
@@ -1281,27 +1394,38 @@ function ApiKeysSection() {
               <Label className="text-xs text-zinc-400">Model</Label>
               <select value={bulkForm.model} onChange={e => setBulkForm(f => ({ ...f, model: e.target.value }))}
                 className="w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm font-mono">
-                <optgroup label="── Primary Tier ──">
-                  {AVAILABLE_MODELS.filter(m => m.group === "primary").map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="── Standard Tier ──">
-                  {AVAILABLE_MODELS.filter(m => m.group === "standard").map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="── Gemini Fallback ──">
-                  {AVAILABLE_MODELS.filter(m => m.group === "gemini").map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </optgroup>
+                {bulkForm.provider === "nvidia" ? (
+                  <optgroup label="── NVIDIA Direct (nvapi-) ──">
+                    {AVAILABLE_MODELS.filter(m => m.group === "nvidia").map(m => (
+                      <option key={m.id + m.label} value={m.id}>{m.label}</option>
+                    ))}
+                  </optgroup>
+                ) : bulkForm.provider === "gemini" ? (
+                  <optgroup label="── Gemini ──">
+                    {AVAILABLE_MODELS.filter(m => m.group === "gemini").map(m => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </optgroup>
+                ) : (
+                  <>
+                    <optgroup label="── Primary Tier ──">
+                      {AVAILABLE_MODELS.filter(m => m.group === "primary").map(m => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="── Standard Tier ──">
+                      {AVAILABLE_MODELS.filter(m => m.group === "standard").map(m => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </optgroup>
+                  </>
+                )}
               </select>
             </div>
             <div>
-              <Label className="text-xs text-zinc-400">Keys (one per line or space-separated)</Label>
+              <Label className="text-xs text-zinc-400">Keys (lines, commas, or spaces)</Label>
               <Textarea value={bulkForm.keys} onChange={e => setBulkForm(f => ({ ...f, keys: e.target.value }))}
-                className="bg-zinc-800 border-zinc-700 mt-1 font-mono text-xs" rows={8} placeholder="sk-or-v1-abc123&#10;sk-or-v1-def456&#10;or paste space-separated keys..." />
+                className="bg-zinc-800 border-zinc-700 mt-1 font-mono text-xs" rows={8} placeholder={"sk-or-v1-a...,sk-or-v1-b...&#10;nvapi-xxx (NVIDIA)&#10;one key per line or comma-separated"} />
             </div>
           </div>
           <DialogFooter>

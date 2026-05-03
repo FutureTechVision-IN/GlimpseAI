@@ -9,12 +9,21 @@ import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID ?? "rzp_test_placeholder";
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET ?? "placeholder_secret";
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID ?? "";
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET ?? "";
+
+const razorpayKeysConfigured =
+  Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET) &&
+  !RAZORPAY_KEY_ID.includes("placeholder") &&
+  RAZORPAY_KEY_SECRET !== "placeholder_secret";
+
+/** Only for local dev without Razorpay keys — never enable in production */
+const paymentVerifyDisabled =
+  process.env.PAYMENT_VERIFY_DISABLED === "true" && process.env.NODE_ENV !== "production";
 
 let razorpay: Razorpay | null = null;
 try {
-  if (RAZORPAY_KEY_ID !== "rzp_test_placeholder") {
+  if (razorpayKeysConfigured) {
     razorpay = new Razorpay({
       key_id: RAZORPAY_KEY_ID,
       key_secret: RAZORPAY_KEY_SECRET,
@@ -83,7 +92,7 @@ router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res)
     orderId,
     amount,
     currency: "INR",
-    keyId: RAZORPAY_KEY_ID,
+    keyId: razorpayKeysConfigured ? RAZORPAY_KEY_ID : "rzp_test_mode",
   });
 });
 
@@ -96,13 +105,21 @@ router.post("/payments/verify", requireAuth, async (req: AuthRequest, res): Prom
 
   const { razorpayOrderId, razorpayPaymentId, razorpaySignature, planId, billingPeriod } = parsed.data;
 
-  const expectedSig = crypto
-    .createHmac("sha256", RAZORPAY_KEY_SECRET)
-    .update(`${razorpayOrderId}|${razorpayPaymentId}`)
-    .digest("hex");
+  if (razorpayKeysConfigured) {
+    const expectedSig = crypto
+      .createHmac("sha256", RAZORPAY_KEY_SECRET)
+      .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+      .digest("hex");
 
-  if (expectedSig !== razorpaySignature && process.env.NODE_ENV === "production") {
-    res.status(400).json({ error: "Invalid payment signature" });
+    if (expectedSig !== razorpaySignature) {
+      logger.warn({ razorpayOrderId }, "Payment signature mismatch");
+      res.status(400).json({ error: "Invalid payment signature" });
+      return;
+    }
+  } else if (!paymentVerifyDisabled) {
+    res.status(503).json({
+      error: "Payment verification is not configured. Set Razorpay keys or PAYMENT_VERIFY_DISABLED=true (development only).",
+    });
     return;
   }
 
@@ -156,8 +173,13 @@ router.get("/payments/history", requireAuth, async (req: AuthRequest, res): Prom
   })));
 });
 
-router.post("/payments/webhook", async (req, res): Promise<void> => {
-  logger.info("Razorpay webhook received");
+router.post("/payments/webhook", async (_req, res): Promise<void> => {
+  if (process.env.NODE_ENV === "production") {
+    logger.warn("Razorpay webhook called but signature verification is not implemented — rejecting");
+    res.status(501).json({ error: "Webhook handler not configured" });
+    return;
+  }
+  logger.info("Razorpay webhook received (development noop)");
   res.json({ success: true });
 });
 

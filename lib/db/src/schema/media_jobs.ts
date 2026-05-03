@@ -17,6 +17,10 @@ export const mediaJobsTable = pgTable("media_jobs", {
   processingTimeMs: integer("processing_time_ms"),
   fileSize: integer("file_size").notNull().default(0),
   base64Data: text("base64_data"),
+  /** Internal trace code (set when job completes): GLP-{id}-{enh}-{date}-{suffix} */
+  referenceCode: text("reference_code").unique(),
+  /** When ephemeral blob columns were cleared for stateless retention policy */
+  mediaPurgedAt: timestamp("media_purged_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

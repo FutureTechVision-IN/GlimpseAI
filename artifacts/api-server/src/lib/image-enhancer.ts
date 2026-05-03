@@ -214,6 +214,24 @@ function applyRegisteredFilterPipeline(
   return applyFilterOperations(pipeline, filter.operations);
 }
 
+/** Apply registry filter on an already-restored raster (sidecar output). */
+async function applyCanonicalFilterToRestoredBase64(
+  base64: string,
+  filterId: string,
+): Promise<{ base64: string; mimeType: string }> {
+  const buf = Buffer.from(base64, "base64");
+  const metaIn = await sharp(buf).metadata();
+  const hasAlpha = metaIn.hasAlpha === true;
+  const pipe = applyRegisteredFilterPipeline(sharp(buf), filterId);
+  const outBuf = hasAlpha
+    ? await pipe.png({ compressionLevel: 6 }).toBuffer()
+    : await pipe.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  return {
+    base64: outBuf.toString("base64"),
+    mimeType: hasAlpha ? "image/png" : "image/jpeg",
+  };
+}
+
 function isCropBox(value: unknown): value is CropBox {
   if (!value || typeof value !== "object") return false;
   const crop = value as Record<string, unknown>;
@@ -265,6 +283,7 @@ const RESTORATION_TYPES = new Set([
   "face_restore_hd",
   "codeformer",
   "auto_face",
+  "hybrid",
   "esrgan_upscale_2x",
   "esrgan_upscale_4x",
   "old_photo_restore",
@@ -321,7 +340,7 @@ const HEALTH_CACHE_TTL_MS = 10_000; // 10 seconds
  * Check whether the restoration sidecar is reachable.
  * Caches result for 10s to avoid excessive health checks during bursts.
  */
-async function isRestorationServiceAvailable(): Promise<boolean> {
+export async function isRestorationServiceAvailable(): Promise<boolean> {
   const now = Date.now();
   if (now < _healthCacheExpiry) return _healthCacheResult;
 
@@ -354,6 +373,7 @@ async function callRestorationService(
     face_restore_hd: "face_restore_hd",
     codeformer: "codeformer",
     auto_face: "auto_face",
+    hybrid: "hybrid",
     esrgan_upscale_2x: "upscale_2x",
     esrgan_upscale_4x: "upscale_4x",
     old_photo_restore: "old_photo",
@@ -457,6 +477,11 @@ async function callRestorationService(
 
 /**
  * Call the restoration service for video processing.
+ *
+ * Optional filter / upscale parameters bring video parity with the image
+ * pipeline: filter_id maps to a sidecar color_grade where possible (e.g.
+ * vintage → goldenhour, cinematic → cinematic), or is applied per-frame
+ * via Sharp on the returned video for unmapped ids.
  */
 export async function callVideoRestoration(
   videoBase64: string,
@@ -464,9 +489,44 @@ export async function callVideoRestoration(
   faceEnhance: boolean = true,
   maxFrames: number = 300,
   temporalConsistency: boolean = true,
-  restorationModel: string = "gfpgan",
+  restorationModel: string = "auto",
+  colorGrade: string | null = null,
+  filterId: string | null = null,
+  upscale: string | null = null,
 ): Promise<{ base64: string; mimeType: string; framesProcessed: number; processingMs: number; sceneChanges: number }> {
-  logger.info({ mode, faceEnhance, maxFrames, temporalConsistency, restorationModel }, "Calling video restoration service");
+  logger.info({ mode, faceEnhance, maxFrames, temporalConsistency, restorationModel, colorGrade, filterId, upscale }, "Calling video restoration service");
+
+  // Map filter_id → sidecar color_grade enum where there's an obvious
+  // equivalent. Unmapped ids get sent as filter_id and the sidecar applies
+  // a per-frame Sharp pass using the canonical registry.
+  const FILTER_TO_COLOR_GRADE: Record<string, string> = {
+    cinematic: "cinematic",
+    vintage: "goldenhour",
+    "golden-hour": "goldenhour",
+    goldenhour: "goldenhour",
+    moody: "noir",
+    noir: "noir",
+    bw: "noir",
+    "black-and-white": "noir",
+    vivid: "vivid",
+  };
+  let mappedColorGrade = colorGrade;
+  let unmappedFilterId: string | null = null;
+  if (filterId && filterId !== "original") {
+    const mapped = FILTER_TO_COLOR_GRADE[filterId];
+    if (mapped && !mappedColorGrade) {
+      mappedColorGrade = mapped;
+    } else if (!mapped) {
+      unmappedFilterId = filterId;
+    }
+  }
+
+  // Override mode with explicit upscale if provided.
+  const effectiveMode = upscale === "upscale_4x" || upscale === "esrgan_upscale_4x"
+    ? "upscale_4x"
+    : upscale === "upscale" || upscale === "esrgan_upscale_2x"
+      ? "upscale_2x"
+      : mode;
 
   // 10-minute timeout for video processing (frame-by-frame ML)
   const ctrl = new AbortController();
@@ -480,11 +540,13 @@ export async function callVideoRestoration(
       signal: ctrl.signal,
       body: JSON.stringify({
         video_base64: videoBase64,
-        mode,
+        mode: effectiveMode,
         face_enhance: faceEnhance,
         max_frames: maxFrames,
         temporal_consistency: temporalConsistency,
         restoration_model: restorationModel,
+        color_grade: mappedColorGrade ?? undefined,
+        filter_id: unmappedFilterId ?? undefined,
       }),
     });
   } finally {
@@ -545,8 +607,36 @@ async function renderCanonicalImage(
       logger.warn({ type }, "Restoration service unreachable — falling back to local sharp processing");
     } else {
       const restored = await callRestorationService(base64Data, type, s);
+      let outB64 = restored.base64;
+      let outMime = restored.mimeType;
+
+      if (filterId) {
+        const filtered = await applyCanonicalFilterToRestoredBase64(outB64, filterId);
+        outB64 = filtered.base64;
+        outMime = filtered.mimeType;
+      }
+
+      if (renderKind === "preview") {
+        const buf = Buffer.from(outB64, "base64");
+        const resized = await sharp(buf)
+          .resize({
+            width: previewMaxDimension,
+            height: previewMaxDimension,
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .toBuffer();
+        const alphaMeta = await sharp(buf).metadata();
+        const hasAlpha = alphaMeta.hasAlpha === true;
+        const previewBuf = hasAlpha
+          ? await sharp(resized).png({ compressionLevel: 6 }).toBuffer()
+          : await sharp(resized).jpeg({ quality: 88, mozjpeg: true }).toBuffer();
+        outB64 = previewBuf.toString("base64");
+        outMime = hasAlpha ? "image/png" : "image/jpeg";
+      }
       return {
-        ...restored,
+        base64: outB64,
+        mimeType: outMime,
         filterId,
         filterVersion,
         renderKind,
@@ -1217,18 +1307,26 @@ export async function renderPreviewImage(
  * ML sidecar processes are sequential (single worker), so we send restoration
  * requests serially but process local Sharp enhancements concurrently (up to 4).
  */
+function sniffMimeFromRawBase64(base64Data: string): string {
+  if (base64Data.startsWith("/9j/")) return "image/jpeg";
+  if (base64Data.startsWith("iVBOR")) return "image/png";
+  if (base64Data.startsWith("UklGR")) return "image/webp";
+  return "image/jpeg";
+}
+
 export async function callBatchRestoration(
-  images: Array<{ base64Data: string; mode: string; settings?: Record<string, unknown> }>,
+  images: Array<{ base64Data: string; enhancementType: string; settings?: Record<string, unknown> }>,
 ): Promise<Array<{ base64: string; mimeType: string }>> {
   const available = await isRestorationServiceAvailable();
 
   // Partition: restoration items go serial (sidecar is single-worker),
   // local items can be processed concurrently
-  const restorationItems: Array<{ idx: number; img: typeof images[0] }> = [];
-  const localItems: Array<{ idx: number; img: typeof images[0] }> = [];
+  const restorationItems: Array<{ idx: number; img: (typeof images)[0] }> = [];
+  const localItems: Array<{ idx: number; img: (typeof images)[0] }> = [];
 
   for (let i = 0; i < images.length; i++) {
-    if (available && RESTORATION_TYPES.has(images[i].mode)) {
+    const et = images[i].enhancementType;
+    if (available && RESTORATION_TYPES.has(et)) {
       restorationItems.push({ idx: i, img: images[i] });
     } else {
       localItems.push({ idx: i, img: images[i] });
@@ -1240,10 +1338,13 @@ export async function callBatchRestoration(
   // Process restoration items serially (sidecar is single-worker)
   for (const { idx, img } of restorationItems) {
     try {
-      results[idx] = await callRestorationService(img.base64Data, img.mode, img.settings);
+      results[idx] = await enhanceImage(img.base64Data, sniffMimeFromRawBase64(img.base64Data), {
+        enhancementType: img.enhancementType,
+        settings: img.settings,
+      });
     } catch (err) {
-      logger.error({ mode: img.mode, err }, "Batch restoration item failed — using original");
-      results[idx] = { base64: img.base64Data, mimeType: "image/jpeg" };
+      logger.error({ enhancementType: img.enhancementType, err }, "Batch restoration item failed — using original");
+      results[idx] = { base64: img.base64Data, mimeType: sniffMimeFromRawBase64(img.base64Data) };
     }
   }
 
@@ -1253,8 +1354,8 @@ export async function callBatchRestoration(
     const chunk = localItems.slice(i, i + CONCURRENCY);
     const chunkResults = await Promise.allSettled(
       chunk.map(({ img }) =>
-        enhanceImage(img.base64Data, "image/jpeg", {
-          enhancementType: img.mode,
+        enhanceImage(img.base64Data, sniffMimeFromRawBase64(img.base64Data), {
+          enhancementType: img.enhancementType,
           settings: img.settings,
         }),
       ),
@@ -1264,8 +1365,11 @@ export async function callBatchRestoration(
       if (r.status === "fulfilled") {
         results[chunk[j].idx] = r.value;
       } else {
-        logger.error({ mode: chunk[j].img.mode, err: r.reason }, "Batch local item failed — using original");
-        results[chunk[j].idx] = { base64: chunk[j].img.base64Data, mimeType: "image/jpeg" };
+        logger.error({ enhancementType: chunk[j].img.enhancementType, err: r.reason }, "Batch local item failed — using original");
+        results[chunk[j].idx] = {
+          base64: chunk[j].img.base64Data,
+          mimeType: sniffMimeFromRawBase64(chunk[j].img.base64Data),
+        };
       }
     }
   }

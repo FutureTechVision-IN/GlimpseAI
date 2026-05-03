@@ -40,3 +40,10 @@ services/restoration/models/*.pth
 services/restoration/gfpgan/
 __pycache__/
 *.pyc
+
+# Temp / smoke test scaffolding
+.zip-smoke/
+artifacts/glimpse-ai/zip-smoke.mjs
+
+# Cursor session/debug artifacts
+.cursor/

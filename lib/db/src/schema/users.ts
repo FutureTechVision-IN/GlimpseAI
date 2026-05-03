@@ -10,6 +10,8 @@ export const usersTable = pgTable("users", {
   role: text("role").notNull().default("user"),
   planId: integer("plan_id"),
   planExpiresAt: timestamp("plan_expires_at", { withTimezone: true }),
+  /** Marketing / admin-granted premium trial — overrides tier until this instant */
+  premiumTrialEndsAt: timestamp("premium_trial_ends_at", { withTimezone: true }),
   creditsUsed: integer("credits_used").notNull().default(0),
   creditsLimit: integer("credits_limit").notNull().default(5),
   dailyCreditsUsed: integer("daily_credits_used").notNull().default(0),

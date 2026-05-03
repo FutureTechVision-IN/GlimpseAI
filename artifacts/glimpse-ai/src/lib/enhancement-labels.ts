@@ -65,6 +65,72 @@ export function getEnhancementMeta(type: string | null | undefined): Enhancement
   return ENHANCEMENT_META[type] ?? { ...DEFAULT_META, label: type.replace(/_/g, " "), shortLabel: type.split("_")[0] };
 }
 
+const CATEGORY_ORDER: EnhancementMeta["category"][] = ["restoration", "basic", "filter", "video"];
+
+export const ENHANCEMENT_CATEGORY_LABELS: Record<EnhancementMeta["category"], string> = {
+  basic: "Photo polish",
+  restoration: "AI restoration",
+  filter: "Color & filters",
+  video: "Video",
+};
+
+/**
+ * Stable presentation weights so the strongest, safest defaults appear first.
+ * Auto Face AI leads everywhere it's listed.
+ */
+const PRESENTATION_WEIGHT: Record<string, number> = {
+  auto_face: 0,
+  auto: 1,
+  hybrid: 5,
+  face_restore: 6,
+  face_restore_hd: 7,
+  codeformer: 8,
+  esrgan_upscale_2x: 9,
+  esrgan_upscale_4x: 10,
+  old_photo_restore: 11,
+};
+
+/** Stable list for dashboard / marketing surfaces (every registered enhancement type). */
+export function listEnhancementsForDashboard(): Array<{ id: string; meta: EnhancementMeta }> {
+  return Object.entries(ENHANCEMENT_META)
+    .map(([id, meta]) => ({ id, meta }))
+    .sort((a, b) => {
+      const ca = CATEGORY_ORDER.indexOf(a.meta.category);
+      const cb = CATEGORY_ORDER.indexOf(b.meta.category);
+      if (ca !== cb) return ca - cb;
+      const wa = PRESENTATION_WEIGHT[a.id] ?? 100;
+      const wb = PRESENTATION_WEIGHT[b.id] ?? 100;
+      if (wa !== wb) return wa - wb;
+      return a.meta.label.localeCompare(b.meta.label);
+    });
+}
+
+/** Grouped sections for dashboard browse UI. */
+export function groupEnhancementsForDashboardByCategory(): Array<{
+  category: EnhancementMeta["category"];
+  sectionTitle: string;
+  items: Array<{ id: string; meta: EnhancementMeta }>;
+}> {
+  const flat = listEnhancementsForDashboard();
+  const map = new Map<EnhancementMeta["category"], Array<{ id: string; meta: EnhancementMeta }>>();
+  for (const row of flat) {
+    const arr = map.get(row.meta.category) ?? [];
+    arr.push(row);
+    map.set(row.meta.category, arr);
+  }
+  return CATEGORY_ORDER.map((category) => ({
+    category,
+    sectionTitle: ENHANCEMENT_CATEGORY_LABELS[category],
+    items: map.get(category) ?? [],
+  })).filter((g) => g.items.length > 0);
+}
+
+export function enhancementStudioHref(id: string, category: EnhancementMeta["category"]): string {
+  const q = encodeURIComponent(id);
+  if (category === "video") return `/video-studio?enhance=${q}`;
+  return `/photo-studio?enhance=${q}`;
+}
+
 export function formatProcessingTime(ms: number | null | undefined): string {
   if (!ms) return "";
   if (ms < 1000) return `${ms}ms`;

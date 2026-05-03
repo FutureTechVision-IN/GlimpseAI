@@ -11,16 +11,29 @@ import {
   RenderMediaPreviewBody,
 } from "@workspace/api-zod";
 import { enhanceImage, renderPreviewImage, callVideoRestoration, callBatchRestoration } from "../lib/image-enhancer";
+import { runEnhancementChain, validateChainSpec, type ChainSpec, type UpscaleOp } from "../lib/enhancement-pipeline";
 import { aiProvider, feedbackAccumulator, type UserTier } from "../lib/ai-provider";
 import { formatApiError } from "../lib/api-errors";
-import { checkTierAccess, resolvePlanSlug } from "../lib/tier-config";
+import { checkTierAccess } from "../lib/tier-config";
+import {
+  resolveEffectivePlanSlug,
+  maxBatchJobsForPlan,
+  downgradeExpiredSubscription,
+} from "../lib/entitlements";
+import { buildMediaReferenceCode } from "../lib/media-reference";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
-/** Determine user tier from their plan: paid plan → premium, no plan → free */
-function getUserTier(user: { planId: number | null }): UserTier {
-  return user.planId ? "premium" : "free";
+/** AI provider tier: paid effective tier → premium vision routing; free → cheaper/local-only */
+function getUserTierForAi(planSlug: string | null, user: typeof usersTable.$inferSelect): UserTier {
+  const slug = resolveEffectivePlanSlug(planSlug, {
+    role: user.role,
+    planId: user.planId,
+    planExpiresAt: user.planExpiresAt,
+    premiumTrialEndsAt: user.premiumTrialEndsAt,
+  });
+  return slug === "free" ? "free" : "premium";
 }
 
 /** Admins are exempt from all quota enforcement */
@@ -63,6 +76,7 @@ function jobToResponse(j: typeof mediaJobsTable.$inferSelect) {
     errorMessage: j.errorMessage,
     processingTimeMs: j.processingTimeMs,
     fileSize: j.fileSize,
+    referenceCode: j.referenceCode ?? null,
     createdAt: j.createdAt,
     completedAt: j.completedAt,
   };
@@ -103,6 +117,7 @@ function jobToListResponse(j: typeof mediaJobsTable.$inferSelect) {
     errorMessage: j.errorMessage,
     processingTimeMs: j.processingTimeMs,
     fileSize: j.fileSize,
+    referenceCode: j.referenceCode ?? null,
     createdAt: j.createdAt,
     completedAt: j.completedAt,
   };
@@ -130,6 +145,8 @@ router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise
     res.status(400).json({ error: parsed.error.message });
     return;
   }
+
+  await downgradeExpiredSubscription(req.userId!);
 
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
   if (!user) {
@@ -203,6 +220,8 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     return;
   }
 
+  await downgradeExpiredSubscription(req.userId!);
+
   // ── Tier-based feature gating ──
   if (!isAdmin(req)) {
     const [enhUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
@@ -211,7 +230,12 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
       const [plan] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, enhUser.planId));
       planSlug = plan?.slug ?? null;
     }
-    const tierSlug = resolvePlanSlug(planSlug, false);
+    const tierSlug = resolveEffectivePlanSlug(planSlug, {
+      role: enhUser!.role,
+      planId: enhUser!.planId,
+      planExpiresAt: enhUser!.planExpiresAt,
+      premiumTrialEndsAt: enhUser!.premiumTrialEndsAt,
+    });
     const filterId = (settings as Record<string, unknown> | undefined)?.filterId as string | undefined;
     const filterName = filterId ?? ((settings as Record<string, unknown> | undefined)?.filterName as string | undefined);
     const tierError = checkTierAccess(tierSlug, enhancementType, filterName);
@@ -250,20 +274,45 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
 
     // ── Video Restoration (separate pipeline) ──
     if (enhancementType === "video_restore") {
-      const videoMode = (settings as Record<string, unknown>)?.videoMode as string || "upscale_2x";
-      const faceEnhance = (settings as Record<string, unknown>)?.faceEnhance !== false;
-      const temporalConsistency = (settings as Record<string, unknown>)?.temporalConsistency !== false;
-      const restorationModel = (settings as Record<string, unknown>)?.restorationModel as string || "gfpgan";
+      const s = (settings ?? {}) as Record<string, unknown>;
+      const videoMode = (s.videoMode as string) || "upscale_2x";
+      const faceEnhance = s.faceEnhance !== false;
+      const temporalConsistency = s.temporalConsistency !== false;
+      const restorationModel = (s.restorationModel as string) || "auto";
+      const videoColorGrade = s.videoColorGrade as string | undefined;
+      // Forward Photo-Studio-style filter + upscale settings so video has
+      // feature parity with the image pipeline.
+      const filterId = s.filterId as string | undefined;
+      const upscale = s.upscale as string | undefined;
 
       setProgress("Sending to video restoration pipeline…");
-      const result = await callVideoRestoration(rawB64, videoMode, faceEnhance, 300, temporalConsistency, restorationModel);
+      const result = await callVideoRestoration(
+        rawB64,
+        videoMode,
+        faceEnhance,
+        300,
+        temporalConsistency,
+        restorationModel,
+        videoColorGrade ?? null,
+        filterId ?? null,
+        upscale ?? null,
+      );
+
+      const completedAt = new Date();
+      const referenceCode = buildMediaReferenceCode({
+        jobId,
+        enhancementType,
+        completedAt,
+        suffix: "",
+      });
 
       await db.update(mediaJobsTable).set({
         status: "completed",
         processedUrl: result.base64,
         thumbnailUrl: result.base64,
         processingTimeMs: Date.now() - startTime,
-        completedAt: new Date(),
+        completedAt,
+        referenceCode,
         errorMessage: null,
       }).where(eq(mediaJobsTable.id, jobId));
 
@@ -282,7 +331,12 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     // Get AI guidance from LLM vision models (non-blocking, 15s timeout fallback)
     // Pass user tier so free users don't consume Gemini keys
     const [enhUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
-    const userTier = enhUser ? getUserTier(enhUser) : "free";
+    let planSlugAi: string | null = null;
+    if (enhUser?.planId) {
+      const [pl] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, enhUser.planId));
+      planSlugAi = pl?.slug ?? null;
+    }
+    const userTier = enhUser ? getUserTierForAi(planSlugAi, enhUser) : "free";
     let aiGuidance = null;
     mark("guidance_start");
     try {
@@ -312,13 +366,21 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
     mark("enhance_done");
 
     setProgress("Saving result…");
+    const completedAt = new Date();
+    const referenceCode = buildMediaReferenceCode({
+      jobId,
+      enhancementType,
+      completedAt,
+      suffix: "",
+    });
     // Store raw base64 in DB (no prefix — jobToResponse adds it)
     await db.update(mediaJobsTable).set({
       status: "completed",
       processedUrl: result.base64,
       thumbnailUrl: result.base64,
       processingTimeMs: Date.now() - startTime,
-      completedAt: new Date(),
+      completedAt,
+      referenceCode,
       errorMessage: null,
     }).where(eq(mediaJobsTable.id, jobId));
     mark("db_save");
@@ -344,6 +406,8 @@ router.post("/media/preview", requireAuth, async (req: AuthRequest, res): Promis
 
   const { base64Data, mimeType, enhancementType, settings, previewMaxDimension } = parsed.data;
 
+  await downgradeExpiredSubscription(req.userId!);
+
   if (!isAdmin(req)) {
     const [previewUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
     let planSlug: string | null = null;
@@ -351,7 +415,12 @@ router.post("/media/preview", requireAuth, async (req: AuthRequest, res): Promis
       const [plan] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, previewUser.planId));
       planSlug = plan?.slug ?? null;
     }
-    const tierSlug = resolvePlanSlug(planSlug, false);
+    const tierSlug = resolveEffectivePlanSlug(planSlug, {
+      role: previewUser!.role,
+      planId: previewUser!.planId,
+      planExpiresAt: previewUser!.planExpiresAt,
+      premiumTrialEndsAt: previewUser!.premiumTrialEndsAt,
+    });
     const filterId = (settings as Record<string, unknown> | undefined)?.filterId as string | undefined;
     const filterName = filterId ?? ((settings as Record<string, unknown> | undefined)?.filterName as string | undefined);
     const tierError = checkTierAccess(tierSlug, enhancementType, filterName);
@@ -386,6 +455,8 @@ router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promis
     return;
   }
 
+  await downgradeExpiredSubscription(req.userId!);
+
   const [job] = await db.select().from(mediaJobsTable)
     .where(and(eq(mediaJobsTable.id, jobId), eq(mediaJobsTable.userId, req.userId!)));
 
@@ -399,10 +470,15 @@ router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promis
 
   // Determine user tier for tier-aware AI routing
   const [analyzeUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
-  const userTier = analyzeUser ? getUserTier(analyzeUser) : "free";
+  let planSlugAnalyze: string | null = null;
+  if (analyzeUser?.planId) {
+    const [pl] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, analyzeUser.planId));
+    planSlugAnalyze = pl?.slug ?? null;
+  }
+  const userTier = analyzeUser ? getUserTierForAi(planSlugAnalyze, analyzeUser) : "free";
 
   try {
-    const result = await aiProvider.analyzeImage(job.base64Data, mimeType, userTier);
+    const result = await aiProvider.analyzeImage(job.base64Data, mimeType, userTier, job.filename);
     if (result) {
       // If AI failed and we have a failure cause, format error for user/admin
       if (result.failureCause) {
@@ -428,7 +504,7 @@ router.post("/media/analyze", requireAuth, async (req: AuthRequest, res): Promis
 
   // Last-resort: local analysis always produces a confident result
   try {
-    const localResult = await aiProvider.localAnalyzeImage(job.base64Data, mimeType);
+    const localResult = await aiProvider.localAnalyzeImage(job.base64Data, mimeType, job.filename);
     res.json(localResult);
     return;
   } catch {
@@ -460,6 +536,7 @@ const listColumns = {
   errorMessage: mediaJobsTable.errorMessage,
   processingTimeMs: mediaJobsTable.processingTimeMs,
   fileSize: mediaJobsTable.fileSize,
+  referenceCode: mediaJobsTable.referenceCode,
   createdAt: mediaJobsTable.createdAt,
   completedAt: mediaJobsTable.completedAt,
 };
@@ -511,6 +588,7 @@ router.get("/media/jobs", requireAuth, async (req: AuthRequest, res): Promise<vo
       errorMessage: j.errorMessage,
       processingTimeMs: j.processingTimeMs,
       fileSize: j.fileSize,
+      referenceCode: j.referenceCode ?? null,
       createdAt: j.createdAt,
       completedAt: j.completedAt,
     };
@@ -607,8 +685,147 @@ router.post("/media/feedback", requireAuth, async (req, res): Promise<void> => {
   res.json({ ok: true, stats: feedbackAccumulator.getStats()[enhancement] });
 });
 
+// ─── Chain Enhancement ─────────────────────────────────────────
+// POST /media/enhance-chain — run a 1-3 stage chain (enhance → filter → upscale)
+// server-side and produce a single completed job. Replaces the old client-side
+// upscaleChainRef hack which created two job rows per chain.
+router.post("/media/enhance-chain", requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  const body = req.body as {
+    jobId?: number;
+    enhance?: string | null;
+    filterId?: string | null;
+    upscale?: string | null;
+    settings?: Record<string, unknown>;
+  };
+
+  if (typeof body.jobId !== "number") {
+    res.status(400).json({ error: "jobId (number) is required" });
+    return;
+  }
+
+  const spec: ChainSpec = {
+    enhance: body.enhance ?? null,
+    filterId: body.filterId ?? null,
+    upscale: (body.upscale as UpscaleOp | null | undefined) ?? null,
+    settings: body.settings,
+  };
+  const validation = validateChainSpec(spec);
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error });
+    return;
+  }
+
+  const [job] = await db.select().from(mediaJobsTable)
+    .where(and(eq(mediaJobsTable.id, body.jobId), eq(mediaJobsTable.userId, req.userId!)));
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  if (!job.base64Data) {
+    res.status(400).json({ error: "No image data available for this job" });
+    return;
+  }
+
+  await downgradeExpiredSubscription(req.userId!);
+
+  // Tier check — apply to every stage (each stage may itself be tier-gated)
+  if (!isAdmin(req)) {
+    const [chainUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
+    let planSlug: string | null = null;
+    if (chainUser?.planId) {
+      const [plan] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, chainUser.planId));
+      planSlug = plan?.slug ?? null;
+    }
+    const tierSlug = resolveEffectivePlanSlug(planSlug, {
+      role: chainUser!.role,
+      planId: chainUser!.planId,
+      planExpiresAt: chainUser!.planExpiresAt,
+      premiumTrialEndsAt: chainUser!.premiumTrialEndsAt,
+    });
+
+    const stagesToCheck: Array<{ op: string | null | undefined; filter?: string | null }> = [
+      { op: spec.enhance, filter: spec.filterId },
+      { op: spec.upscale },
+    ];
+    for (const stage of stagesToCheck) {
+      if (!stage.op) continue;
+      const tierError = checkTierAccess(tierSlug, stage.op, stage.filter ?? undefined);
+      if (tierError) {
+        res.status(403).json({ error: tierError, code: "TIER_RESTRICTED" });
+        return;
+      }
+    }
+  }
+
+  const startTime = Date.now();
+  // Use the primary enhancement type for DB labelling (so History badges show
+  // the most meaningful op). Falls back to filter-only / upscale-only labels.
+  const primaryOp = spec.enhance ?? (spec.filterId ? "filter" : (spec.upscale ?? "auto"));
+
+  await db.update(mediaJobsTable)
+    .set({ status: "processing", enhancementType: primaryOp })
+    .where(eq(mediaJobsTable.id, body.jobId));
+  await db.update(usersTable)
+    .set({
+      creditsUsed: sql`${usersTable.creditsUsed} + 1`,
+      dailyCreditsUsed: sql`${usersTable.dailyCreditsUsed} + 1`,
+    })
+    .where(eq(usersTable.id, req.userId!));
+
+  const [processing] = await db.select().from(mediaJobsTable).where(eq(mediaJobsTable.id, body.jobId));
+  res.json(jobToResponse(processing));
+
+  try {
+    const rawB64 = job.base64Data;
+    let mimeType = "image/jpeg";
+    if (rawB64.startsWith("iVBOR")) mimeType = "image/png";
+    else if (rawB64.startsWith("UklGR")) mimeType = "image/webp";
+
+    const result = await runEnhancementChain(rawB64, mimeType, spec);
+
+    const completedAt = new Date();
+    const referenceCode = buildMediaReferenceCode({
+      jobId: body.jobId,
+      enhancementType: primaryOp,
+      completedAt,
+      suffix: spec.filterId ? `-${spec.filterId}` : "",
+    });
+
+    // Encode chain metadata into errorMessage (repurposed) — UI reads this to
+    // show enhance + filter + upscale badges on a single History row.
+    const chainMeta = JSON.stringify({
+      chain: result.stages.map(s => ({ stage: s.stage, op: s.op })),
+      servedBy: result.servedBy,
+    });
+
+    await db.update(mediaJobsTable).set({
+      status: "completed",
+      processedUrl: result.base64,
+      thumbnailUrl: result.base64,
+      processingTimeMs: Date.now() - startTime,
+      completedAt,
+      referenceCode,
+      errorMessage: chainMeta,
+    }).where(eq(mediaJobsTable.id, body.jobId));
+
+    logger.info({
+      jobId: body.jobId,
+      stages: result.stages,
+      servedBy: result.servedBy,
+      ms: Date.now() - startTime,
+    }, "Enhancement chain completed");
+  } catch (err) {
+    logger.error({ err, jobId: body.jobId }, "Enhancement chain failed");
+    await db.update(mediaJobsTable).set({
+      status: "failed",
+      processingTimeMs: Date.now() - startTime,
+      errorMessage: err instanceof Error ? err.message : "Enhancement chain failed",
+    }).where(eq(mediaJobsTable.id, body.jobId));
+  }
+});
+
 // ─── Batch Enhancement ─────────────────────────────────────────
-// POST /media/enhance-batch — process multiple images in one call (premium only)
+// POST /media/enhance-batch — process multiple images in one call (tier-aware limits)
 router.post("/media/enhance-batch", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const { jobIds, enhancementType, settings } = req.body as {
     jobIds?: number[];
@@ -620,22 +837,53 @@ router.post("/media/enhance-batch", requireAuth, async (req: AuthRequest, res): 
     res.status(400).json({ error: "jobIds array is required" });
     return;
   }
-  if (jobIds.length > 10) {
-    res.status(400).json({ error: "Maximum 10 images per batch" });
-    return;
-  }
   if (!enhancementType) {
     res.status(400).json({ error: "enhancementType is required" });
     return;
   }
 
-  // Tier check
+  await downgradeExpiredSubscription(req.userId!);
+
+  let maxAllowed = 10;
   if (!isAdmin(req)) {
     const [batchUser] = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!));
-    if (!batchUser?.planId) {
-      res.status(403).json({ error: "Batch processing requires a paid plan.", code: "TIER_RESTRICTED" });
+    if (!batchUser) {
+      res.status(404).json({ error: "User not found" });
       return;
     }
+    let planSlug: string | null = null;
+    if (batchUser.planId) {
+      const [plan] = await db.select({ slug: plansTable.slug }).from(plansTable).where(eq(plansTable.id, batchUser.planId));
+      planSlug = plan?.slug ?? null;
+    }
+    const tierSlug = resolveEffectivePlanSlug(planSlug, {
+      role: batchUser.role,
+      planId: batchUser.planId,
+      planExpiresAt: batchUser.planExpiresAt,
+      premiumTrialEndsAt: batchUser.premiumTrialEndsAt,
+    });
+    const filterId = (settings as Record<string, unknown> | undefined)?.filterId as string | undefined;
+    const filterName = filterId ?? ((settings as Record<string, unknown> | undefined)?.filterName as string | undefined);
+    const tierError = checkTierAccess(tierSlug, enhancementType, filterName);
+    if (tierError) {
+      res.status(403).json({ error: tierError, code: "TIER_RESTRICTED" });
+      return;
+    }
+    maxAllowed = maxBatchJobsForPlan(tierSlug);
+    if (maxAllowed === 0) {
+      res.status(403).json({ error: "Batch processing requires a paid plan or trial.", code: "TIER_RESTRICTED" });
+      return;
+    }
+    if (jobIds.length > maxAllowed) {
+      res.status(400).json({
+        error: `Maximum ${maxAllowed} images per batch for your plan.`,
+        code: "BATCH_LIMIT",
+      });
+      return;
+    }
+  } else if (jobIds.length > 10) {
+    res.status(400).json({ error: "Maximum 10 images per batch" });
+    return;
   }
 
   // Fetch all jobs
@@ -671,21 +919,9 @@ router.post("/media/enhance-batch", requireAuth, async (req: AuthRequest, res): 
 
   // Background batch processing
   try {
-    const modeMap: Record<string, string> = {
-      face_restore: "face_restore",
-      face_restore_hd: "face_restore_hd",
-      codeformer: "codeformer",
-      auto_face: "auto_face",
-      hybrid: "hybrid",
-      esrgan_upscale_2x: "upscale_2x",
-      esrgan_upscale_4x: "upscale_4x",
-      old_photo_restore: "old_photo",
-    };
-    const mode = modeMap[enhancementType] || enhancementType;
-
     const images = jobs.map((job) => ({
       base64Data: job.base64Data!,
-      mode,
+      enhancementType,
       settings,
     }));
 
@@ -694,12 +930,20 @@ router.post("/media/enhance-batch", requireAuth, async (req: AuthRequest, res): 
     // Save results
     for (let i = 0; i < jobs.length; i++) {
       const result = results[i];
+      const completedAt = new Date();
+      const referenceCode = buildMediaReferenceCode({
+        jobId: jobs[i].id,
+        enhancementType,
+        completedAt,
+        suffix: "",
+      });
       await db.update(mediaJobsTable).set({
         status: "completed",
         processedUrl: result.base64,
         thumbnailUrl: result.base64,
         processingTimeMs: Date.now() - startTime,
-        completedAt: new Date(),
+        completedAt,
+        referenceCode,
         errorMessage: null,
       }).where(eq(mediaJobsTable.id, jobs[i].id));
     }

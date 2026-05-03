@@ -377,7 +377,10 @@ def estimate_degradation_level(blur_score: float, face_area: int) -> str:
 class RestoreRequest(BaseModel):
     """Base64-encoded image input with restoration parameters."""
     image_base64: str = Field(..., description="Base64-encoded image (no data: prefix)")
-    mode: str = Field("face_restore", description="face_restore | face_restore_hd | codeformer | upscale_2x | upscale_4x | old_photo | auto_face")
+    mode: str = Field(
+        "face_restore",
+        description="face_restore | face_restore_hd | codeformer | hybrid | upscale_2x | upscale_4x | old_photo | auto_face",
+    )
     scale: int = Field(2, description="Upscale factor (1, 2, or 4)")
     face_enhance: bool = Field(True, description="Apply face enhancement on detected faces")
     restoration_model: str = Field("auto", description="gfpgan | codeformer | auto")
@@ -400,7 +403,23 @@ class VideoRestoreRequest(BaseModel):
     face_enhance: bool = Field(True, description="Apply GFPGAN/CodeFormer on detected face regions")
     max_frames: int = Field(300, description="Max frames to process (safety limit)")
     temporal_consistency: bool = Field(True, description="Enable optical-flow temporal blending to reduce flickering")
-    restoration_model: str = Field("gfpgan", description="gfpgan | codeformer — model for face regions in video")
+    restoration_model: str = Field(
+        "auto",
+        description="gfpgan | codeformer | auto — auto picks CodeFormer vs GFPGAN per frame (same heuristic as stills)",
+    )
+    color_grade: Optional[str] = Field(
+        None,
+        description="Optional stylistic grade: cinematic | warm | cool | vintage | vivid | bw",
+    )
+    filter_id: Optional[str] = Field(
+        None,
+        description=(
+            "Optional canonical filter id from the GlimpseAI registry that "
+            "is NOT a built-in color_grade. Applied as a per-frame OpenCV "
+            "approximation (saturation/contrast/warmth tweak) so video has "
+            "parity with the image pipeline's enhance → filter chain."
+        ),
+    )
 
 class VideoRestoreResponse(BaseModel):
     video_base64: str
@@ -695,13 +714,97 @@ def temporal_blend(prev_restored: np.ndarray, curr_restored: np.ndarray, alpha: 
     return cv2.addWeighted(curr_restored, 1.0 - alpha, prev_restored, alpha, 0).astype(np.uint8)
 
 
+def apply_video_color_grade_bgr(img: np.ndarray, grade: Optional[str]) -> np.ndarray:
+    """Lightweight per-frame color styling after ML (BGR uint8)."""
+    if not grade:
+        return img
+    g = str(grade).lower().strip()
+    if g == "bw":
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    if g == "vivid":
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.22, 0, 255)
+        hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 1.06, 0, 255)
+        return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    if g == "warm" or g == "goldenhour":
+        b, gr, r = cv2.split(img.astype(np.float32))
+        r = np.clip(r * 1.07, 0, 255)
+        b = np.clip(b * 0.93, 0, 255)
+        return cv2.merge([b.astype(np.uint8), gr.astype(np.uint8), r.astype(np.uint8)])
+    if g == "cool":
+        b, gr, r = cv2.split(img.astype(np.float32))
+        b = np.clip(b * 1.07, 0, 255)
+        r = np.clip(r * 0.93, 0, 255)
+        return cv2.merge([b.astype(np.uint8), gr.astype(np.uint8), r.astype(np.uint8)])
+    if g == "vintage":
+        m = np.array([[0.272, 0.534, 0.131], [0.349, 0.686, 0.168], [0.393, 0.769, 0.189]], dtype=np.float32)
+        flat = img.astype(np.float32).reshape(-1, 3)
+        toned = flat @ m.T
+        return np.clip(toned, 0, 255).astype(np.uint8).reshape(img.shape)
+    if g == "cinematic":
+        b, gr, r = cv2.split(img.astype(np.float32))
+        b = np.clip(b * 1.04, 0, 255)
+        r = np.clip(r * 0.97, 0, 255)
+        gr = np.clip(gr * 1.02, 0, 255)
+        return cv2.merge([b.astype(np.uint8), gr.astype(np.uint8), r.astype(np.uint8)])
+    if g == "noir":
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        gray = np.clip((gray - 128.0) * 1.18 + 128.0, 0, 255).astype(np.uint8)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    return img
+
+
+def apply_unmapped_filter_bgr(img: np.ndarray, filter_id: Optional[str]) -> np.ndarray:
+    """
+    Per-frame approximation for canonical filter ids that don't map to a
+    color_grade. We deliberately keep this lightweight so it runs at video
+    framerates; high-fidelity filtering should be done in the image pipeline.
+
+    Mapping table (best-effort approximations only):
+      airy/bright   → +brightness, +saturation
+      muted/faded   → -saturation, +grayness
+      retro         → +warmth, -saturation slightly
+      teal-orange   → cinematic-like
+      anything else → identity (no-op) so we never break the video.
+    """
+    if not filter_id:
+        return img
+    fid = str(filter_id).lower().strip()
+    # Allow-list of known unmapped filters; everything else falls through.
+    if fid in ("airy", "bright", "high-key"):
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.10, 0, 255)
+        hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 1.08, 0, 255)
+        return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    if fid in ("muted", "faded", "soft"):
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 0.78, 0, 255)
+        return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    if fid in ("retro", "polaroid"):
+        b, gr, r = cv2.split(img.astype(np.float32))
+        r = np.clip(r * 1.05, 0, 255)
+        gr = np.clip(gr * 1.02, 0, 255)
+        return cv2.merge([b.astype(np.uint8), gr.astype(np.uint8), r.astype(np.uint8)])
+    if fid in ("teal-orange", "blockbuster"):
+        b, gr, r = cv2.split(img.astype(np.float32))
+        b = np.clip(b * 1.07, 0, 255)
+        r = np.clip(r * 1.05, 0, 255)
+        gr = np.clip(gr * 0.97, 0, 255)
+        return cv2.merge([b.astype(np.uint8), gr.astype(np.uint8), r.astype(np.uint8)])
+    # Unknown / "original" → no-op
+    return img
+
+
 def process_video(
     video_bytes: bytes,
     mode: str,
     face_enhance: bool,
     max_frames: int,
     temporal_consistency: bool = True,
-    restoration_model: str = "gfpgan",
+    restoration_model: str = "auto",
+    color_grade: Optional[str] = None,
+    filter_id: Optional[str] = None,
 ) -> tuple[bytes, int, int]:
     """
     Frame-by-frame video restoration pipeline with temporal consistency:
@@ -783,12 +886,21 @@ def process_video(
             if face_enhance and not skip_ml:
                 if restoration_model == "codeformer":
                     frame, _ = restore_face_codeformer(frame)
+                elif restoration_model == "auto":
+                    frame, _, _ = restore_face_auto(frame, fidelity=0.5)
                 else:
                     frame, _ = restore_face_gfpgan(frame)
 
             # Temporal blending (only within same scene)
             if temporal_consistency and prev_restored_frame is not None and not is_scene_change:
                 frame = temporal_blend(prev_restored_frame, frame, alpha=0.15)
+
+            frame = apply_video_color_grade_bgr(frame, color_grade)
+            # Per-frame approximation for unmapped canonical filter ids
+            # (e.g. airy/muted/retro). Brings video parity with the image
+            # pipeline's enhance → filter → upscale chain.
+            if filter_id:
+                frame = apply_unmapped_filter_bgr(frame, filter_id)
 
             prev_input_frame = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
             prev_restored_frame = frame.copy()
@@ -840,7 +952,8 @@ def process_video(
 def _available_capabilities() -> list[str]:
     """List available restoration capabilities based on installed models."""
     caps = []
-    if Path(MODEL_DIR / "GFPGANv1.4.pth").exists():
+    has_gfpgan = Path(MODEL_DIR / "GFPGANv1.4.pth").exists()
+    if has_gfpgan:
         caps.extend(["face_restore", "face_restore_hd", "old_photo"])
     if Path(MODEL_DIR / "RealESRGAN_x2plus.pth").exists():
         caps.append("upscale_2x")
@@ -848,14 +961,22 @@ def _available_capabilities() -> list[str]:
         caps.append("upscale_4x")
     # CodeFormer: check direct module weights first, then pip package
     cf_weights = Path(__file__).parent.parent.parent / "enhancement_modules" / "CodeFormer-master" / "weights" / "CodeFormer" / "codeformer.pth"
+    has_codeformer = False
     if cf_weights.exists():
         caps.append("codeformer")
+        has_codeformer = True
     else:
         try:
             import codeformer  # noqa: F401
             caps.append("codeformer")
+            has_codeformer = True
         except ImportError:
             pass
+    # Composite capabilities: auto_face routes per-face; hybrid blends GFPGAN + CodeFormer.
+    if has_gfpgan or has_codeformer:
+        caps.append("auto_face")
+    if has_gfpgan and has_codeformer:
+        caps.append("hybrid")
     if shutil.which("ffmpeg"):
         caps.append("video_restore")
     caps.append("face_analysis")
@@ -1026,6 +1147,10 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
         ]
         result, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
 
+    elif req_mode == "hybrid":
+        # UI "Hybrid" — same adaptive routing as auto_face (GFPGAN/CodeFormer blend intent)
+        result, faces_detected, backend_used = restore_face_auto(img, fidelity=req_fidelity)
+
     elif req_mode == "upscale_2x":
         result = upscale_image(img, scale=2)
         if req_face_enhance:
@@ -1132,6 +1257,8 @@ async def restore_video_endpoint(req: VideoRestoreRequest):
             req.max_frames,
             temporal_consistency=req.temporal_consistency,
             restoration_model=req.restoration_model,
+            color_grade=req.color_grade,
+            filter_id=req.filter_id,
         )
     except Exception as e:
         logger.error("Video restoration failed: %s", e, exc_info=True)

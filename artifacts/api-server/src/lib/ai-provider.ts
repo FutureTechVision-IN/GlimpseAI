@@ -37,6 +37,13 @@ export interface AnalysisResult {
   detectedSubjects: string[];
   confidence: number;
   analysisSource: "local" | "openrouter" | "gemini" | "nvidia";  // which engine produced this
+  /**
+   * Where the suggested enhancement will be executed:
+   *   "sidecar" → restoration Python service is reachable and exposes the model
+   *   "native"  → falls back to Sharp-only enhancement (no Docker required)
+   *   "unknown" → not yet probed (e.g. analysis was AI-only, not enhancement-aware)
+   */
+  servedBy?: "sidecar" | "native" | "unknown";
   /** Set when AI call failed — only populated with cause info, never raw key data */
   failureCause?: ApiFailureCause;
 }
@@ -322,10 +329,81 @@ class AIProviderService {
   }
 
   // ---------------------------------------------------------------------------
+  // Face heuristic — robust portrait detection that does NOT depend on aspect
+  // ratio (landscape-orientation portraits are extremely common). Crops the
+  // center of the image and checks for skin-tone signature (R > G > B, modest
+  // chroma, warm bias). Pure Sharp, no ML dependencies, runs in ~30ms.
+  // ---------------------------------------------------------------------------
+  private async detectFaceSignal(buf: Buffer): Promise<{
+    hasFace: boolean;
+    score: number;
+    debug: Record<string, number | boolean>;
+  }> {
+    try {
+      const sharp = (await import("sharp")).default;
+      const meta = await sharp(buf).metadata();
+      const w = meta.width ?? 0;
+      const h = meta.height ?? 0;
+      if (w < 100 || h < 100) return { hasFace: false, score: 0, debug: { w, h } };
+
+      // Center crop: 40% width × 50% height around image center.
+      // This isolates the most likely face region for both landscape and portrait orientations.
+      const cropW = Math.max(50, Math.floor(w * 0.40));
+      const cropH = Math.max(50, Math.floor(h * 0.50));
+      const left = Math.floor((w - cropW) / 2);
+      const top = Math.floor((h - cropH) / 2);
+
+      const cropStats = await sharp(buf).extract({ left, top, width: cropW, height: cropH }).stats();
+      const r = cropStats.channels[0]?.mean ?? 0;
+      const g = cropStats.channels[1]?.mean ?? 0;
+      const b = cropStats.channels[2]?.mean ?? 0;
+
+      const isSkinOrdering = r > g && g > b;
+      const inSkinRange = r >= 110 && r <= 240 && g >= 70 && g <= 210 && b >= 50 && b <= 200;
+      const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+      const isChromaModest = chroma >= 12 && chroma <= 90;
+      const warmthDelta = r - b;
+      const isWarm = warmthDelta > 8 && warmthDelta < 70;
+
+      let score = 0;
+      if (isSkinOrdering) score += 0.30;
+      if (inSkinRange) score += 0.30;
+      if (isChromaModest) score += 0.20;
+      if (isWarm) score += 0.20;
+
+      return {
+        hasFace: score >= 0.60,
+        score: Number(score.toFixed(2)),
+        debug: {
+          r: Math.round(r),
+          g: Math.round(g),
+          b: Math.round(b),
+          chroma: Math.round(chroma),
+          warmthDelta: Math.round(warmthDelta),
+          isSkinOrdering,
+          inSkinRange,
+          isChromaModest,
+          isWarm,
+          cropW,
+          cropH,
+        },
+      };
+    } catch {
+      return { hasFace: false, score: 0, debug: { error: 1 } };
+    }
+  }
+
+  /** Soft prior from filename: portraits are usually named that way. */
+  private filenameHintsPortrait(filename?: string): boolean {
+    if (!filename) return false;
+    return /(portrait|selfie|face|person|people|headshot|profile|model|smile|woman|man|boy|girl|child|kid|baby|family|wedding|couple)/i.test(filename);
+  }
+
+  // ---------------------------------------------------------------------------
   // Local Sharp-based analysis — ALWAYS works, no API keys needed
   // Produces confident (0.75–0.92) recommendations from image statistics
   // ---------------------------------------------------------------------------
-  async localAnalyzeImage(base64Data: string, mimeType: string): Promise<AnalysisResult> {
+  async localAnalyzeImage(base64Data: string, mimeType: string, filename?: string): Promise<AnalysisResult> {
     try {
       const sharp = (await import("sharp")).default;
       const buf = Buffer.from(base64Data, "base64");
@@ -356,13 +434,28 @@ class AIProviderService {
       // Sharpness from Sharp's metric
       const sharpnessScore = stats.sharpness ?? 50;
 
-      // Aspect ratio
+      // Aspect ratio (orientation hint only — NOT a reliable subject signal)
       const aspectRatio = h / w;
-      const isPortrait = aspectRatio > 1.15;
-      const isLandscape = aspectRatio < 0.8;
+      const isPortraitOrientation = aspectRatio > 1.15;
+      const isLandscapeOrientation = aspectRatio < 0.8;
+
+      // Content-based portrait detection: skin-tone in center region + filename hint.
+      // This is what fixes the "wide image of a person" misclassification — aspect
+      // ratio is no longer the primary signal.
+      const faceSignal = await this.detectFaceSignal(buf);
+      const filenameHint = this.filenameHintsPortrait(filename);
+
+      // Treat as portrait/face scene if EITHER content signal OR portrait orientation
+      // OR filename hint OR (any two of the three weakest signals).
+      const isPortrait =
+        faceSignal.hasFace ||
+        filenameHint ||
+        isPortraitOrientation ||
+        (faceSignal.score >= 0.40 && (isLandscapeOrientation === false || filenameHint));
+      const isLandscape = !isPortrait && isLandscapeOrientation;
 
       const subjects: string[] = [];
-      if (isPortrait) subjects.push("portrait", "person");
+      if (isPortrait) subjects.push("portrait", "person", "face");
       else if (isLandscape) subjects.push("landscape", "scene");
       else subjects.push("general");
 
@@ -390,20 +483,41 @@ class AIProviderService {
         confidence = 0.85;
         description = `Flat image with low contrast (std ${Math.round(contrast)}). Vivid filter will add punch, depth, and vibrancy.`;
       } else if (isPortrait) {
-        // Portrait — face likely present
-        if (warmth > 15) {
-          enhancement = "portrait";
-          confidence = 0.87;
-          description = `Portrait photo with warm skin tones. Portrait Polish will refine skin texture and enhance facial detail.`;
+        // Portrait/face scene — Auto-Face AI is the default for ALL users.
+        // The restoration sidecar (when reachable) auto-routes to GFPGAN /
+        // CodeFormer / hybrid based on per-face degradation. When the sidecar
+        // is unreachable, image-enhancer.ts falls back to a native Sharp
+        // pipeline (median + normalize + sharpen) so the recommendation is
+        // still actionable without Docker.
+
+        // Old/degraded portrait detection: faded chroma (sepia/black-and-white
+        // shift), low contrast (washed out), and soft sharpness together
+        // signal a damaged or aged photo. When all three triggers fire we
+        // upgrade the recommendation from "auto_face" to "old_photo_restore"
+        // (Hybrid GFPGAN + CodeFormer pipeline) which is purpose-built for
+        // scratches, age marks, and noise.
+        const fadedChroma = chroma < 22;
+        const flatContrast = contrast < 32;
+        const softFocus = sharpnessScore < 50;
+        const isDegradedPortrait = fadedChroma && flatContrast && softFocus;
+
+        if (isDegradedPortrait) {
+          enhancement = "old_photo_restore";
+          confidence = 0.85;
+          description = `Old or degraded portrait detected (low chroma ${Math.round(chroma)}, flat contrast ${Math.round(contrast)}, soft sharpness ${Math.round(sharpnessScore)}). Hybrid GFPGAN + CodeFormer pipeline will restore facial detail and reduce age marks or scratches.`;
+        } else if (warmth > 15) {
+          enhancement = "auto_face";
+          confidence = 0.88;
+          description = `Portrait scene with warm skin tones. Auto-Face AI will auto-select the best face model (GFPGAN / CodeFormer / hybrid) for natural skin and detail.`;
         } else if (warmth < -15) {
-          enhancement = "portrait";
+          enhancement = "auto_face";
           filter = "airy";
-          confidence = 0.83;
-          description = `Portrait with cool tones. Portrait Polish + Airy filter will warm and brighten the subject.`;
+          confidence = 0.85;
+          description = `Portrait scene with cool tones. Auto-Face AI + Airy filter will warm and brighten the subject while preserving facial detail.`;
         } else {
-          enhancement = "portrait";
-          confidence = 0.86;
-          description = `Portrait detected. Portrait Polish will naturally smooth skin and optimise facial lighting.`;
+          enhancement = "auto_face";
+          confidence = 0.87;
+          description = `Portrait scene detected. Auto-Face AI will auto-select the best face model (GFPGAN / CodeFormer / hybrid) for the cleanest result.`;
         }
       } else if (isLandscape) {
         if (chroma > 55) {
@@ -440,14 +554,49 @@ class AIProviderService {
         description = `Well-exposed image. Auto enhance will apply the optimal set of adjustments for maximum quality.`;
       }
 
-      logger.info({ enhancement, filter, confidence, brightness: Math.round(brightness), contrast: Math.round(contrast) }, "Local image analysis complete");
+      logger.info({
+        filename,
+        width: w,
+        height: h,
+        isPortrait,
+        isLandscape,
+        faceSignalScore: faceSignal.score,
+        filenameHint,
+        enhancement,
+        filter,
+        confidence,
+        brightness: Math.round(brightness),
+        contrast: Math.round(contrast),
+      }, "Local image analysis complete");
       // Apply self-learning multiplier: boosts/reduces confidence based on historical acceptance
       const multiplier = feedbackAccumulator.getMultiplier(enhancement);
       const adjustedConfidence = Math.min(0.95, Math.max(0.55, confidence * multiplier));
-      return { description, suggestedEnhancement: enhancement, suggestedFilter: filter, detectedSubjects: subjects, confidence: adjustedConfidence, analysisSource: "local" };
+      return {
+        description,
+        suggestedEnhancement: enhancement,
+        suggestedFilter: filter,
+        detectedSubjects: subjects,
+        confidence: adjustedConfidence,
+        analysisSource: "local",
+        servedBy: "unknown",
+      };
     } catch (err) {
       logger.warn({ err }, "Local analysis failed — returning safe defaults");
-      return { description: "Image ready for enhancement.", suggestedEnhancement: "auto", suggestedFilter: null, detectedSubjects: [], confidence: 0.72, analysisSource: "local" };
+      // Even on failure, prefer auto_face when filename hints at a portrait — it's
+      // strictly safer than "auto" because the sidecar (or native fallback) handles
+      // both face and non-face content gracefully.
+      const portraitFromFilename = this.filenameHintsPortrait(filename);
+      return {
+        description: portraitFromFilename
+          ? "Image ready for enhancement. Auto-Face will pick the best face model."
+          : "Image ready for enhancement.",
+        suggestedEnhancement: portraitFromFilename ? "auto_face" : "auto",
+        suggestedFilter: null,
+        detectedSubjects: portraitFromFilename ? ["portrait", "person", "face"] : [],
+        confidence: 0.72,
+        analysisSource: "local",
+        servedBy: "unknown",
+      };
     }
   }
 
@@ -472,13 +621,24 @@ class AIProviderService {
   // Main entry — local analysis first (high confidence), then AI enrichment
   // userTier controls which provider pools are available.
   // ---------------------------------------------------------------------------
-  async analyzeImage(base64Data: string, mimeType: string, userTier?: UserTier): Promise<AnalysisResult | null> {
+  async analyzeImage(base64Data: string, mimeType: string, userTier?: UserTier, filename?: string): Promise<AnalysisResult | null> {
     // 1. Always run local analysis first — produces 0.75–0.92 confidence regardless of API status
-    const localResult = await this.localAnalyzeImage(base64Data, mimeType);
+    const localResult = await this.localAnalyzeImage(base64Data, mimeType, filename);
 
-    // 1b. Restoration-aware enhancement: if local analysis detects portrait/face
-    // AND restoration sidecar is available, suggest face_restore for better results
-    if (localResult.suggestedEnhancement === "portrait" || localResult.detectedSubjects.includes("face")) {
+    // 1b. Restoration-aware probe: portrait/face scenes already default to
+    //     "auto_face" in localAnalyzeImage. Here we only annotate where the
+    //     enhancement will actually run — sidecar (Docker / native Python) or
+    //     a Sharp-only native fallback — so the UI can surface a clear badge.
+    //     We NEVER downgrade auto_face: image-enhancer.ts has a built-in Sharp
+    //     fallback (median + normalize + sharpen) that produces a usable
+    //     result even when the sidecar is offline.
+    const isFaceSuggestion =
+      localResult.suggestedEnhancement === "auto_face" ||
+      localResult.suggestedEnhancement === "portrait" ||
+      localResult.detectedSubjects.includes("face");
+
+    if (isFaceSuggestion) {
+      let sidecarServes = false;
       try {
         const healthRes = await fetchWithTimeout(
           `http://localhost:${process.env.RESTORATION_PORT || "7860"}/health`,
@@ -486,19 +646,25 @@ class AIProviderService {
         );
         if (healthRes.ok) {
           const health = await healthRes.json() as { capabilities?: string[] };
-          if (health.capabilities?.includes("face_restore")) {
-            // Upgrade portrait → face_restore when sidecar is available (ML is superior)
-            localResult.suggestedEnhancement = "face_restore";
-            localResult.description = localResult.description.replace(
-              /Portrait Polish will/,
-              "AI face restoration (GFPGAN/CodeFormer) will",
-            );
+          const caps = health.capabilities ?? [];
+          if (caps.includes("auto_face") || caps.includes("face_restore")) {
+            sidecarServes = true;
+            // Confidence bump when premium model is reachable
             localResult.confidence = Math.min(0.95, localResult.confidence + 0.05);
           }
         }
       } catch {
-        // Sidecar unreachable — keep local recommendation
+        // Sidecar unreachable — auto_face still served by native Sharp fallback
       }
+      localResult.servedBy = sidecarServes ? "sidecar" : "native";
+      // When the sidecar is unreachable, append a short hint so the chat /
+      // banner copy explains why the result is "lighter" than premium models.
+      if (!sidecarServes && localResult.suggestedEnhancement === "auto_face") {
+        localResult.description += " (Native fallback in use — install the restoration service for premium GFPGAN / CodeFormer quality.)";
+      }
+    } else {
+      // Non-face suggestions are always Sharp-native paths.
+      localResult.servedBy = "native";
     }
 
     // 2. Try to enrich with AI vision (better description, detects unseen context)
@@ -514,14 +680,38 @@ class AIProviderService {
     const bestAi = aiResult ?? geminiResult;
 
     if (bestAi) {
-      // Merge: use AI description but keep local confidence if it's higher
-      return {
+      // Merge AI description with local heuristics. If AI suggests something
+      // other than auto_face but the local heuristic detected a portrait/face
+      // scene AND the sidecar (or native fallback) can serve auto_face, prefer
+      // auto_face — auto_face is strictly better than "portrait" for faces.
+      const aiSubjects = bestAi.detectedSubjects.length > 0 ? bestAi.detectedSubjects : localResult.detectedSubjects;
+      const merged: AnalysisResult = {
         ...bestAi,
         confidence: Math.max(bestAi.confidence, localResult.confidence - 0.05),
         analysisSource: bestAi.analysisSource,
-        // If AI doesn't detect subjects, use local
-        detectedSubjects: bestAi.detectedSubjects.length > 0 ? bestAi.detectedSubjects : localResult.detectedSubjects,
+        detectedSubjects: aiSubjects,
+        servedBy: localResult.servedBy ?? "unknown",
       };
+      const aiSeesFace = aiSubjects.some(s =>
+        /(person|portrait|face|selfie)/i.test(s),
+      );
+      // Local face signal also counts: if our skin-tone heuristic detected a face,
+      // we should promote to auto_face even if the AI surfaced a generic suggestion.
+      const localSeesFace = localResult.detectedSubjects.some(s =>
+        /(person|portrait|face|selfie)/i.test(s),
+      );
+      const anyFaceSignal = aiSeesFace || localSeesFace;
+      // Filters that pair gracefully on top of auto_face — keep the AI-suggested filter
+      // when promoting to auto_face so users still get content-aware styling.
+      const willPromote = anyFaceSignal && merged.suggestedEnhancement !== "auto_face";
+      if (willPromote) {
+        merged.suggestedEnhancement = "auto_face";
+        merged.detectedSubjects = aiSubjects.some(s => /face|portrait|person/i.test(s))
+          ? aiSubjects
+          : [...new Set([...aiSubjects, "person", "face", "portrait"])];
+        merged.description = `${merged.description} Auto-Face AI will pick the best face model (GFPGAN / CodeFormer / hybrid).`;
+      }
+      return merged;
     }
 
     // 4. Return local analysis — confident result even without API
