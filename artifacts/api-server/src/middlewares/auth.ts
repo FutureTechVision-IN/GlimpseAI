@@ -3,7 +3,15 @@ import jwt from "jsonwebtoken";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
-const JWT_SECRET = process.env.SESSION_SECRET || "glimpse-ai-secret-key";
+function getJwtSecret(): string {
+  const secret = process.env.SESSION_SECRET || process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("SESSION_SECRET must be set before starting the API server");
+  }
+  return secret;
+}
+
+const JWT_SECRET = getJwtSecret();
 
 export interface AuthRequest extends Request {
   userId?: number;
@@ -18,7 +26,7 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   }
   const token = authHeader.slice(7);
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { userId: number; role: string };
+    const payload = jwt.verify(token, JWT_SECRET) as unknown as { userId: number; role: string };
     req.userId = payload.userId;
     req.userRole = payload.role;
     next();

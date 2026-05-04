@@ -8,8 +8,12 @@ import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID ?? "rzp_test_placeholder";
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET ?? "placeholder_secret";
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID ?? "";
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET ?? "";
+
+if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+  logger.warn("Razorpay credentials are not configured; payment endpoints will return 503");
+}
 
 router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res): Promise<void> => {
   const parsed = CreatePaymentOrderBody.safeParse(req.body);
@@ -19,6 +23,11 @@ router.post("/payments/create-order", requireAuth, async (req: AuthRequest, res)
   }
 
   const { planId, billingPeriod } = parsed.data;
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    res.status(503).json({ error: "Payments are not configured" });
+    return;
+  }
+
   const [plan] = await db.select().from(plansTable).where(eq(plansTable.id, planId));
   if (!plan) {
     res.status(404).json({ error: "Plan not found" });
@@ -54,6 +63,10 @@ router.post("/payments/verify", requireAuth, async (req: AuthRequest, res): Prom
   }
 
   const { razorpayOrderId, razorpayPaymentId, razorpaySignature, planId, billingPeriod } = parsed.data;
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    res.status(503).json({ error: "Payments are not configured" });
+    return;
+  }
 
   const expectedSig = crypto
     .createHmac("sha256", RAZORPAY_KEY_SECRET)

@@ -12,6 +12,7 @@ import {
 import { enhanceImage } from "../lib/image-enhancer";
 import { aiProvider } from "../lib/ai-provider";
 import { logger } from "../lib/logger";
+import { storeMediaFile } from "../lib/media-storage";
 
 const router: IRouter = Router();
 
@@ -24,6 +25,7 @@ function jobToResponse(j: typeof mediaJobsTable.$inferSelect) {
   // Detect mime type from base64 header or default to jpeg
   const guessMime = (b64: string | null): string => {
     if (!b64) return "image/jpeg";
+    if (/^https?:\/\//.test(b64)) return "text/uri-list";
     if (b64.startsWith("data:")) return "image/jpeg"; // already prefixed (shouldn't happen)
     if (b64.startsWith("/9j/")) return "image/jpeg";
     if (b64.startsWith("iVBOR")) return "image/png";
@@ -34,6 +36,7 @@ function jobToResponse(j: typeof mediaJobsTable.$inferSelect) {
 
   const toDataUri = (b64: string | null): string | null => {
     if (!b64) return null;
+    if (/^https?:\/\//.test(b64)) return b64;
     if (b64.startsWith("data:")) return b64; // already a data URI
     return `data:${guessMime(b64)};base64,${b64}`;
   };
@@ -77,7 +80,7 @@ router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise
   }
 
   const { filename, mimeType, size, mediaType, base64Data } = parsed.data;
-  const [job] = await db.insert(mediaJobsTable).values({
+  let [job] = await db.insert(mediaJobsTable).values({
     userId: req.userId!,
     mediaType,
     status: "pending",
@@ -85,6 +88,22 @@ router.post("/media/upload", requireAuth, async (req: AuthRequest, res): Promise
     fileSize: size,
     base64Data,
   }).returning();
+
+  const originalStorage = await storeMediaFile({
+    buffer: Buffer.from(base64Data, "base64"),
+    filename,
+    mimeType,
+    userId: req.userId!,
+    jobId: job.id,
+    role: "original",
+  });
+
+  if (originalStorage) {
+    [job] = await db.update(mediaJobsTable)
+      .set({ originalUrl: originalStorage.url })
+      .where(eq(mediaJobsTable.id, job.id))
+      .returning();
+  }
 
   res.status(201).json(jobToResponse(job));
 });
@@ -141,11 +160,22 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
       settings: settings as Record<string, unknown> | undefined,
     });
 
-    // Store raw base64 in DB (no prefix — jobToResponse adds it)
+    const processedStorage = await storeMediaFile({
+      buffer: Buffer.from(result.base64, "base64"),
+      filename: `enhanced-${job.filename}`,
+      mimeType: result.mimeType,
+      userId: req.userId!,
+      jobId,
+      role: "processed",
+    });
+
+    // Store Drive links when configured; otherwise keep raw base64 in DB
+    // and let jobToResponse add a data URI prefix for local development.
     await db.update(mediaJobsTable).set({
       status: "completed",
-      processedUrl: result.base64,
-      thumbnailUrl: result.base64,
+      processedUrl: processedStorage?.url ?? result.base64,
+      thumbnailUrl: processedStorage?.url ?? result.base64,
+      base64Data: processedStorage ? null : job.base64Data,
       processingTimeMs: Date.now() - startTime,
       completedAt: new Date(),
     }).where(eq(mediaJobsTable.id, jobId));

@@ -5,44 +5,48 @@ import { logger } from "./logger";
 import { providerKeyManager } from "./provider-key-manager";
 import { aiProvider } from "./ai-provider";
 
-const ADMIN_ACCOUNTS = [
-  {
-    name: process.env.ADMIN_NAME ?? "Glimpse Admin",
-    email: process.env.ADMIN_EMAIL ?? "admin@glimpse.ai",
-    password: process.env.ADMIN_PASSWORD ?? "s/Pp<6h6&3aY",
-  },
-  {
-    name: "Future Tech Vision",
-    email: "futuretechvision.global@gmail.com",
-    password: "s/Pp<6h6&3aY",
-  },
-];
+function getBootstrapAdminAccount(): { name: string; email: string; password: string } | null {
+  const email = process.env.ADMIN_EMAIL?.trim();
+  const password = process.env.ADMIN_PASSWORD;
+
+  if (!email || !password) {
+    const message = "ADMIN_EMAIL and ADMIN_PASSWORD are required to bootstrap the initial admin user";
+    if (process.env.NODE_ENV === "production") throw new Error(message);
+    logger.warn(message);
+    return null;
+  }
+
+  return {
+    name: process.env.ADMIN_NAME?.trim() || "Glimpse Admin",
+    email,
+    password,
+  };
+}
 
 export async function ensureInitialAdmin(): Promise<void> {
-  for (const account of ADMIN_ACCOUNTS) {
-    const [existing] = await db
-      .select()
-      .from(usersTable)
-      .where(eq(usersTable.email, account.email));
+  const account = getBootstrapAdminAccount();
+  if (!account) return;
 
-    if (existing) {
-      continue;
-    }
+  const [existing] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.email, account.email));
 
-    const passwordHash = await bcrypt.hash(account.password, 10);
+  if (existing) return;
 
-    await db.insert(usersTable).values({
-      name: account.name,
-      email: account.email,
-      passwordHash,
-      role: "admin",
-      creditsUsed: 0,
-      creditsLimit: 999999,
-      isSuspended: false,
-    });
+  const passwordHash = await bcrypt.hash(account.password, 10);
 
-    logger.info({ email: account.email }, "Bootstrapped admin user");
-  }
+  await db.insert(usersTable).values({
+    name: account.name,
+    email: account.email,
+    passwordHash,
+    role: "admin",
+    creditsUsed: 0,
+    creditsLimit: 999999,
+    isSuspended: false,
+  });
+
+  logger.info({ email: account.email }, "Bootstrapped admin user");
 }
 
 export async function initProviderKeys(): Promise<void> {

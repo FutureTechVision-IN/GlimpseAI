@@ -87,7 +87,7 @@ const testimonials = [
 // --- Testimonial Carousel ---
 function TestimonialCarousel() {
   const [current, setCurrent] = useState(0);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const advance = useCallback(() => {
     setCurrent((p) => (p + 1) % testimonials.length);
@@ -95,7 +95,9 @@ function TestimonialCarousel() {
 
   useEffect(() => {
     timeoutRef.current = setTimeout(advance, 5000);
-    return () => clearTimeout(timeoutRef.current);
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
   }, [current, advance]);
 
   return (
