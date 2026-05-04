@@ -2,6 +2,11 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { setAuthTokenGetter } from "@workspace/api-client-react";
+import { bootstrapTheme } from "./lib/theme";
+
+// Apply the persisted theme as early as possible to avoid a flash of
+// wrong palette when the page hydrates.
+bootstrapTheme();
 
 // Demo mode: intercept API calls on static hosting (GitHub Pages)
 if (import.meta.env.VITE_DEMO_MODE === "true") {

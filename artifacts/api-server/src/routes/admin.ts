@@ -1,6 +1,15 @@
 import { Router, IRouter } from "express";
-import { db, usersTable, mediaJobsTable, paymentsTable, plansTable, providersTable } from "@workspace/db";
-import { eq, desc, count, sum, and, ilike, sql } from "drizzle-orm";
+import {
+  db,
+  usersTable,
+  mediaJobsTable,
+  paymentsTable,
+  plansTable,
+  providersTable,
+  feedbackEntriesTable,
+  errorEventsTable,
+} from "@workspace/db";
+import { eq, desc, count, sum, and, ilike, sql, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin, AuthRequest } from "../middlewares/auth";
 import { aiProvider } from "../lib/ai-provider";
 import { parseMediaReferenceCode } from "../lib/media-reference";
@@ -776,6 +785,213 @@ router.get("/admin/ai-recommendations", requireAuth, requireAdmin, async (_req, 
   recommendations.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 
   res.json({ recommendations, generatedAt: new Date().toISOString() });
+});
+
+// ─── Feedback (admin triage) ────────────────────────────────────────────────
+
+const FEEDBACK_STATUS = ["new", "reviewing", "actioned", "dismissed"] as const;
+type FeedbackStatus = (typeof FEEDBACK_STATUS)[number];
+
+const ListFeedbackQuery = z.object({
+  status: z.enum(FEEDBACK_STATUS).optional(),
+  category: z.enum(["bug", "idea", "praise", "other"]).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+const UpdateFeedbackBody = z.object({
+  status: z.enum(FEEDBACK_STATUS).optional(),
+  resolutionNote: z.string().max(2000).optional(),
+});
+
+router.get("/admin/feedback", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  const parsed = ListFeedbackQuery.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { status, category, limit, offset } = parsed.data;
+
+  const conditions = [];
+  if (status) conditions.push(eq(feedbackEntriesTable.status, status));
+  if (category) conditions.push(eq(feedbackEntriesTable.category, category));
+
+  const baseQuery = db.select().from(feedbackEntriesTable);
+  const filtered = conditions.length ? baseQuery.where(and(...conditions)) : baseQuery;
+  const rows = await filtered.orderBy(desc(feedbackEntriesTable.createdAt)).limit(limit).offset(offset);
+
+  // Aggregate counts for the triage header (kept in one round-trip to keep
+  // the admin page snappy even when feedback grows past a few thousand rows).
+  const countsRaw = await db
+    .select({
+      status: feedbackEntriesTable.status,
+      total: count(),
+    })
+    .from(feedbackEntriesTable)
+    .groupBy(feedbackEntriesTable.status);
+  const counts: Record<FeedbackStatus, number> = { new: 0, reviewing: 0, actioned: 0, dismissed: 0 };
+  for (const row of countsRaw) {
+    if (FEEDBACK_STATUS.includes(row.status as FeedbackStatus)) {
+      counts[row.status as FeedbackStatus] = row.total;
+    }
+  }
+
+  res.json({ items: rows, counts });
+});
+
+router.patch("/admin/feedback/:id", requireAuth, requireAdmin, async (req: AuthRequest, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid feedback id" });
+    return;
+  }
+  const parsed = UpdateFeedbackBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const updates: Partial<typeof feedbackEntriesTable.$inferInsert> = {};
+  if (parsed.data.status) updates.status = parsed.data.status;
+  if (parsed.data.resolutionNote !== undefined) updates.resolutionNote = parsed.data.resolutionNote;
+  if (req.userId) updates.assigneeId = req.userId;
+
+  const [row] = await db
+    .update(feedbackEntriesTable)
+    .set(updates)
+    .where(eq(feedbackEntriesTable.id, id))
+    .returning();
+  if (!row) {
+    res.status(404).json({ error: "Feedback entry not found" });
+    return;
+  }
+  res.json({ item: row });
+});
+
+// ─── Admin error notifications ──────────────────────────────────────────────
+
+const ERROR_STATUS = ["open", "acknowledged", "resolved", "wont_fix"] as const;
+type ErrorStatus = (typeof ERROR_STATUS)[number];
+const ERROR_SEVERITY = ["critical", "high", "medium", "low"] as const;
+
+const ListErrorEventsQuery = z.object({
+  status: z.enum(ERROR_STATUS).optional(),
+  severity: z.enum(ERROR_SEVERITY).optional(),
+  surface: z.string().max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+const UpdateErrorEventBody = z.object({
+  status: z.enum(ERROR_STATUS),
+  resolutionNote: z.string().max(2000).optional(),
+});
+
+router.get("/admin/error-events", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  const parsed = ListErrorEventsQuery.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { status, severity, surface, limit, offset } = parsed.data;
+
+  const conditions = [];
+  if (status) conditions.push(eq(errorEventsTable.status, status));
+  if (severity) conditions.push(eq(errorEventsTable.severity, severity));
+  if (surface) conditions.push(eq(errorEventsTable.surface, surface));
+
+  const baseQuery = db.select().from(errorEventsTable);
+  const filtered = conditions.length ? baseQuery.where(and(...conditions)) : baseQuery;
+  const rows = await filtered.orderBy(desc(errorEventsTable.createdAt)).limit(limit).offset(offset);
+
+  // Header counts grouped by status for the admin notification badge.
+  const countsRaw = await db
+    .select({ status: errorEventsTable.status, total: count() })
+    .from(errorEventsTable)
+    .groupBy(errorEventsTable.status);
+  const counts: Record<ErrorStatus, number> = { open: 0, acknowledged: 0, resolved: 0, wont_fix: 0 };
+  for (const row of countsRaw) {
+    if (ERROR_STATUS.includes(row.status as ErrorStatus)) {
+      counts[row.status as ErrorStatus] = row.total;
+    }
+  }
+
+  res.json({ items: rows, counts });
+});
+
+router.get("/admin/error-events/:id", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid error-event id" });
+    return;
+  }
+  const [row] = await db.select().from(errorEventsTable).where(eq(errorEventsTable.id, id));
+  if (!row) {
+    res.status(404).json({ error: "Error event not found" });
+    return;
+  }
+  res.json({ item: row });
+});
+
+router.patch("/admin/error-events/:id", requireAuth, requireAdmin, async (req: AuthRequest, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid error-event id" });
+    return;
+  }
+  const parsed = UpdateErrorEventBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const now = new Date();
+  const updates: Partial<typeof errorEventsTable.$inferInsert> = { status: parsed.data.status };
+  if (parsed.data.status === "acknowledged") {
+    updates.acknowledgedAt = now;
+    if (req.userId) updates.acknowledgedBy = req.userId;
+  }
+  if (parsed.data.status === "resolved" || parsed.data.status === "wont_fix") {
+    updates.resolvedAt = now;
+    if (!updates.acknowledgedAt) updates.acknowledgedAt = now;
+    if (req.userId && !updates.acknowledgedBy) updates.acknowledgedBy = req.userId;
+  }
+
+  const [row] = await db
+    .update(errorEventsTable)
+    .set(updates)
+    .where(eq(errorEventsTable.id, id))
+    .returning();
+  if (!row) {
+    res.status(404).json({ error: "Error event not found" });
+    return;
+  }
+  res.json({ item: row });
+});
+
+/**
+ * Lightweight "unread count" probe for the admin notification toaster.
+ * Returns just two numbers — kept tiny and cacheable so the dashboard can
+ * poll every 30s without hammering the DB.
+ */
+router.get("/admin/notifications/summary", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  const [openErrors] = await db
+    .select({ c: count() })
+    .from(errorEventsTable)
+    .where(inArray(errorEventsTable.status, ["open"]));
+  const [criticalOpen] = await db
+    .select({ c: count() })
+    .from(errorEventsTable)
+    .where(and(eq(errorEventsTable.status, "open"), eq(errorEventsTable.severity, "critical")));
+  const [newFeedback] = await db
+    .select({ c: count() })
+    .from(feedbackEntriesTable)
+    .where(eq(feedbackEntriesTable.status, "new"));
+
+  res.json({
+    openErrors: openErrors?.c ?? 0,
+    criticalOpenErrors: criticalOpen?.c ?? 0,
+    newFeedback: newFeedback?.c ?? 0,
+    fetchedAt: new Date().toISOString(),
+  });
 });
 
 export default router;

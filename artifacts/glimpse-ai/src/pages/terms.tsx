@@ -1,5 +1,6 @@
 import React from "react";
 import Layout from "../components/layout";
+import { SUPPORT_EMAIL } from "@/lib/support";
 
 export default function Terms() {
   return (
@@ -36,7 +37,7 @@ export default function Terms() {
         <p>We may update these Terms at any time. Continued use after changes constitutes acceptance.</p>
 
         <h2>10. Contact</h2>
-        <p>Questions about these Terms? Contact us at <a href="mailto:futuretechvision.global@gmail.com" className="text-teal-400">futuretechvision.global@gmail.com</a>.</p>
+        <p>Questions about these Terms? Contact us at <a href={`mailto:${SUPPORT_EMAIL}`} className="text-teal-400">{SUPPORT_EMAIL}</a>.</p>
       </div>
     </Layout>
   );

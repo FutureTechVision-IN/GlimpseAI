@@ -25,11 +25,36 @@ const DEMO_USAGE = {
   dailyCreditsUsed: 7,
   dailyLimit: 20,
   dailyRemaining: 13,
+  dailyResetAt: "2026-05-05T00:00:00Z",
   planName: "Premium",
+  planSlug: "premium",
   planExpiry: "2026-12-31T23:59:59Z",
+  planMonthlyCredits: 500,
+  bonusCredits: 100,
+  trialActive: false,
+  trialEndsAt: null,
+  trialDaysRemaining: 0,
   photoCount: 98,
   videoCount: 44,
   totalJobs: 142,
+};
+
+const DEMO_CREDIT_PACKS = [
+  { id: "pack_starter", name: "Starter Pack", credits: 50, priceInr: 99,  description: "Top up 50 enhancement credits — great for catching up on a small batch." },
+  { id: "pack_popular", name: "Popular Pack", credits: 250, priceInr: 399, description: "250 credits at the best per-credit value — handles a full event shoot.", popular: true },
+  { id: "pack_pro",     name: "Pro Pack",     credits: 1000, priceInr: 1299, description: "1,000 credits for studios and power users running large batches." },
+];
+
+const DEMO_CONTRIBUTION_TIERS = [
+  { id: "contrib_supporter", label: "Supporter", amountInr: 199, blurb: "Help keep the lights on for one user-month." },
+  { id: "contrib_advocate",  label: "Advocate",  amountInr: 499, blurb: "Fund infrastructure for hundreds of free-tier enhancements." },
+  { id: "contrib_patron",    label: "Patron",    amountInr: 999, blurb: "Sponsor model upgrades and accessibility improvements." },
+];
+
+const DEMO_CHARITY_INFO = {
+  percentage: 10,
+  description: "We commit a transparent share of every paid plan, credit pack, and contribution to verified charitable causes that support the poor and needy. The exact percentage is fixed in code and reconciled against settlement reports.",
+  reportUrl: "",
 };
 
 const DEMO_JOBS = [
@@ -433,7 +458,92 @@ export async function handleDemoRequest(
     return ok(DEMO_PLANS);
   }
 
-  // ── Payments ────────────────────────────────────────────────────────────
+  // ── Payments — catalog endpoints (must precede the generic stub) ────────
+  if (url === "/api/payments/credit-packs" && method === "GET") {
+    return ok({ packs: DEMO_CREDIT_PACKS });
+  }
+  if (url === "/api/payments/contribution-tiers" && method === "GET") {
+    return ok({ tiers: DEMO_CONTRIBUTION_TIERS });
+  }
+  if (url === "/api/payments/charity-info" && method === "GET") {
+    return ok(DEMO_CHARITY_INFO);
+  }
+  if (url === "/api/payments/credit-packs/create-order" && method === "POST") {
+    return ok({ orderId: `demo_pack_${Date.now()}`, amount: 0, currency: "INR", keyId: "rzp_test_demo", packId: "pack_demo", credits: 0 });
+  }
+  if (url === "/api/payments/purchase-credits" && method === "POST") {
+    return ok({ success: true, creditsGranted: 0, message: "Demo mode: credits not actually granted." });
+  }
+  if (url === "/api/contributions/create-order" && method === "POST") {
+    return ok({ orderId: `demo_donation_${Date.now()}`, amount: 0, currency: "INR", keyId: "rzp_test_demo", label: "Demo contribution" });
+  }
+  if (url === "/api/contributions/donate" && method === "POST") {
+    return ok({ success: true, message: "Demo mode: contribution recorded for preview only.", charity: { percentage: DEMO_CHARITY_INFO.percentage } });
+  }
+
+  if (url === "/api/feedback" && method === "POST") {
+    return ok({ success: true, message: "Thanks — feedback noted (demo mode)." });
+  }
+
+  // ── Admin notification + triage stubs (demo mode) ───────────────────────
+  if (url === "/api/admin/notifications/summary" && method === "GET") {
+    return ok({
+      openErrors: 0,
+      criticalOpenErrors: 0,
+      newFeedback: 0,
+      fetchedAt: new Date().toISOString(),
+    });
+  }
+  if (url.startsWith("/api/admin/error-events") && method === "GET") {
+    return ok({
+      items: [
+        {
+          id: 1,
+          code: "PAYMENT_GATEWAY_UNAVAILABLE",
+          userMessage: "We're enhancing the payment system right now — please check back shortly.",
+          adminDetail: "Demo: Razorpay create-order timed out for credit pack 'starter'.",
+          severity: "critical",
+          surface: "billing",
+          routePath: "/api/payments/credit-packs/create-order",
+          httpStatus: 503,
+          requestId: "demo-req-001",
+          suggestedResolution:
+            "In production: confirm RAZORPAY_KEY_ID/SECRET, then retry. The user can purchase normally once gateway is healthy.",
+          metadata: { packId: "starter", priceInr: 299 },
+          status: "open",
+          createdAt: new Date().toISOString(),
+          acknowledgedAt: null,
+          resolvedAt: null,
+        },
+      ],
+      counts: { open: 1, acknowledged: 0, resolved: 0, wont_fix: 0 },
+    });
+  }
+  if (url.startsWith("/api/admin/feedback") && method === "GET") {
+    return ok({
+      items: [
+        {
+          id: 1,
+          userId: 12,
+          userRole: "user",
+          rating: 5,
+          category: "praise",
+          message: "Demo: 'Auto Face' restored my grandfather's photo beautifully — thank you!",
+          contextPath: "/photo-studio",
+          contextFeature: "Photo Studio",
+          status: "new",
+          resolutionNote: null,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      counts: { new: 1, reviewing: 0, actioned: 0, dismissed: 0 },
+    });
+  }
+  if (url.match(/^\/api\/admin\/(error-events|feedback)\/\d+/) && method === "PATCH") {
+    return ok({ item: { id: 1, status: "acknowledged" } });
+  }
+
+  // ── Payments — generic stub ─────────────────────────────────────────────
   if (url.startsWith("/api/payments")) {
     return ok({ success: true, message: "Payment processing unavailable in demo mode" });
   }

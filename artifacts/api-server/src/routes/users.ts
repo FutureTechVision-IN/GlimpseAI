@@ -40,10 +40,15 @@ router.get("/users/usage", requireAuth, async (req: AuthRequest, res): Promise<v
 
   let planName: string | null = null;
   let planSlug: string | null = null;
+  let planMonthlyCredits: number | null = null;
   let planExpiry: string | null = null;
   if (user.planId) {
     const [plan] = await db.select().from(plansTable).where(eq(plansTable.id, user.planId));
-    if (plan) { planName = plan.name; planSlug = plan.slug; }
+    if (plan) {
+      planName = plan.name;
+      planSlug = plan.slug;
+      planMonthlyCredits = plan.creditsPerMonth;
+    }
     if (user.planExpiresAt) planExpiry = user.planExpiresAt.toISOString();
   }
 
@@ -54,6 +59,25 @@ router.get("/users/usage", requireAuth, async (req: AuthRequest, res): Promise<v
   const totalResult = await db.select({ c: count() }).from(mediaJobsTable)
     .where(eq(mediaJobsTable.userId, req.userId!));
 
+  // Trial state — `premiumTrialEndsAt` time-boxes premium capabilities.
+  // The dashboard uses this to render a "Trial — N days remaining" badge
+  // separate from the subscription status.
+  const now = Date.now();
+  const trialEndsAt = user.premiumTrialEndsAt instanceof Date ? user.premiumTrialEndsAt : null;
+  const trialActive = trialEndsAt !== null && trialEndsAt.getTime() > now;
+  const trialDaysRemaining = trialActive
+    ? Math.max(0, Math.ceil((trialEndsAt!.getTime() - now) / (24 * 60 * 60 * 1000)))
+    : 0;
+
+  // Bonus credits from one-time credit packs. We compute this as the delta
+  // between the user's current monthly cap and their plan's published cap
+  // (or 0 for free users). When users buy a pack via /payments/purchase-credits
+  // the route bumps `creditsLimit` by the pack's credit amount, so this delta
+  // surfaces what the user effectively bought on top of their subscription.
+  const bonusCredits = planMonthlyCredits !== null
+    ? Math.max(0, user.creditsLimit - planMonthlyCredits)
+    : Math.max(0, user.creditsLimit - 30); // 30 ≈ free tier baseline
+
   res.json({
     creditsUsed: user.creditsUsed,
     creditsLimit: user.creditsLimit,
@@ -61,9 +85,15 @@ router.get("/users/usage", requireAuth, async (req: AuthRequest, res): Promise<v
     dailyCreditsUsed: user.dailyCreditsUsed,
     dailyLimit: user.dailyLimit,
     dailyRemaining: Math.max(0, user.dailyLimit - user.dailyCreditsUsed),
+    dailyResetAt: user.dailyResetAt instanceof Date ? user.dailyResetAt.toISOString() : null,
     planName,
     planSlug,
     planExpiry,
+    planMonthlyCredits,
+    bonusCredits,
+    trialActive,
+    trialEndsAt: trialEndsAt ? trialEndsAt.toISOString() : null,
+    trialDaysRemaining,
     photoCount: photoCountResult[0]?.c ?? 0,
     videoCount: videoCountResult[0]?.c ?? 0,
     totalJobs: totalResult[0]?.c ?? 0,

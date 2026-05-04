@@ -3,26 +3,24 @@ import Layout from "../components/layout";
 import { useListPlans, useCreatePaymentOrder, useVerifyPayment } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Check, Sparkles, Shield, Zap, Crown } from "lucide-react";
+import { Check, Sparkles, Shield, Zap, Crown, LifeBuoy } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
+import {
+  type CurrencyCode,
+  formatInDisplay,
+  readPreferredCurrency,
+  writePreferredCurrency,
+} from "@/lib/currency";
+import { CurrencySelector } from "@/components/currency-selector";
+import { PolicyNotice } from "@/components/policy-notice";
 
 declare global {
   interface Window {
     Razorpay: any;
   }
-}
-
-function formatINR(amountInRupees: number): string {
-  if (amountInRupees === 0) return "₹0";
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amountInRupees);
-}
-
-function toUSD(inr: number): string {
-  const usd = inr / 85; // approximate INR→USD
-  return `≈ $${usd.toFixed(2)}`;
 }
 
 const planIcons: Record<string, React.ReactNode> = {
@@ -45,11 +43,17 @@ function loadRazorpayScript(): Promise<void> {
 export default function Pricing() {
   const [isAnnual, setIsAnnual] = useState(true);
   const [processingPlanId, setProcessingPlanId] = useState<number | null>(null);
+  const [displayCurrency, setDisplayCurrency] = useState<CurrencyCode>(readPreferredCurrency());
   const { data: plans, isLoading } = useListPlans();
   const createOrder = useCreatePaymentOrder();
   const verifyPayment = useVerifyPayment();
   const { toast } = useToast();
   const { user } = useAuth();
+
+  function pickCurrency(code: CurrencyCode): void {
+    setDisplayCurrency(code);
+    writePreferredCurrency(code);
+  }
 
   const handleSubscribe = useCallback(async (planId: number) => {
     setProcessingPlanId(planId);
@@ -119,13 +123,13 @@ export default function Pricing() {
   return (
     <Layout>
       <div className="p-8 max-w-6xl mx-auto w-full">
-        <div className="text-center mb-12">
+        <div className="text-center mb-8">
           <h1 className="text-4xl font-bold tracking-tight mb-4">Pricing that scales with you</h1>
           <p className="text-lg text-zinc-400 max-w-2xl mx-auto">
             Start free with 5 enhancements. Upgrade anytime for 20/day — photos and videos combined.
           </p>
 
-          <div className="flex items-center justify-center gap-4 mt-8">
+          <div className="flex items-center justify-center gap-4 mt-8 flex-wrap">
             <Label htmlFor="billing-toggle" className={`text-sm font-medium ${!isAnnual ? "text-white" : "text-zinc-500"}`}>Monthly</Label>
             <Switch
               id="billing-toggle"
@@ -136,7 +140,13 @@ export default function Pricing() {
             <Label htmlFor="billing-toggle" className={`text-sm font-medium flex items-center gap-2 ${isAnnual ? "text-white" : "text-zinc-500"}`}>
               Annually <span className="px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-400 text-xs">Save ~17%</span>
             </Label>
+            <span className="text-zinc-700">·</span>
+            <CurrencySelector value={displayCurrency} onChange={pickCurrency} />
           </div>
+        </div>
+
+        <div className="mb-8">
+          <PolicyNotice />
         </div>
 
         {isLoading ? (
@@ -167,13 +177,22 @@ export default function Pricing() {
                     </div>
                     <CardDescription className="text-zinc-400">{plan.description}</CardDescription>
                     <div className="mt-4 flex items-baseline gap-1">
-                      <span className="text-4xl font-bold">{formatINR(monthlyPrice)}</span>
+                      <span className="text-4xl font-bold">{formatInDisplay(monthlyPrice, displayCurrency)}</span>
                       {!isFree && <span className="text-zinc-500">/mo</span>}
                     </div>
                     {!isFree && (
-                      <div className="text-sm text-zinc-500 mt-1">
-                        {toUSD(monthlyPrice)}/mo
-                        {isAnnual && ` · Billed ${formatINR(plan.priceAnnual)} yearly`}
+                      <div className="text-sm text-zinc-500 mt-1 space-y-0.5">
+                        {displayCurrency !== "INR" && (
+                          <div>Charged as {formatInDisplay(monthlyPrice, "INR")}/mo via Razorpay</div>
+                        )}
+                        {isAnnual && (
+                          <div>
+                            Billed {formatInDisplay(plan.priceAnnual, displayCurrency)} yearly
+                            {displayCurrency !== "INR" && (
+                              <span className="text-zinc-600"> ({formatInDisplay(plan.priceAnnual, "INR")})</span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                     {isFree && <div className="text-sm text-zinc-500 mt-1">No credit card required</div>}
@@ -220,11 +239,12 @@ export default function Pricing() {
           </div>
         )}
 
-        {/* Trust badges */}
+        {/* Trust badges — copy aligned with the no-refund + cancel-via-support
+            policy. Avoid implying instant self-service cancellation. */}
         <div className="flex flex-wrap items-center justify-center gap-6 mt-16 text-sm text-zinc-500">
           <div className="flex items-center gap-2"><Shield className="w-4 h-4" /> Secure payments via Razorpay</div>
-          <div className="flex items-center gap-2"><Zap className="w-4 h-4" /> Cancel anytime</div>
-          <div className="flex items-center gap-2"><Check className="w-4 h-4" /> Multi-currency (INR, USD, GBP & more)</div>
+          <div className="flex items-center gap-2"><LifeBuoy className="w-4 h-4" /> Cancellations via support</div>
+          <div className="flex items-center gap-2"><Check className="w-4 h-4" /> Multi-currency display (INR settlement)</div>
         </div>
       </div>
     </Layout>

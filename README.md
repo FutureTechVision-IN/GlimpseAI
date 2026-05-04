@@ -175,7 +175,7 @@ For authorized contributors within the FutureTechVision organization:
 
 ## Security
 
-If you discover a security vulnerability, **do not** open a public issue. Instead, contact the team directly at **futuretechvision.global@gmail.com** with a detailed description. We take all reports seriously and will respond promptly.
+If you discover a security vulnerability, **do not** open a public issue. Instead, contact the team directly at **glimpseai.global@gmail.com** with a detailed description. We take all reports seriously and will respond promptly.
 
 ---
 

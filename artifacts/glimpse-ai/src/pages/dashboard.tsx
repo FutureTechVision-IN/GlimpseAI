@@ -15,9 +15,11 @@ import {
   getEnhancementMeta,
   groupEnhancementsForDashboardByCategory,
   enhancementStudioHref,
+  appliesToBadge,
 } from "@/lib/enhancement-labels";
 import { cn } from "@/lib/utils";
 import AiChatWidget from "../components/ai-chat-widget";
+import { UsageSummary, type UsageSnapshot } from "@/components/usage-summary";
 
 function getGreeting() {
   const h = new Date().getHours();
@@ -39,6 +41,12 @@ interface ActionDef {
   iconBg: string;
   iconFg: string;
   badge?: string;      // e.g. "★ Most used"
+  /**
+   * Visual style of the corner badge. Defaults to "highlight" (teal star).
+   * "info" is a subtler purple chip used for roadmap-style cues like
+   * "Expanding" on the Video card.
+   */
+  badgeTone?: "highlight" | "info" | "new";
   /** When true, the file input accepts multiple files at once (Batch). */
   multiple?: boolean;
 }
@@ -82,12 +90,14 @@ const ACTIONS: ActionDef[] = [
     key: "video",
     icon: Film,
     title: "Video",
-    tagline: "Trim, stabilize & AI video restore",
+    tagline: "Trim, stabilize, color grade & AI restore — more soon",
     href: "/video-studio",
     accept: "video/*",
     accent: "border-zinc-800/70 hover:border-purple-500/40 shadow-transparent hover:shadow-purple-500/20",
     iconBg: "bg-purple-500/15",
     iconFg: "text-purple-400",
+    badge: "Expanding",
+    badgeTone: "info",
   },
   {
     key: "batch",
@@ -100,6 +110,7 @@ const ACTIONS: ActionDef[] = [
     iconBg: "bg-amber-500/15",
     iconFg: "text-amber-400",
     badge: "New",
+    badgeTone: "new",
     multiple: true,
   },
 ];
@@ -205,8 +216,21 @@ function ActionCard({ action }: { action: ActionDef }) {
       )}
     >
       {action.badge && (
-        <span className="absolute -top-2 right-4 inline-flex items-center gap-1 rounded-full bg-teal-500 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-950 shadow-md shadow-teal-500/30">
-          <Star className="h-3 w-3 fill-zinc-950" />
+        <span
+          className={cn(
+            "absolute -top-2 right-4 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider shadow-md",
+            action.badgeTone === "info"
+              ? "bg-purple-500 text-zinc-950 shadow-purple-500/30"
+              : action.badgeTone === "new"
+                ? "bg-amber-400 text-zinc-950 shadow-amber-500/30"
+                : "bg-teal-500 text-zinc-950 shadow-teal-500/30",
+          )}
+        >
+          {action.badgeTone === "info" ? (
+            <Sparkles className="h-3 w-3 fill-zinc-950" />
+          ) : (
+            <Star className="h-3 w-3 fill-zinc-950" />
+          )}
           {action.badge.replace("★ ", "")}
         </span>
       )}
@@ -313,6 +337,41 @@ export default function Dashboard() {
     return { completed, total: jobs.length, success };
   }, [recentJobs]);
 
+  /**
+   * Personalization rail — "For you". Computes the user's top recently-used
+   * enhancements from job history and surfaces them as quick-access chips
+   * that route directly into the studio with the mode pre-selected.
+   *
+   * Rationale:
+   * - Repeats are the dominant signal for editor tools — most users return
+   *   to the same 1-3 looks (e.g., Auto Face → Cinematic). One click is
+   *   meaningfully better than two-click navigation through the library.
+   * - We deduplicate by enhancement type and weight by recency so a user's
+   *   "current favourite" floats to the top without thrash.
+   */
+  const forYou = useMemo(() => {
+    const jobs = recentJobs || [];
+    if (jobs.length === 0) return [] as Array<{ id: string; meta: ReturnType<typeof getEnhancementMeta>; lastUsed: number; count: number }>;
+    const counts = new Map<string, { count: number; lastUsed: number }>();
+    for (const j of jobs) {
+      const id = j.enhancementType;
+      if (!id) continue;
+      const prev = counts.get(id) ?? { count: 0, lastUsed: 0 };
+      const ts = new Date(j.createdAt).getTime();
+      counts.set(id, { count: prev.count + 1, lastUsed: Math.max(prev.lastUsed, ts) });
+    }
+    return Array.from(counts.entries())
+      .map(([id, v]) => ({ id, meta: getEnhancementMeta(id), ...v }))
+      .sort((a, b) => {
+        // Recent + frequent first. Recency dominates because user intent
+        // tends to drift; the count breaks ties between two equally-recent
+        // looks.
+        if (a.lastUsed !== b.lastUsed) return b.lastUsed - a.lastUsed;
+        return b.count - a.count;
+      })
+      .slice(0, 6);
+  }, [recentJobs]);
+
   return (
     <Layout>
       <div className="relative mx-auto w-full max-w-7xl space-y-10 overflow-hidden p-6 lg:p-8">
@@ -371,6 +430,14 @@ export default function Dashboard() {
           </div>
         </motion.header>
 
+        {/* ── Usage summary (plan + trial + daily/monthly + bonus credits) ─ */}
+        <section aria-labelledby="usage-summary">
+          <h2 id="usage-summary" className="sr-only">
+            Usage summary
+          </h2>
+          <UsageSummary usage={usage as unknown as UsageSnapshot | undefined} isLoading={isLoadingUsage} />
+        </section>
+
         {/* ── Hero action cards ─────────────────────────────────────────── */}
         <section aria-labelledby="primary-actions">
           <h2 id="primary-actions" className="sr-only">
@@ -382,6 +449,59 @@ export default function Dashboard() {
             ))}
           </div>
         </section>
+
+        {/* ── For you (personalized quick-access) ───────────────────────── */}
+        {forYou.length > 0 && (
+          <motion.section
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35 }}
+            aria-labelledby="for-you"
+            className="space-y-3"
+          >
+            <div className="flex items-end justify-between">
+              <div>
+                <h2 id="for-you" className="flex items-center gap-2 text-lg font-semibold text-white">
+                  <Star className="h-4 w-4 text-amber-300" /> For you
+                </h2>
+                <p className="text-xs text-zinc-500">
+                  One-click access to your most-used looks — based on recent activity.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {forYou.map(({ id, meta, count }) => {
+                const badge = appliesToBadge(meta.appliesTo);
+                return (
+                  <Link
+                    key={id}
+                    href={enhancementStudioHref(id, meta.category)}
+                    title={`Used ${count} time${count === 1 ? "" : "s"} recently. ${badge.hint}`}
+                    className={cn(
+                      "group/chip inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all hover:scale-[1.03] hover:border-amber-400/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300",
+                      meta.borderColor,
+                      meta.bgColor,
+                      meta.color,
+                    )}
+                  >
+                    <span className="truncate">{meta.label}</span>
+                    <span className="rounded-full bg-zinc-900/70 px-1.5 py-0 text-[9px] font-bold text-zinc-300">
+                      ×{count}
+                    </span>
+                    <span
+                      className={cn(
+                        "inline-flex shrink-0 items-center rounded-full border px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wider",
+                        badge.tone,
+                      )}
+                    >
+                      {badge.text}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </motion.section>
+        )}
 
         {/* ── Full enhancement library (deep-links into Photo / Video Studio) ─ */}
         <section aria-labelledby="enhancement-library" className="space-y-6">
@@ -408,20 +528,32 @@ export default function Dashboard() {
                   {sectionTitle}
                 </h3>
                 <div className="flex flex-wrap gap-2">
-                  {items.map(({ id, meta }) => (
-                    <Link
-                      key={id}
-                      href={enhancementStudioHref(id, meta.category)}
-                      className={cn(
-                        "inline-flex max-w-full items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors hover:border-teal-500/50 hover:bg-teal-500/10 hover:text-teal-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400",
-                        meta.borderColor,
-                        meta.bgColor,
-                        meta.color,
-                      )}
-                    >
-                      <span className="truncate">{meta.label}</span>
-                    </Link>
-                  ))}
+                  {items.map(({ id, meta }) => {
+                    const badge = appliesToBadge(meta.appliesTo);
+                    return (
+                      <Link
+                        key={id}
+                        href={enhancementStudioHref(id, meta.category)}
+                        title={badge.hint}
+                        className={cn(
+                          "group/chip inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all hover:border-teal-500/50 hover:bg-teal-500/10 hover:text-teal-100 hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400",
+                          meta.borderColor,
+                          meta.bgColor,
+                          meta.color,
+                        )}
+                      >
+                        <span className="truncate">{meta.label}</span>
+                        <span
+                          className={cn(
+                            "inline-flex shrink-0 items-center rounded-full border px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wider",
+                            badge.tone,
+                          )}
+                        >
+                          {badge.text}
+                        </span>
+                      </Link>
+                    );
+                  })}
                 </div>
               </div>
             ))}

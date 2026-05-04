@@ -28,7 +28,10 @@ import { Button } from "@/components/ui/button";
 import { saveToHistory } from "@/lib/local-history";
 import { buildEnhancedDownloadName } from "@/lib/export-filename";
 import { buildStoreZip, base64ToBytes, type ZipEntry } from "@/lib/zip-store";
-import { getEnhancementMeta } from "@/lib/enhancement-labels";
+import { getEnhancementMeta, getFaceRestorationDisplay, VIDEO_ROADMAP } from "@/lib/enhancement-labels";
+import { describeQuotaError } from "@/components/usage-summary";
+import { ProgressTimeline } from "@/components/progress-timeline";
+import { supportMailto } from "@/lib/support";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -94,6 +97,7 @@ import {
   Gauge,
   Lock,
   ArrowLeftRight,
+  Crown,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
@@ -200,24 +204,30 @@ const FILTER_PRESETS_BY_KEY = new Map<string, FilterPreset>(
 // -- Simple-mode one-click presets (expanded) --
 // Auto Face AI leads: it auto-selects the best face model (GFPGAN / CodeFormer / hybrid)
 // based on detected degradation and is the safest, highest-quality default for everyone.
+// User-facing presets. Face restoration entries use the rebranded labels
+// ("Classic Restore", "Detailed Refinement", "Studio Restore", "Heritage
+// Restore") — technical model names (GFPGAN / CodeFormer / Hybrid) live in
+// admin-only tooltip detail rendered at the call site via
+// `getFaceRestorationDisplay(type, isAdmin)`. Underlying enhancement type
+// IDs are unchanged so the API/history contract is preserved.
 const SIMPLE_PRESETS: { type: EnhanceMediaBodyEnhancementType; label: string; desc: string; icon: React.ReactNode; filterName?: string }[] = [
-  { type: "auto_face",               label: "Auto Face AI",     desc: "Auto-select best face model",         icon: <Sparkles     className="w-5 h-5" /> },
-  { type: "auto",                   label: "Auto Enhance",     desc: "AI-powered one-click fix",            icon: <Wand2        className="w-5 h-5" /> },
-  { type: "portrait",               label: "Portrait Polish",  desc: "Smooth skin & warm tones",            icon: <Eye          className="w-5 h-5" /> },
-  { type: "lighting_enhance",       label: "Fix Lighting",     desc: "Mood-aware shadow & highlight fix",   icon: <Sun          className="w-5 h-5" /> },
-  { type: "color_grade_cinematic",  label: "Cinematic Grade",  desc: "Film-grade color grading",            icon: <Film         className="w-5 h-5" /> },
-  { type: "color_grade_warm",       label: "Warm Tones",       desc: "Golden, warm color palette",          icon: <Thermometer  className="w-5 h-5" /> },
-  { type: "color_grade_cool",       label: "Cool Tones",       desc: "Crisp, blue-shift palette",           icon: <Droplets     className="w-5 h-5" /> },
-  { type: "blur_background",        label: "Background Blur",  desc: "Intelligent portrait bokeh",          icon: <Focus        className="w-5 h-5" /> },
-  { type: "skin_retouch",           label: "Skin Retouch",     desc: "Smooth skin with natural detail",     icon: <Paintbrush   className="w-5 h-5" /> },
-  { type: "upscale",                label: "2x Upscale",       desc: "Double resolution with AI",           icon: <ZoomIn       className="w-5 h-5" /> },
-  { type: "upscale_4x",             label: "4x Upscale",       desc: "Quadruple resolution (pro)",          icon: <Layers       className="w-5 h-5" /> },
-  { type: "face_restore",            label: "Face Restore",     desc: "GFPGAN AI face restoration",          icon: <ScanFace     className="w-5 h-5" /> },
-  { type: "codeformer",              label: "CodeFormer",       desc: "CodeFormer face restoration",         icon: <ScanEye      className="w-5 h-5" /> },
-  { type: "hybrid",                  label: "Hybrid Restore",   desc: "CodeFormer + GFPGAN max quality",     icon: <Sparkles     className="w-5 h-5" /> },
-  { type: "old_photo_restore",       label: "Old Photo Fix",    desc: "Restore old/damaged photos",          icon: <ImageUp      className="w-5 h-5" /> },
-  { type: "esrgan_upscale_2x",       label: "ESRGAN 2x",        desc: "Real-ESRGAN super-resolution 2×",     icon: <ZoomIn       className="w-5 h-5" /> },
-  { type: "esrgan_upscale_4x",       label: "ESRGAN 4x",        desc: "Real-ESRGAN super-resolution 4×",     icon: <Layers       className="w-5 h-5" /> },
+  { type: "auto_face",               label: "Auto Face",           desc: "Smart auto — face restoration only kicks in for old or damaged photos. Clean portraits get a gentle natural enhance.",  icon: <Sparkles     className="w-5 h-5" /> },
+  { type: "auto",                   label: "Auto Enhance",         desc: "AI-powered one-click fix",                            icon: <Wand2        className="w-5 h-5" /> },
+  { type: "portrait",               label: "Portrait Polish",      desc: "Smooth skin & warm tones",                            icon: <Eye          className="w-5 h-5" /> },
+  { type: "lighting_enhance",       label: "Fix Lighting",         desc: "Mood-aware shadow & highlight fix",                   icon: <Sun          className="w-5 h-5" /> },
+  { type: "color_grade_cinematic",  label: "Cinematic Grade",      desc: "Film-grade color grading",                            icon: <Film         className="w-5 h-5" /> },
+  { type: "color_grade_warm",       label: "Warm Tones",           desc: "Golden, warm color palette",                          icon: <Thermometer  className="w-5 h-5" /> },
+  { type: "color_grade_cool",       label: "Cool Tones",           desc: "Crisp, blue-shift palette",                           icon: <Droplets     className="w-5 h-5" /> },
+  { type: "blur_background",        label: "Background Blur",      desc: "Intelligent portrait bokeh",                          icon: <Focus        className="w-5 h-5" /> },
+  { type: "skin_retouch",           label: "Skin Retouch",         desc: "Smooth skin with natural detail",                     icon: <Paintbrush   className="w-5 h-5" /> },
+  { type: "upscale",                label: "2x Upscale",           desc: "Double resolution with AI",                           icon: <ZoomIn       className="w-5 h-5" /> },
+  { type: "upscale_4x",             label: "4x Upscale",           desc: "Quadruple resolution (pro)",                          icon: <Layers       className="w-5 h-5" /> },
+  { type: "face_restore",            label: "Classic Restore",      desc: "Natural skin tones + soft facial detail recovery",    icon: <ScanFace     className="w-5 h-5" /> },
+  { type: "codeformer",              label: "Detailed Refinement",  desc: "Sharper identity for low-resolution / pixelated faces", icon: <ScanEye      className="w-5 h-5" /> },
+  { type: "hybrid",                  label: "Studio Restore",       desc: "Highest quality face cleanup — combined approach",    icon: <Sparkles     className="w-5 h-5" /> },
+  { type: "old_photo_restore",       label: "Heritage Restore",     desc: "Reduce age marks, scratches & noise on old photos",   icon: <ImageUp      className="w-5 h-5" /> },
+  { type: "esrgan_upscale_2x",       label: "Smart Upscale 2x",     desc: "AI super-resolution 2×",                              icon: <ZoomIn       className="w-5 h-5" /> },
+  { type: "esrgan_upscale_4x",       label: "Smart Upscale 4x",     desc: "AI super-resolution 4×",                              icon: <Layers       className="w-5 h-5" /> },
 ];
 
 const STAGE_INFO: Record<ProcessStage, { label: string; colorClass: string }> = {
@@ -1120,8 +1130,27 @@ export default function Editor() {
   // committed the new enhancementType / selectedFilter state.
   const applyAiSuggestion = useCallback(() => {
     if (!aiSuggestion) return;
-    pushUndo();
     const et = aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType;
+    // Tier-lock guard: if the suggested enhancement (or its filter) is gated
+    // for the user's plan, abort with an upgrade-friendly toast rather than
+    // silently failing or sending a request the server will reject.
+    if (isFeatureLocked(et)) {
+      toast({
+        title: `${tierLabel(et)} feature`,
+        description: `Upgrade to ${tierLabel(et)} to apply ${getEnhancementMeta(et).label}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (aiSuggestion.suggestedFilter && isFeatureLocked("filter", aiSuggestion.suggestedFilter)) {
+      toast({
+        title: "Premium filter",
+        description: `Upgrade to apply the suggested filter.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    pushUndo();
     setEnhancementType(et);
     if (aiSuggestion.suggestedFilter) {
       const fp = FILTER_PRESETS.find((p) => p.key === aiSuggestion.suggestedFilter || p.serverFilter === aiSuggestion.suggestedFilter);
@@ -1138,13 +1167,26 @@ export default function Editor() {
       imageType: inferImageType(aiSuggestion.detectedSubjects),
       confidence: aiSuggestion.confidence,
     });
-    toast({ title: "Applying " + et, description: "Running enhancement now…" });
+    toast({ title: `Applying ${getEnhancementMeta(et).label}`, description: "Running enhancement now…" });
     pendingAutoProcessRef.current = { source: "ai-suggestion" };
     setAutoProcessTick(t => t + 1);
+    // isFeatureLocked / tierLabel are stable identity checks against role+plan,
+    // and recomputed on render — they don't need to be in deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiSuggestion, pushUndo, toast]);
 
   // Apply a specific alternative enhancement — also auto-runs immediately.
   const applyAlternative = useCallback((et: EnhanceMediaBodyEnhancementType) => {
+    // Tier-lock guard — keep parity with applyAiSuggestion so locked alts
+    // surface a friendly upgrade prompt instead of silently failing.
+    if (isFeatureLocked(et)) {
+      toast({
+        title: `${tierLabel(et)} feature`,
+        description: `Upgrade to ${tierLabel(et)} to apply ${getEnhancementMeta(et).label}.`,
+        variant: "destructive",
+      });
+      return;
+    }
     pushUndo();
     setEnhancementType(et);
     if (aiSuggestion) {
@@ -1155,9 +1197,10 @@ export default function Editor() {
         confidence: aiSuggestion.confidence,
       });
     }
-    toast({ title: "Applying " + et, description: "Running enhancement now…" });
+    toast({ title: `Applying ${getEnhancementMeta(et).label}`, description: "Running enhancement now…" });
     pendingAutoProcessRef.current = { source: "alternative" };
     setAutoProcessTick(t => t + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiSuggestion, pushUndo, toast]);
 
   // Export handler — extracted for reuse by button + keyboard shortcut
@@ -1260,10 +1303,38 @@ export default function Editor() {
         onError: (err: any) => {
           setProcessStage("failed");
           const status = err?.status as number | undefined;
-          let desc = err?.data?.error ?? err?.message ?? "Failed to upload file.";
-          if (status === 413) desc = "File too large. Try a smaller file (max 100 MB).";
-          else if (status === 403) desc = "Free quota exceeded. Please upgrade to continue.";
-          else if (status === 401) desc = "Session expired. Please log in again.";
+          if (status === 413) {
+            toast({ title: "Upload failed", description: "File too large. Try a smaller file (max 100 MB).", variant: "destructive" });
+            return;
+          }
+          if (status === 401) {
+            toast({ title: "Upload failed", description: "Session expired. Please log in again.", variant: "destructive" });
+            return;
+          }
+          if (status === 403) {
+            // Distinguish trial / monthly / daily / tier so the user knows
+            // exactly whether to wait, top up with a credit pack, or upgrade.
+            const friendly = describeQuotaError({
+              code: err?.data?.code,
+              quotaType: err?.data?.quotaType,
+              message: err?.data?.error,
+            });
+            toast({
+              title: friendly.title,
+              description: friendly.description,
+              variant: "destructive",
+              action: (
+                <ToastAction
+                  altText={friendly.ctaLabel}
+                  onClick={() => { window.location.href = friendly.ctaHref; }}
+                >
+                  {friendly.ctaLabel}
+                </ToastAction>
+              ),
+            });
+            return;
+          }
+          const desc = err?.data?.error ?? err?.message ?? "Failed to upload file.";
           toast({ title: "Upload failed", description: desc, variant: "destructive" });
         },
       },
@@ -1368,8 +1439,37 @@ export default function Editor() {
         body: JSON.stringify({ jobIds: ids, enhancementType: effectiveType, settings }),
       });
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({})) as { error?: string; code?: string };
-        throw new Error(err.error ?? `Batch enhance failed (${resp.status})`);
+        // Differentiate quota / tier / batch-limit codes so the user gets
+        // an actionable next step (upgrade vs top up vs retry tomorrow)
+        // instead of an opaque "batch failed".
+        const errBody = (await resp.json().catch(() => ({}))) as {
+          error?: string;
+          code?: string;
+          quotaType?: string;
+        };
+        const friendly = describeQuotaError({
+          code: errBody.code,
+          quotaType: errBody.quotaType,
+          message: errBody.error,
+        });
+        toast({
+          title: friendly.title,
+          description: friendly.description,
+          variant: "destructive",
+          action: (
+            <ToastAction
+              altText={friendly.ctaLabel}
+              onClick={() => { window.location.href = friendly.ctaHref; }}
+            >
+              {friendly.ctaLabel}
+            </ToastAction>
+          ),
+        });
+        setBatchItems((prev) =>
+          prev.map((it) => (it.status === "processing" ? { ...it, status: "failed", error: friendly.title } : it)),
+        );
+        setIsBatchProcessing(false);
+        return;
       }
       toast({
         title: `Batch started: ${ids.length} files`,
@@ -1764,7 +1864,13 @@ export default function Editor() {
             <ScrollArea className="flex-1">
               <div className="p-3">
 
-                {/* AI Suggestion Banner */}
+                {/* AI Suggestion Banner — visible to ALL users.
+                    Friendly labels are used everywhere (e.g. "Auto Face" instead
+                    of "auto_face"). Internal routing badges ("Premium model" /
+                    "Native fallback") are admin-only because they expose
+                    serving-layer detail. Tier-locked alternatives show a lock
+                    icon + the gating tier ("🔒 Premium — Upgrade to unlock")
+                    so users always see WHY a recommendation isn't available. */}
                 <AnimatePresence>
                   {file && (isAnalyzing || aiSuggestion) && (
                     <motion.div
@@ -1783,7 +1889,30 @@ export default function Editor() {
                             <p className="text-[10px] text-teal-400/60">Finding the best enhancement</p>
                           </div>
                         </div>
-                      ) : aiSuggestion && (
+                      ) : aiSuggestion && (() => {
+                        // Resolve friendly labels for both the enhancement and (optional)
+                        // filter so the panel never leaks raw type keys like "auto_face".
+                        const suggestedType = aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType;
+                        const friendlyEnhancement = getEnhancementMeta(suggestedType).label;
+                        const suggestedFilterPreset = aiSuggestion.suggestedFilter
+                          ? FILTER_PRESETS.find((p) => p.key === aiSuggestion.suggestedFilter || p.serverFilter === aiSuggestion.suggestedFilter)
+                          : null;
+                        const friendlyFilter = suggestedFilterPreset?.name ?? aiSuggestion.suggestedFilter ?? null;
+                        // Tier-lock check: when the suggested enhancement (or its filter)
+                        // is gated for the user's plan, the Apply button degrades to an
+                        // "Upgrade" CTA so users always see WHY a recommendation isn't
+                        // available rather than an unresponsive button.
+                        const enhancementLocked = isFeatureLocked(suggestedType);
+                        const filterLocked = aiSuggestion.suggestedFilter
+                          ? isFeatureLocked("filter", aiSuggestion.suggestedFilter)
+                          : false;
+                        const anyLocked = enhancementLocked || filterLocked;
+                        const lockReason = enhancementLocked
+                          ? `${tierLabel(suggestedType)} feature`
+                          : filterLocked
+                            ? "Premium filter"
+                            : "";
+                        return (
                         <div className="rounded-xl border border-teal-500/30 bg-gradient-to-r from-teal-500/10 to-cyan-500/10 p-3">
                           <div className="flex items-start gap-3">
                             <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0 mt-0.5">
@@ -1795,14 +1924,23 @@ export default function Editor() {
                                 <Badge variant="outline" className="text-[9px] border-teal-500/40 text-teal-300 px-1.5 py-0 h-4 capitalize">
                                   {inferImageType(aiSuggestion.detectedSubjects)}
                                 </Badge>
-                                {aiSuggestion.servedBy === "sidecar" && (
+                                {/* Internal serving-layer badges are admin-only — they
+                                    expose model routing detail (sidecar vs native) that
+                                    isn't meaningful to end users. */}
+                                {isAdmin && aiSuggestion.servedBy === "sidecar" && (
                                   <Badge variant="outline" className="text-[9px] border-emerald-500/40 text-emerald-300 px-1.5 py-0 h-4">
                                     Premium model
                                   </Badge>
                                 )}
-                                {aiSuggestion.servedBy === "native" && aiSuggestion.suggestedEnhancement === "auto_face" && (
+                                {isAdmin && aiSuggestion.servedBy === "native" && aiSuggestion.suggestedEnhancement === "auto_face" && (
                                   <Badge variant="outline" className="text-[9px] border-amber-500/40 text-amber-300 px-1.5 py-0 h-4">
                                     Native fallback
+                                  </Badge>
+                                )}
+                                {anyLocked && (
+                                  <Badge variant="outline" className="text-[9px] border-amber-500/40 text-amber-300 px-1.5 py-0 h-4 inline-flex items-center gap-1">
+                                    <Lock className="w-2.5 h-2.5" />
+                                    {lockReason}
                                   </Badge>
                                 )}
                               </div>
@@ -1812,12 +1950,34 @@ export default function Editor() {
                                   <Badge key={s} variant="outline" className="text-[9px] border-teal-500/30 text-teal-300 px-1.5 py-0 h-4">{s}</Badge>
                                 ))}
                               </div>
-                              <Button size="sm" className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white font-medium whitespace-normal" onClick={applyAiSuggestion}>
-                                <Sparkles className="w-4 h-4 mr-1.5" />
-                                Apply: {aiSuggestion.suggestedEnhancement}
-                                {aiSuggestion.suggestedFilter && ` + ${aiSuggestion.suggestedFilter}`}
-                              </Button>
-                              {/* Alternative suggestions based on image type */}
+                              {anyLocked ? (
+                                <div className="space-y-1.5">
+                                  <Button
+                                    size="sm"
+                                    className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-medium whitespace-normal"
+                                    onClick={() => toast({
+                                      title: `${lockReason} required`,
+                                      description: `Upgrade your plan to apply ${friendlyEnhancement}${friendlyFilter ? ` + ${friendlyFilter}` : ""}.`,
+                                      variant: "destructive",
+                                    })}
+                                  >
+                                    <Lock className="w-3.5 h-3.5 mr-1.5" />
+                                    Upgrade to apply {friendlyEnhancement}
+                                  </Button>
+                                  <p className="text-[10px] text-zinc-500 leading-snug">
+                                    This recommendation requires your plan to include {lockReason.toLowerCase()}. Pick an unlocked alternative below or upgrade in <span className="text-amber-300">Billing</span>.
+                                  </p>
+                                </div>
+                              ) : (
+                                <Button size="sm" className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white font-medium whitespace-normal" onClick={applyAiSuggestion}>
+                                  <Sparkles className="w-4 h-4 mr-1.5" />
+                                  Apply: {friendlyEnhancement}
+                                  {friendlyFilter && ` + ${friendlyFilter}`}
+                                </Button>
+                              )}
+                              {/* Alternative suggestions based on image type — locked
+                                  alternatives display a lock icon + tier badge so users
+                                  always see WHY the option isn't selectable. */}
                               {(() => {
                                 const alts = getAlternatives(
                                   inferImageType(aiSuggestion.detectedSubjects),
@@ -1828,15 +1988,49 @@ export default function Editor() {
                                   <div className="mt-2 pt-2 border-t border-white/5">
                                     <p className="text-[10px] text-zinc-500 mb-1.5">Or try:</p>
                                     <div className="flex flex-wrap gap-1">
-                                      {alts.map(a => (
-                                        <button
-                                          key={a.type}
-                                          onClick={() => applyAlternative(a.type)}
-                                          className="text-[10px] px-2.5 py-1 rounded-full border border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300 transition-colors"
-                                        >
-                                          {a.label}
-                                        </button>
-                                      ))}
+                                      {alts.map(a => {
+                                        const altLocked = isFeatureLocked(a.type);
+                                        const altTier = altLocked ? tierLabel(a.type) : "";
+                                        return (
+                                          <Tooltip key={a.type}>
+                                            <TooltipTrigger asChild>
+                                              <button
+                                                onClick={() => {
+                                                  if (altLocked) {
+                                                    toast({
+                                                      title: `${altTier} feature`,
+                                                      description: `Upgrade to ${altTier} to apply ${getEnhancementMeta(a.type).label}.`,
+                                                      variant: "destructive",
+                                                    });
+                                                    return;
+                                                  }
+                                                  applyAlternative(a.type);
+                                                }}
+                                                className={cn(
+                                                  "text-[10px] px-2.5 py-1 rounded-full border transition-colors inline-flex items-center gap-1",
+                                                  altLocked
+                                                    ? "border-amber-500/40 text-amber-300/90 hover:border-amber-400 cursor-pointer"
+                                                    : "border-zinc-700 text-zinc-400 hover:border-teal-500 hover:text-teal-300",
+                                                )}
+                                                aria-label={altLocked ? `${a.label} — locked, upgrade to ${altTier}` : `Apply ${a.label}`}
+                                              >
+                                                {altLocked && <Lock className="w-2.5 h-2.5" />}
+                                                {a.label}
+                                                {altLocked && (
+                                                  <span className="ml-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300/80">
+                                                    {altTier}
+                                                  </span>
+                                                )}
+                                              </button>
+                                            </TooltipTrigger>
+                                            {altLocked && (
+                                              <TooltipContent side="bottom" className="text-xs max-w-[220px]">
+                                                Locked — upgrade to {altTier} to use {getEnhancementMeta(a.type).label}.
+                                              </TooltipContent>
+                                            )}
+                                          </Tooltip>
+                                        );
+                                      })}
                                     </div>
                                   </div>
                                 );
@@ -1885,7 +2079,8 @@ export default function Editor() {
                             </button>
                           </div>
                         </div>
-                      )}
+                        );
+                      })()}
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -1983,29 +2178,32 @@ export default function Editor() {
                 {/* SIMPLE MODE */}
                 {editorMode === "simple" && (
                   <div className="space-y-3">
-                    {/* ── Face Restoration Model selector ────────────────────
+                    {/* ── Face Restoration mode selector ─────────────────────
                         A dedicated, always-visible toggle row that exposes the
-                        four face-restoration paths the backend already routes
-                        through (auto-face / GFPGAN / CodeFormer / Hybrid).
+                        four face-restoration paths under user-friendly names
+                        ("Auto Face" / "Classic Restore" / "Detailed
+                        Refinement" / "Studio Restore"). Tooltips show the
+                        plain-English effect to every user; admins additionally
+                        see the underlying model + pipeline detail in the
+                        same tooltip via `getFaceRestorationDisplay(type, isAdmin)`.
                         Picking a pill flips `enhancementType` and — if a file
                         is already loaded — auto-triggers `handleProcess` via
-                        the same `pendingAutoProcessRef + autoProcessTick`
-                        mechanism used elsewhere in the editor, so the result
-                        appears without a second click. Tooltips spell out the
-                        expected effect of each model in plain language. */}
+                        `pendingAutoProcessRef + autoProcessTick`, so the
+                        result appears without a second click. */}
                     <div id="workflow-step-face-model" className="space-y-1.5 scroll-mt-4">
                       <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
-                        Face Restoration Model
+                        Face Restoration
                       </Label>
-                      <div role="radiogroup" aria-label="Face restoration model" className="grid grid-cols-4 gap-1.5">
+                      <div role="radiogroup" aria-label="Face restoration mode" className="grid grid-cols-4 gap-1.5">
                         {([
-                          { type: "auto_face" as EnhanceMediaBodyEnhancementType, label: "Auto", icon: <Sparkles className="w-3.5 h-3.5" />, desc: "Auto-pick best model based on detected degradation. Safe default for any portrait." },
-                          { type: "face_restore" as EnhanceMediaBodyEnhancementType, label: "GFPGAN", icon: <ScanFace className="w-3.5 h-3.5" />, desc: "GFPGAN — natural skin tones, restores soft facial details. Best for everyday portraits." },
-                          { type: "codeformer" as EnhanceMediaBodyEnhancementType, label: "CodeFormer", icon: <ScanEye className="w-3.5 h-3.5" />, desc: "CodeFormer — sharper identity reconstruction. Best for low-resolution or pixelated faces." },
-                          { type: "hybrid" as EnhanceMediaBodyEnhancementType, label: "Hybrid", icon: <Layers className="w-3.5 h-3.5" />, desc: "GFPGAN + CodeFormer combined. Reduces age marks and scratches on old/damaged photos." },
+                          { type: "auto_face" as EnhanceMediaBodyEnhancementType, short: "Auto",     icon: <Sparkles className="w-3.5 h-3.5" /> },
+                          { type: "face_restore" as EnhanceMediaBodyEnhancementType, short: "Classic",  icon: <ScanFace className="w-3.5 h-3.5" /> },
+                          { type: "codeformer" as EnhanceMediaBodyEnhancementType, short: "Detailed", icon: <ScanEye className="w-3.5 h-3.5" /> },
+                          { type: "hybrid" as EnhanceMediaBodyEnhancementType, short: "Studio",   icon: <Layers className="w-3.5 h-3.5" /> },
                         ]).map((m) => {
                           const locked = isFeatureLocked(m.type);
                           const active = enhancementType === m.type;
+                          const display = getFaceRestorationDisplay(m.type, isAdmin);
                           return (
                             <Tooltip key={m.type}>
                               <TooltipTrigger asChild>
@@ -2013,11 +2211,11 @@ export default function Editor() {
                                   type="button"
                                   role="radio"
                                   aria-checked={active}
-                                  aria-label={`${m.label} face restoration model`}
+                                  aria-label={`${display.label} face restoration mode`}
                                   disabled={locked}
                                   onClick={() => {
                                     if (locked) {
-                                      toast({ title: `${tierLabel(m.type)} feature`, description: `Upgrade to ${tierLabel(m.type)} to unlock ${m.label}.`, variant: "destructive" });
+                                      toast({ title: `${tierLabel(m.type)} feature`, description: `Upgrade to ${tierLabel(m.type)} to unlock ${display.label}.`, variant: "destructive" });
                                       return;
                                     }
                                     pushUndo();
@@ -2041,7 +2239,7 @@ export default function Editor() {
                                   <span className={cn("inline-flex items-center justify-center", active ? "text-teal-300" : "text-zinc-400")}>
                                     {m.icon}
                                   </span>
-                                  <span className="leading-none">{m.label}</span>
+                                  <span className="leading-none">{m.short}</span>
                                   {locked && (
                                     <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-amber-500/90 flex items-center justify-center">
                                       <Lock className="w-2 h-2 text-zinc-900" />
@@ -2049,16 +2247,32 @@ export default function Editor() {
                                   )}
                                 </button>
                               </TooltipTrigger>
-                              <TooltipContent side="bottom" className="max-w-[220px] text-xs leading-snug">
-                                {locked ? `🔒 ${tierLabel(m.type)} — Upgrade to unlock` : m.desc}
+                              <TooltipContent side="bottom" className="max-w-[300px] text-xs leading-snug p-2.5">
+                                {locked ? (
+                                  `🔒 ${tierLabel(m.type)} — Upgrade to unlock`
+                                ) : (
+                                  <div className="space-y-1.5">
+                                    <div className="font-semibold text-zinc-100 text-sm">{display.label}</div>
+                                    <div className="text-zinc-300">{display.desc}</div>
+                                    {isAdmin && display.technical && (
+                                      <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 space-y-1">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="inline-block text-[9px] font-bold uppercase tracking-wider text-amber-200 bg-amber-500/25 px-1.5 py-0.5 rounded">Admin</span>
+                                          <span className="text-[10px] text-amber-300/80">Technical detail</span>
+                                        </div>
+                                        <div className="text-[11px] text-amber-50 leading-relaxed">{display.technical}</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                               </TooltipContent>
                             </Tooltip>
                           );
                         })}
                       </div>
                       <p className="text-[10px] text-zinc-500 leading-snug">
-                        Pick a model or leave on <span className="text-teal-300">Auto</span> — the backend
-                        routes each face to GFPGAN, CodeFormer, or both based on detected degradation.
+                        Stay on <span className="text-teal-300">Auto Face</span> for the safest defaults —
+                        face restoration runs only on old or damaged photos. Clean portraits get a gentle natural enhance.
                       </p>
                     </div>
 
@@ -2106,7 +2320,32 @@ export default function Editor() {
                                 <p className="text-[10px] font-medium leading-tight truncate w-full">{p.label}</p>
                               </motion.button>
                             </TooltipTrigger>
-                            <TooltipContent side="right" className="text-xs">{locked ? `🔒 ${tierLabel(p.type)} — Upgrade to unlock` : p.desc}</TooltipContent>
+                            <TooltipContent side="right" className="max-w-[280px] text-xs leading-snug p-2.5">
+                              {locked ? (
+                                `🔒 ${tierLabel(p.type)} — Upgrade to unlock`
+                              ) : (() => {
+                                // Face-restoration presets surface admin-only technical
+                                // detail; everyone else just sees the friendly desc.
+                                const faceDisplay = getFaceRestorationDisplay(p.type, isAdmin);
+                                const isFaceType = ["auto_face","face_restore","face_restore_hd","codeformer","hybrid","old_photo_restore"].includes(p.type);
+                                if (isFaceType && isAdmin && faceDisplay.technical) {
+                                  return (
+                                    <div className="space-y-1.5">
+                                      <div className="font-semibold text-zinc-100 text-sm">{p.label}</div>
+                                      <div className="text-zinc-300">{p.desc}</div>
+                                      <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 space-y-1">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="inline-block text-[9px] font-bold uppercase tracking-wider text-amber-200 bg-amber-500/25 px-1.5 py-0.5 rounded">Admin</span>
+                                          <span className="text-[10px] text-amber-300/80">Technical detail</span>
+                                        </div>
+                                        <div className="text-[11px] text-amber-50 leading-relaxed">{faceDisplay.technical}</div>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                                return p.desc;
+                              })()}
+                            </TooltipContent>
                           </Tooltip>
                         );
                         })}
@@ -2304,13 +2543,18 @@ export default function Editor() {
                         <div className="grid grid-cols-4 gap-1.5">
                           {FILTER_PRESETS.map((p) => {
                             const filterLocked = isFeatureLocked("filter", p.key);
+                            const isSelected = selectedFilter === p.key;
                             return (
-                            <button key={p.key}
+                            <motion.button
+                              key={p.key}
+                              whileHover={filterLocked ? undefined : { scale: 1.04 }}
+                              whileTap={filterLocked ? undefined : { scale: 0.96 }}
+                              transition={{ type: "spring", stiffness: 320, damping: 20 }}
                               className={cn(
-                                "relative rounded-lg border transition-all overflow-hidden h-12",
+                                "relative rounded-lg border overflow-hidden h-12 transition-colors",
                                 filterLocked
                                   ? "border-zinc-800 opacity-50 cursor-not-allowed"
-                                  : selectedFilter === p.key ? "border-teal-500 ring-1 ring-teal-500/30" : "border-zinc-800 hover:border-zinc-600",
+                                  : isSelected ? "border-teal-500 ring-2 ring-teal-500/40 shadow-md shadow-teal-500/20" : "border-zinc-800 hover:border-zinc-600",
                               )}
                               onClick={() => {
                                 if (filterLocked) {
@@ -2324,12 +2568,22 @@ export default function Editor() {
                               <div className="absolute inset-0 flex items-end p-1">
                                 <span className="text-[8px] font-medium text-white drop-shadow-lg">{p.name}</span>
                               </div>
+                              {isSelected && !filterLocked && (
+                                <motion.div
+                                  initial={{ scale: 0.4, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  transition={{ type: "spring", stiffness: 320, damping: 18 }}
+                                  className="absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-teal-500 flex items-center justify-center shadow-md shadow-teal-500/40"
+                                >
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-zinc-950" />
+                                </motion.div>
+                              )}
                               {filterLocked ? (
                                 <div className="absolute top-0.5 right-0.5 w-3.5 h-3.5 rounded-full bg-amber-500/90 flex items-center justify-center">
                                   <Lock className="w-2 h-2 text-zinc-900" />
                                 </div>
-                              ) : p.premium && <div className="absolute top-0.5 right-0.5"><div className="w-1.5 h-1.5 rounded-full bg-amber-400" /></div>}
-                            </button>
+                              ) : p.premium && !isSelected && <div className="absolute top-0.5 right-0.5"><div className="w-1.5 h-1.5 rounded-full bg-amber-400" /></div>}
+                            </motion.button>
                           );
                           })}
                         </div>
@@ -2456,8 +2710,14 @@ export default function Editor() {
                         <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/50 space-y-2">
                           <div className="flex items-center gap-2">
                             <Film className="w-3.5 h-3.5 text-teal-400" />
-                            <p className="text-sm font-medium">Color Grade</p>
+                            <p className="text-sm font-medium">Cinematic Edits</p>
+                            <span className="ml-auto inline-flex items-center rounded-full border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wider text-cyan-200" title="The same color grades work on photos and videos.">
+                              Photo + Video
+                            </span>
                           </div>
+                          <p className="text-[10px] text-zinc-500 -mt-1">
+                            Same look across stills and frames — toggle on the photo flow too.
+                          </p>
                           <div className="grid grid-cols-3 gap-1.5">
                             {[
                               { key: "cinematic", label: "Cinematic", gradient: "from-teal-600 to-cyan-800" },
@@ -2505,14 +2765,85 @@ export default function Editor() {
             <div className="p-3 border-t border-white/10 space-y-2">
               <AnimatePresence>
                 {processStage !== "idle" && (
-                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-                    className={cn("flex items-center gap-2 text-xs", stageInfo.colorClass)}>
-                    {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    {processStage === "completed" && <CheckCircle2 className="w-3.5 h-3.5" />}
-                    {processStage === "failed"    && <AlertCircle  className="w-3.5 h-3.5" />}
-                    <span className="text-xs">{processStage === "processing" && currentJob?.errorMessage ? currentJob.errorMessage : stageInfo.label}</span>
-                    {processStage === "uploading"  && <span className="text-xs text-zinc-500 ml-auto">{upscaleAfter ? "step 1/3" : "step 1/2"}</span>}
-                    {processStage === "processing" && <span className="text-xs text-zinc-500 ml-auto">{upscaleChainRef.current ? (upscaleAfter ? "step 3/3 — upscaling" : "step 2/2") : (upscaleAfter ? "step 2/3 — enhancing" : "step 2/2")}</span>}
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    className="space-y-2"
+                  >
+                    {/* Step-by-step timeline. Stages flex to include the
+                        filter and upscale steps only when the user opted
+                        in, so the indicator always matches the actual
+                        chain that's running. */}
+                    {(() => {
+                      const hasFilter = !!selectedFilter;
+                      const hasUpscale = !!upscaleAfter;
+                      const upscaleRunning = upscaleChainRef.current === true;
+                      type Status = "pending" | "active" | "done" | "failed";
+                      const failedAt = processStage === "failed";
+                      const stages: { key: string; label: string; detail?: string; status: Status }[] = [];
+                      // Step 1: upload
+                      stages.push({
+                        key: "upload",
+                        label: "Upload",
+                        detail: file?.name ? file.name.length > 16 ? file.name.slice(0, 14) + "…" : file.name : undefined,
+                        status: processStage === "uploading"
+                          ? "active"
+                          : (processStage === "processing" || processStage === "completed" || processStage === "failed") ? "done" : "pending",
+                      });
+                      // Step 2: enhance
+                      stages.push({
+                        key: "enhance",
+                        label: "Enhance",
+                        detail: enhancementType ? getEnhancementMeta(enhancementType).shortLabel : undefined,
+                        status: failedAt && !upscaleRunning
+                          ? "failed"
+                          : processStage === "processing" && !upscaleRunning
+                            ? "active"
+                            : (upscaleRunning || processStage === "completed")
+                              ? "done"
+                              : "pending",
+                      });
+                      // Step 3 (optional): filter
+                      if (hasFilter) {
+                        stages.push({
+                          key: "filter",
+                          label: "Filter",
+                          detail: selectedFilter ?? undefined,
+                          // Filter is part of the same enhance call on the
+                          // server, so it follows the enhance status.
+                          status: failedAt
+                            ? "pending"
+                            : processStage === "completed"
+                              ? "done"
+                              : processStage === "processing"
+                                ? "active"
+                                : "pending",
+                        });
+                      }
+                      // Step 4 (optional): upscale
+                      if (hasUpscale) {
+                        stages.push({
+                          key: "upscale",
+                          label: "Upscale",
+                          detail: upscaleAfter === "upscale_4x" ? "4×" : "2×",
+                          status: failedAt && upscaleRunning
+                            ? "failed"
+                            : upscaleRunning
+                              ? "active"
+                              : processStage === "completed"
+                                ? "done"
+                                : "pending",
+                        });
+                      }
+                      return <ProgressTimeline stages={stages} compact />;
+                    })()}
+                    <div className={cn("flex items-center gap-2 text-xs", stageInfo.colorClass)}>
+                      {(processStage === "uploading" || processStage === "processing") && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      {processStage === "completed" && <CheckCircle2 className="w-3.5 h-3.5" />}
+                      {processStage === "failed"    && <AlertCircle  className="w-3.5 h-3.5" />}
+                      <span className="text-xs">{processStage === "processing" && currentJob?.errorMessage ? currentJob.errorMessage : stageInfo.label}</span>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -2565,7 +2896,63 @@ export default function Editor() {
           {/* Main Preview */}
           <main className="flex-1 bg-zinc-900 relative flex flex-col min-h-0 min-w-0">
             <div className="flex-1 flex items-center justify-center py-4 pl-4 pr-4 sm:pl-6 sm:pr-6 lg:pl-12 lg:pr-8 xl:pl-16 xl:pr-10 2xl:pl-20 2xl:pr-12 overflow-hidden min-h-0">
-              {(isBatchMode || batchItems.length > 0) && !file ? (
+              {(isBatchMode || batchItems.length > 0) && !file && !canAccessPremium ? (
+                /* Batch processing is a Premium feature. Non-premium users
+                   land on a Premium-locked card instead of the Batch Studio
+                   so the gating is unambiguous and the upgrade path is one
+                   click away. Server-side `maxBatchJobsForPlan` already
+                   enforces this — the UI gate prevents users from queueing
+                   files only to fail at submit time. */
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.97 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="w-full max-w-2xl mx-auto"
+                >
+                  <Card className="border border-amber-500/40 bg-zinc-950/80">
+                    <CardContent className="p-8 flex flex-col items-center text-center gap-4">
+                      <div className="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center">
+                        <Layers className="w-6 h-6 text-amber-300" />
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-semibold text-zinc-100">Batch processing is a Premium feature</h2>
+                        <p className="text-sm text-zinc-400 mt-2 max-w-md mx-auto">
+                          Queue multiple photos or videos and process them in a single run. Available on the Premium
+                          plan or with one-time credit packs that include batch capability.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2 justify-center">
+                        <Button
+                          onClick={() => { window.location.href = "/pricing"; }}
+                          className="bg-amber-500 hover:bg-amber-600 text-zinc-950 font-semibold"
+                        >
+                          Upgrade to Premium
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => { window.location.href = "/billing"; }}
+                          className="border-fuchsia-500/50 text-fuchsia-300 hover:bg-fuchsia-500/10"
+                        >
+                          Buy a credit pack
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => { window.location.href = "/photo-studio"; }}
+                          className="text-zinc-400 hover:text-zinc-200"
+                        >
+                          Continue with single-file editing
+                        </Button>
+                      </div>
+                      <p className="text-[11px] text-zinc-500 max-w-md">
+                        Need help choosing? Email{" "}
+                        <a href={supportMailto("Batch processing access", "Hello,\n\nI'd like to understand my options for batch processing.\n\nThanks.")} className="text-teal-400 hover:underline">
+                          support
+                        </a>
+                        .
+                      </p>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ) : (isBatchMode || batchItems.length > 0) && !file ? (
                 /* Single outer rail (`max-w-5xl mx-auto`) shared by BOTH the
                    preview and the Batch Studio card so their left/right edges
                    line up exactly. `h-full overflow-y-auto` keeps everything
@@ -2917,7 +3304,7 @@ export default function Editor() {
                   </Card>
                 </motion.div>
               ) : !file ? (
-                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full">
+                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="max-w-lg w-full space-y-4">
                   <Card className="border-dashed border-2 border-zinc-800 bg-zinc-950/50 hover:bg-zinc-900/50 hover:border-zinc-700 transition-all cursor-pointer relative overflow-hidden group">
                     <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                       accept={studioMode === "video" ? "video/*" : "image/*"} onChange={handleFileChange} />
@@ -2938,6 +3325,64 @@ export default function Editor() {
                       </div>
                     </CardContent>
                   </Card>
+
+                  {/* Video Studio roadmap — only shown on the empty-state of
+                      Video Studio. Sets clear expectations: what's live now,
+                      what's queued next, what's still being researched.
+                      Helps users understand the gap between Photo Studio and
+                      Video Studio without surprise. */}
+                  {studioMode === "video" && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.15 }}
+                      className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4"
+                    >
+                      <div className="flex items-center gap-2 mb-3">
+                        <Film className="w-4 h-4 text-purple-300" />
+                        <h4 className="text-sm font-semibold text-zinc-100">Video Studio — what's available now</h4>
+                        <span className="ml-auto inline-flex items-center rounded-full border border-purple-500/40 bg-purple-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-200">
+                          Expanding
+                        </span>
+                      </div>
+                      <ul className="space-y-1.5">
+                        {VIDEO_ROADMAP.map((item) => (
+                          <li key={item.title} className="flex items-start gap-2 text-xs">
+                            {item.status === "live" ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                            ) : item.status === "next" ? (
+                              <Clock className="w-3.5 h-3.5 text-amber-300 shrink-0 mt-0.5" />
+                            ) : (
+                              <Sparkles className="w-3.5 h-3.5 text-zinc-500 shrink-0 mt-0.5" />
+                            )}
+                            <div>
+                              <span className={cn(
+                                "font-medium",
+                                item.status === "live" ? "text-zinc-100"
+                                  : item.status === "next" ? "text-amber-100"
+                                  : "text-zinc-400",
+                              )}>
+                                {item.title}
+                              </span>
+                              <span className={cn(
+                                "ml-2 text-[10px] uppercase tracking-wider",
+                                item.status === "live" ? "text-emerald-400"
+                                  : item.status === "next" ? "text-amber-300"
+                                  : "text-zinc-500",
+                              )}>
+                                {item.status === "live" ? "Live" : item.status === "next" ? "Coming next" : "Exploring"}
+                              </span>
+                              <p className="text-[11px] text-zinc-500 leading-relaxed">{item.blurb}</p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-3 text-[10px] text-zinc-500 border-t border-zinc-800 pt-2">
+                        Photo Studio is at full feature parity today. Video features ship in waves —
+                        send a note via the Feedback button (bottom-left) to vote on what we ship next.
+                      </p>
+                    </motion.div>
+                  )}
                 </motion.div>
               ) : (
                 <div className="w-full h-full flex flex-col min-h-0 gap-2">
@@ -3187,18 +3632,26 @@ export default function Editor() {
 
                     {/* Filter Gallery — applied after the primary enhancement.
                         For video, the sidecar maps known filters to a built-in
-                        color_grade and approximates unmapped ones per-frame. */}
+                        color_grade and approximates unmapped ones per-frame.
+                        Filter chips toggle the local CSS preview only — users
+                        can flip through filters and compare freely without
+                        triggering an API call. The filter is committed to the
+                        actual enhancement chain when the user clicks
+                        "Enhance Media". Undo (⌘Z) reverts filter changes. */}
                     {(
                       <div id="workflow-step-filter" className="w-full shrink-0 space-y-1.5 scroll-mt-4">
                         <div className="flex items-center justify-between px-0.5">
-                          <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">2. Filter — applied after enhancement</Label>
+                          <Label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">2. Filter — preview, then enhance to apply</Label>
                           {mediaType === "video" && (
                             <span className="text-[10px] text-amber-400 ml-2">Approximate filter on video</span>
                           )}
                           {selectedFilter && (
-                            <span className="text-[10px] text-teal-400 truncate ml-2">Active: {selectedFilter}</span>
+                            <span className="text-[10px] text-teal-400 truncate ml-2">Previewing: {selectedFilter}</span>
                           )}
                         </div>
+                        <p className="text-[10px] text-zinc-500 px-0.5 leading-snug">
+                          Tap filters to compare instantly. Use <span className="text-zinc-300">Undo (⌘Z)</span> to flip back. Click <span className="text-teal-300">Enhance Media</span> when you've picked the look you want.
+                        </p>
                         <div
                           role="list"
                           aria-label="Filter gallery"
@@ -3227,20 +3680,15 @@ export default function Editor() {
                                       }
                                       pushUndo();
                                       setSelectedFilter(p.key === "original" ? null : p.key);
-                                      // NOTE: We deliberately do NOT call setEnhancementType("filter") here.
-                                      // The /media/enhance-chain endpoint can run BOTH the user's chosen
-                                      // enhancement (e.g. auto_face) AND a filter on top of it. Forcing
-                                      // enhancementType to "filter" here previously caused the chain spec
-                                      // to drop the enhance stage, so the filter ran on the original buffer
-                                      // instead of layering on top of the enhanced buffer.
-                                      //
-                                      // Auto-run: if the user already has a media file loaded, immediately
-                                      // run the chain so the new filter is layered on top of the chosen
-                                      // enhancement without requiring an extra "Enhance Media" click.
-                                      if (file && base64Data) {
-                                        pendingAutoProcessRef.current = { source: "filter-chip" };
-                                        setAutoProcessTick(t => t + 1);
-                                      }
+                                      // PREVIEW-ONLY: filter chips drive the local CSS preview
+                                      // (`previewStyle`) so users can toggle and compare freely
+                                      // without triggering an API call. The chosen filter is
+                                      // committed to the enhancement chain on the next
+                                      // "Enhance Media" click. We deliberately do NOT call
+                                      // setEnhancementType("filter") here — the
+                                      // /media/enhance-chain endpoint runs the user's chosen
+                                      // enhancement (e.g. auto_face) AND the filter on top of
+                                      // it as a single chained job.
                                     }}
                                   >
                                     <div className={cn("absolute inset-0 bg-gradient-to-br opacity-60", p.gradient)} />
@@ -3339,9 +3787,57 @@ export default function Editor() {
                 </div>
               )}
             </div>
+
+            {/* Post-enhancement upgrade promo — surfaces ONLY for non-premium
+                users on a completed job. Promotes the upgrade path at the
+                exact moment the user has just experienced value, without
+                interrupting the editing flow before completion. */}
+            {isCompleted && !canAccessPremium && (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 max-w-2xl w-[calc(100%-2rem)]"
+              >
+                <div className="rounded-lg border border-amber-500/40 bg-zinc-950/95 backdrop-blur px-4 py-3 shadow-lg">
+                  <div className="flex items-start gap-3 flex-wrap">
+                    <Crown className="w-4 h-4 text-amber-300 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-zinc-100 font-medium">
+                        Like the result? Unlock 4× upscaling, batch processing, and premium filters.
+                      </div>
+                      <div className="text-[11px] text-zinc-400 mt-0.5">
+                        Premium plans start at affordable rates. Or grab a one-time credit pack — no subscription needed.
+                      </div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs bg-amber-500 hover:bg-amber-600 text-zinc-950 font-semibold"
+                        onClick={() => { window.location.href = "/pricing"; }}
+                      >
+                        View plans
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs border-fuchsia-500/50 text-fuchsia-300 hover:bg-fuchsia-500/10"
+                        onClick={() => { window.location.href = "/billing"; }}
+                      >
+                        Buy credits
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
           </main>
 
-          {/* Floating AI Chat — bottom-right */}
+          {/* Floating AI Chat — bottom-right.
+              Available to ALL users. Chat replies use the friendly enhancement
+              label (e.g. "Auto Face") rather than internal type keys, and the
+              technical model identity is reserved for admins who pay attention
+              to model routing. */}
           <AnimatePresence>
             {showAiChat && (
               <motion.div
@@ -3395,11 +3891,18 @@ export default function Editor() {
                             : "bg-teal-600/20 border border-teal-500/20 rounded-tr-none text-teal-100"
                         )}>
                           <p className="whitespace-pre-line">{msg.text}</p>
-                          {msg.action && !msg.applied && msg.role === "ai" && (
+                          {msg.action && !msg.applied && msg.role === "ai" && (() => {
+                            // Resolve raw type/filter keys to friendly display labels
+                            // so the chat surface never leaks internal identifiers.
+                            const actionLabel = getEnhancementMeta(msg.action.type).label;
+                            const actionFilter = msg.action.filter
+                              ? FILTER_PRESETS.find((p) => p.key === msg.action!.filter || p.serverFilter === msg.action!.filter)?.name ?? msg.action.filter
+                              : null;
+                            return (
                             <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5">
                               <p className="text-[10px] text-zinc-500">
-                                Suggested: <span className="text-teal-300 capitalize">{msg.action.type}</span>
-                                {msg.action.filter && <> · <span className="text-amber-300 capitalize">{msg.action.filter}</span></>}
+                                Suggested: <span className="text-teal-300">{actionLabel}</span>
+                                {actionFilter && <> · <span className="text-amber-300">{actionFilter}</span></>}
                               </p>
                               <Button
                                 size="sm"
@@ -3411,7 +3914,8 @@ export default function Editor() {
                                 <Sparkles className="w-2.5 h-2.5 mr-1" />Apply
                               </Button>
                             </div>
-                          )}
+                            );
+                          })()}
                           {msg.applied && msg.role === "ai" && (
                             <div className="mt-1.5 flex items-center gap-1 text-[9px] text-emerald-400">
                               <CheckCircle2 className="w-2.5 h-2.5" />Applied
@@ -3528,10 +4032,14 @@ export default function Editor() {
                         // What should I do / best / recommend
                         } else if (/what.*(should|do|recommend|suggest|best)|which.*(enhancement|filter|effect)/i.test(lower)) {
                           if (aiSuggestion) {
+                            const friendlyEnhancement = getEnhancementMeta(aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType).label;
+                            const friendlyFilter = aiSuggestion.suggestedFilter
+                              ? FILTER_PRESETS.find((p) => p.key === aiSuggestion.suggestedFilter || p.serverFilter === aiSuggestion.suggestedFilter)?.name ?? aiSuggestion.suggestedFilter
+                              : null;
                             setChatMessages(prev => [...prev, {
                               id: replyId,
                               role: "ai",
-                              text: `Based on my analysis of your ${imageType} image, I recommend "${aiSuggestion.suggestedEnhancement}"${aiSuggestion.suggestedFilter ? ` with the ${aiSuggestion.suggestedFilter} filter` : ""}. I'm ${confidencePct}% confident this will give you the best results. ${aiSuggestion.description}`,
+                              text: `Based on my analysis of your ${imageType} image, I recommend "${friendlyEnhancement}"${friendlyFilter ? ` with the ${friendlyFilter} filter` : ""}. I'm ${confidencePct}% confident this will give you the best results. ${aiSuggestion.description}`,
                               action: {
                                 type: aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType,
                                 filter: aiSuggestion.suggestedFilter ?? undefined,
@@ -3569,10 +4077,11 @@ export default function Editor() {
                           }]);
                         // Fallback with AI context
                         } else if (aiSuggestion) {
+                          const friendlyEnhancement = getEnhancementMeta(aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType).label;
                           setChatMessages(prev => [...prev, {
                             id: replyId,
                             role: "ai",
-                            text: `Based on my analysis of your ${imageType} image, I recommend "${aiSuggestion.suggestedEnhancement}" (${confidencePct}% confidence). ${aiSuggestion.description}\n\nYou can also ask me about specific enhancements like upscaling, portrait retouching, cinematic grading, or lighting fixes.`,
+                            text: `Based on my analysis of your ${imageType} image, I recommend "${friendlyEnhancement}" (${confidencePct}% confidence). ${aiSuggestion.description}\n\nYou can also ask me about specific enhancements like upscaling, portrait retouching, cinematic grading, or lighting fixes.`,
                             action: {
                               type: aiSuggestion.suggestedEnhancement as EnhanceMediaBodyEnhancementType,
                               filter: aiSuggestion.suggestedFilter ?? undefined,
@@ -3610,7 +4119,7 @@ export default function Editor() {
             )}
           </AnimatePresence>
 
-          {/* Floating AI Chat Toggle Button */}
+          {/* Floating AI Chat Toggle Button — available to all users */}
           <motion.button
             onClick={() => setShowAiChat(v => !v)}
             className={cn(

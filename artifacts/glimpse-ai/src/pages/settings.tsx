@@ -1,25 +1,25 @@
 import React, { useState } from "react";
 import Layout from "../components/layout";
 import { useAuth } from "../lib/auth-context";
-import { useUpdateProfile, useDeleteAccount } from "@workspace/api-client-react";
+import { useUpdateProfile } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Separator } from "@/components/ui/separator";
+import { LifeBuoy, Mail, Info, Palette } from "lucide-react";
+import { SUPPORT_EMAIL, supportMailto } from "@/lib/support";
+import { ThemeToggle } from "@/components/theme-toggle";
 
-export default function Settings() {
-  const { user, logout } = useAuth();
+export default function Settings(): React.ReactElement {
+  const { user } = useAuth();
   const [name, setName] = useState(user?.name || "");
   const [email, setEmail] = useState(user?.email || "");
   const { toast } = useToast();
-  
-  const updateProfile = useUpdateProfile();
-  const deleteAccount = useDeleteAccount();
 
-  const handleUpdateProfile = (e: React.FormEvent) => {
+  const updateProfile = useUpdateProfile();
+
+  const handleUpdateProfile = (e: React.FormEvent): void => {
     e.preventDefault();
     updateProfile.mutate(
       { data: { name, email } },
@@ -34,18 +34,6 @@ export default function Settings() {
     );
   };
 
-  const handleDeleteAccount = () => {
-    deleteAccount.mutate(undefined, {
-      onSuccess: () => {
-        toast({ title: "Account deleted" });
-        logout();
-      },
-      onError: (err: any) => {
-        toast({ title: "Deletion failed", description: err.error || "An error occurred", variant: "destructive" });
-      }
-    });
-  };
-
   return (
     <Layout>
       <div className="p-8 max-w-4xl mx-auto w-full space-y-8">
@@ -56,6 +44,23 @@ export default function Settings() {
 
         <Card className="bg-zinc-950 border-zinc-800">
           <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Palette className="w-5 h-5 text-teal-300" /> Appearance
+            </CardTitle>
+            <CardDescription className="text-zinc-400">
+              Switch between light and dark — your choice is remembered on this device.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ThemeToggle />
+            <p className="mt-2 text-xs text-zinc-500">
+              "System" follows your operating-system preference and updates live.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-zinc-950 border-zinc-800">
+          <CardHeader>
             <CardTitle>Profile</CardTitle>
             <CardDescription className="text-zinc-400">Update your personal information.</CardDescription>
           </CardHeader>
@@ -63,20 +68,20 @@ export default function Settings() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="name">Name</Label>
-                <Input 
-                  id="name" 
-                  value={name} 
-                  onChange={(e) => setName(e.target.value)} 
+                <Input
+                  id="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
                   className="bg-black border-zinc-800 focus-visible:ring-teal-500 max-w-md"
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input 
-                  id="email" 
-                  type="email" 
-                  value={email} 
-                  onChange={(e) => setEmail(e.target.value)} 
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   className="bg-black border-zinc-800 focus-visible:ring-teal-500 max-w-md"
                 />
               </div>
@@ -89,36 +94,47 @@ export default function Settings() {
           </form>
         </Card>
 
-        <Card className="bg-zinc-950 border-red-900/50">
+        {/* Account closure & cancellation — handled exclusively via support to
+            prevent accidental loss and to allow human review of refund-policy
+            disputes (we operate a strict no-refund policy on used services). */}
+        <Card className="bg-zinc-950 border-zinc-800">
           <CardHeader>
-            <CardTitle className="text-red-500">Danger Zone</CardTitle>
-            <CardDescription className="text-zinc-400">Permanently delete your account and all associated data.</CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              <LifeBuoy className="w-5 h-5 text-teal-300" /> Account closure &amp; subscription cancellation
+            </CardTitle>
+            <CardDescription className="text-zinc-400">
+              For your safety, account deletion and subscription cancellation are processed only through our support team.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="text-sm text-zinc-300 mb-4">
-              Once you delete your account, there is no going back. Please be certain.
+          <CardContent className="space-y-4">
+            <div className="flex items-start gap-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
+              <Info className="w-4 h-4 text-zinc-400 mt-0.5 shrink-0" />
+              <div className="text-sm text-zinc-300 space-y-1">
+                <p>
+                  We do <span className="text-zinc-100 font-medium">not</span> offer self-service account deletion or
+                  cancellation. Email support and we'll verify your identity, action your request, and confirm in writing.
+                </p>
+                <p className="text-xs text-zinc-500">
+                  Note: GlimpseAI operates a <span className="text-zinc-300 font-medium">no-refund policy</span> for any
+                  service that has already been used or any one-time credit pack that has been redeemed.
+                </p>
+              </div>
             </div>
-            
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="destructive">Delete Account</Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent className="bg-zinc-950 border-zinc-800 text-white">
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                  <AlertDialogDescription className="text-zinc-400">
-                    This action cannot be undone. This will permanently delete your account
-                    and remove your data from our servers.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-white">Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleDeleteAccount} className="bg-red-600 hover:bg-red-700 text-white">
-                    {deleteAccount.isPending ? "Deleting..." : "Yes, delete account"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild className="bg-teal-600 hover:bg-teal-700 text-white">
+                <a href={supportMailto("Account closure request", `Hello,\n\nPlease close my GlimpseAI account associated with ${email || "this email"}.\n\nThank you.`)}>
+                  <Mail className="w-4 h-4 mr-2" /> Email support to close account
+                </a>
+              </Button>
+              <Button asChild variant="outline" className="border-zinc-700 text-zinc-300 hover:bg-zinc-800">
+                <a href={supportMailto("Subscription cancellation", `Hello,\n\nPlease cancel my GlimpseAI subscription on ${email || "this email"}.\n\nThank you.`)}>
+                  Cancel subscription
+                </a>
+              </Button>
+            </div>
+            <p className="text-xs text-zinc-500">
+              Support: <a href={`mailto:${SUPPORT_EMAIL}`} className="text-teal-400 hover:underline">{SUPPORT_EMAIL}</a>
+            </p>
           </CardContent>
         </Card>
       </div>

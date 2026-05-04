@@ -1044,27 +1044,35 @@ async function renderCanonicalImage(
         break;
       }
       // ── Local fallbacks for restoration types when sidecar is down ──
+      // Naturalism tuning (May 2026): reduce sharpening + median radius for
+      // face_restore / auto_face so the result looks like a clean photo, not
+      // a plastic AI render. old_photo_restore / hybrid stay scratch-focused
+      // (heavier descratch median + slight blur before normalize) so age
+      // marks and grain are suppressed before contrast/sharpen amplifies them.
       case "old_photo_restore": {
-        // Denoise + CLAHE-style contrast + warmth + sharpening (mimics the Python pipeline)
         pipeline = pipeline
-          .median(3)                                                    // scratch/noise suppression
+          .median(5)                                                    // stronger scratch / artifact suppression
+          .blur(0.4)                                                    // soft bilateral-style smoothing of remaining grain
           .normalize()                                                  // adaptive contrast
-          .modulate({ brightness: 1.05, saturation: 1.15 })            // revive faded colors
-          .tint({ r: 135, g: 128, b: 118 })                           // slight warm tone
-          .sharpen({ sigma: 1.5, m1: 1.2, m2: 0.8 });                // recover detail
-        pipeline = safeGamma(pipeline, 0.95);                           // lift shadows slightly
+          .modulate({ brightness: 1.04, saturation: 1.10 })            // restrained color revival (was 1.15)
+          .tint({ r: 132, g: 128, b: 122 })                            // gentler warm tone (was 135/128/118)
+          .sharpen({ sigma: 1.2, m1: 1.0, m2: 0.6 });                  // softer detail recovery (was 1.5/1.2/0.8)
+        pipeline = safeGamma(pipeline, 0.96);
         break;
       }
       case "face_restore":
       case "face_restore_hd":
       case "auto_face": {
-        // Sharpening + skin tone warming + noise reduction
+        // Naturalism-first: lighter median (less plastic skin), softer
+        // sharpening (sigma 1.4 vs 1.8), and a saturation closer to 1.0 so
+        // skin tones don't oversaturate. Designed to look like a great
+        // unedited photo rather than an AI render.
         pipeline = pipeline
-          .median(3)
+          .median(2)
           .normalize()
-          .modulate({ brightness: 1.02, saturation: 1.08 })
-          .sharpen({ sigma: 1.8, m1: 1.5, m2: 1.0 });
-        pipeline = safeGamma(pipeline, 0.97);
+          .modulate({ brightness: 1.01, saturation: 1.04 })
+          .sharpen({ sigma: 1.4, m1: 1.2, m2: 0.7 });
+        pipeline = safeGamma(pipeline, 0.98);
         break;
       }
       case "esrgan_upscale_2x": {
@@ -1083,13 +1091,30 @@ async function renderCanonicalImage(
         break;
       }
       case "codeformer": {
-        // Best effort local face cleanup
+        // CodeFormer-style sharpens identity for low-res faces but the
+        // native fallback was over-amplifying noise. Reduced sharpening
+        // (sigma 1.6 vs 2.0) keeps skin natural without losing the
+        // identity-reconstruction feel users expect from "Detailed Refinement".
         pipeline = pipeline
-          .median(3)
+          .median(2)
           .normalize()
-          .modulate({ brightness: 1.02, saturation: 1.1 })
-          .sharpen({ sigma: 2.0, m1: 1.5, m2: 1.0 });
-        pipeline = safeGamma(pipeline, 0.96);
+          .modulate({ brightness: 1.02, saturation: 1.06 })
+          .sharpen({ sigma: 1.6, m1: 1.2, m2: 0.8 });
+        pipeline = safeGamma(pipeline, 0.97);
+        break;
+      }
+      case "hybrid": {
+        // Studio Restore native fallback — descratch (heavier median) +
+        // gentle smoothing + restrained sharpen. Mirrors the Python hybrid
+        // path (GFPGAN + CodeFormer) at a lower fidelity but on the same
+        // naturalism axis as Classic Restore.
+        pipeline = pipeline
+          .median(4)                                                    // descratch + grain
+          .blur(0.3)                                                    // soft bilateral cleanup
+          .normalize()
+          .modulate({ brightness: 1.02, saturation: 1.06 })
+          .sharpen({ sigma: 1.5, m1: 1.2, m2: 0.7 });
+        pipeline = safeGamma(pipeline, 0.97);
         break;
       }
       default: {

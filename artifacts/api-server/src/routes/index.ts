@@ -7,6 +7,7 @@ import plansRouter from "./plans";
 import paymentsRouter from "./payments";
 import adminRouter from "./admin";
 import providerKeysRouter from "./provider-keys";
+import feedbackRouter from "./feedback";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(plansRouter);
 router.use(paymentsRouter);
 router.use(adminRouter);
 router.use(providerKeysRouter);
+router.use(feedbackRouter);
 
 export default router;

@@ -2,6 +2,7 @@ import React from "react";
 import Layout from "../components/layout";
 import { Mail, MessageSquare, MapPin } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { SUPPORT_EMAIL } from "@/lib/support";
 
 export default function Contact() {
   return (
@@ -15,8 +16,8 @@ export default function Contact() {
             <CardContent className="p-6 text-center">
               <Mail className="w-8 h-8 text-teal-400 mx-auto mb-3" />
               <h3 className="font-medium text-sm mb-1">Email</h3>
-              <a href="mailto:futuretechvision.global@gmail.com" className="text-xs sm:text-sm text-teal-400 hover:text-teal-300 transition-colors break-words">
-                futuretechvision.global@gmail.com
+              <a href={`mailto:${SUPPORT_EMAIL}`} className="text-xs sm:text-sm text-teal-400 hover:text-teal-300 transition-colors break-words">
+                {SUPPORT_EMAIL}
               </a>
             </CardContent>
           </Card>

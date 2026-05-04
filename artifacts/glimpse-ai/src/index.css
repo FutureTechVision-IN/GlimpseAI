@@ -49,36 +49,48 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * Light theme (the default :root). Tuned for premium readability:
+ *   - Background is near-white but warm enough to avoid the "spreadsheet"
+ *     look (240 30% 99% rather than pure 0 0% 100%).
+ *   - Body text sits at #11161e (slate-900-ish) for ~14:1 contrast vs the
+ *     background — well above WCAG AAA (7:1) and feels crisp on retina.
+ *   - Muted/secondary tones stay above 4.5:1 (AA) so disclaimers and
+ *     placeholders never become illegible.
+ * Components that hardcoded `bg-zinc-900 / text-white` continue to look fine
+ * because we keep the dark colour ramps intact on `.dark`. New surfaces
+ * should prefer semantic tokens (bg-background / text-foreground / …).
+ * ────────────────────────────────────────────────────────────────────────── */
 :root {
-  --background: 240 10% 4%;
-  --foreground: 0 0% 98%;
-  --border: 240 10% 15%;
-  --card: 240 10% 6%;
-  --card-foreground: 0 0% 98%;
-  --card-border: 240 10% 15%;
-  
-  --popover: 240 10% 6%;
-  --popover-foreground: 0 0% 98%;
-  --popover-border: 240 10% 15%;
+  --background: 240 30% 99%;
+  --foreground: 222 25% 12%;       /* slate-900 — passes AAA on white */
+  --border: 220 14% 88%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 25% 12%;
+  --card-border: 220 14% 88%;
 
-  --primary: 173 80% 40%;
-  --primary-foreground: 0 0% 98%;
-  
-  --secondary: 240 10% 15%;
-  --secondary-foreground: 0 0% 98%;
-  
-  --muted: 240 10% 12%;
-  --muted-foreground: 240 5% 65%;
-  
-  --accent: 173 80% 40%;
-  --accent-foreground: 0 0% 98%;
-  
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 0 0% 98%;
-  
-  --input: 240 10% 15%;
-  --ring: 173 80% 40%;
-  
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 25% 12%;
+  --popover-border: 220 14% 88%;
+
+  --primary: 173 80% 32%;          /* darker teal so it passes AA on white */
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 220 14% 95%;
+  --secondary-foreground: 222 25% 18%;
+
+  --muted: 220 14% 96%;
+  --muted-foreground: 220 9% 35%;  /* ~6:1 on white */
+
+  --accent: 173 80% 32%;
+  --accent-foreground: 0 0% 100%;
+
+  --destructive: 0 72% 42%;
+  --destructive-foreground: 0 0% 100%;
+
+  --input: 220 14% 88%;
+  --ring: 173 80% 32%;
+
   --radius: 0.5rem;
   --app-font-sans: 'Inter', sans-serif;
   --app-font-serif: Georgia, serif;
@@ -141,14 +153,261 @@
     letter-spacing: 0.01em;
   }
 
-  /* Improve readability of zinc text on dark backgrounds */
-  .text-zinc-400 {
-    color: hsl(240 5% 68%);
-  }
-  .text-zinc-500 {
-    color: hsl(240 5% 58%);
-  }
-  .text-zinc-600 {
-    color: hsl(240 4% 50%);
-  }
+  /* Improve readability of zinc text on dark backgrounds.
+   *
+   * Targeted only at `.dark` so the same utility classes don't turn
+   * into murky greys when the document is in light mode (see the
+   * #fff-background block below for light overrides). */
+  .dark .text-zinc-400 { color: hsl(240 5% 70%); }    /* ~5.6:1 on bg-zinc-950 */
+  .dark .text-zinc-500 { color: hsl(240 5% 60%); }    /* ~4.6:1 — passes AA */
+  .dark .text-zinc-600 { color: hsl(240 4% 52%);  }   /* used for hints — bumped from murky 38% */
+
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Light-mode flips for dark-hardcoded Tailwind utilities.
+ *
+ * IMPORTANT — these overrides are deliberately UNLAYERED (i.e. NOT inside
+ * `@layer base`). Tailwind v4 places its utility classes inside
+ * `@layer utilities`, and CSS layer ordering means *any* layered rule
+ * loses to *any* unlayered rule of equal-or-higher specificity, regardless
+ * of which layer it's in. Keeping these unlayered is what makes them
+ * actually beat `bg-black`, `bg-zinc-950`, etc., when the user picks Light.
+ *
+ * Why this is needed: the codebase was authored dark-first with literal
+ * classes like `bg-black`, `bg-zinc-950`, `text-white`, `border-white/10`
+ * (not `dark:` prefixed). When `.dark` is removed from <html> the CSS-var
+ * palette on `body` flips correctly, but those literal classes do not —
+ * so the page would still look black-on-white. The block below remaps the
+ * most common dark utilities used across Layout / sidebar / cards / footer
+ * / forms onto a pleasant light surface so the entire app actually
+ * re-themes when the user toggles.
+ *
+ * Verified by debug instrumentation in `theme-toggle.tsx:onClick:postFrame`
+ * which measures `getComputedStyle` on body / Layout / sidebar after the
+ * theme switch.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* Page + canvas backgrounds */
+:root:not(.dark) .bg-black,
+:root:not(.dark) .bg-zinc-950 {
+  background-color: hsl(240 30% 99%);
+}
+
+/* Slightly raised surfaces (cards, sidebars, popovers) */
+:root:not(.dark) .bg-zinc-900,
+:root:not(.dark) .bg-zinc-900\/95,
+:root:not(.dark) .bg-zinc-900\/90,
+:root:not(.dark) .bg-zinc-900\/80,
+:root:not(.dark) .bg-zinc-900\/50,
+:root:not(.dark) .bg-zinc-950\/95,
+:root:not(.dark) .bg-zinc-950\/90 {
+  background-color: hsl(0 0% 100%);
+}
+
+/* Higher elevation (drawers, dialogs, secondary cards) */
+:root:not(.dark) .bg-zinc-800,
+:root:not(.dark) .bg-zinc-800\/80,
+:root:not(.dark) .bg-zinc-800\/50,
+:root:not(.dark) .bg-zinc-800\/40 {
+  background-color: hsl(240 14% 95%);
+}
+
+/* Muted controls (input bg, chips) */
+:root:not(.dark) .bg-zinc-700,
+:root:not(.dark) .bg-zinc-700\/50 {
+  background-color: hsl(240 9% 92%);
+}
+
+/* Primary text — has to win against `.text-white { color: #fff }` utility */
+:root:not(.dark) .text-white { color: hsl(222 25% 12%); }
+:root:not(.dark) .text-white\/90 { color: hsl(222 25% 14%); }
+:root:not(.dark) .text-white\/80 { color: hsl(222 22% 18%); }
+:root:not(.dark) .text-white\/70 { color: hsl(222 18% 22%); }
+:root:not(.dark) .text-white\/60 { color: hsl(222 14% 28%); }
+:root:not(.dark) .text-white\/50 { color: hsl(222 12% 34%); }
+:root:not(.dark) .text-white\/40 { color: hsl(222 10% 40%); }
+:root:not(.dark) .text-white\/30 { color: hsl(222 8% 48%); }
+:root:not(.dark) .text-white\/20 { color: hsl(222 7% 58%); }
+
+/* Zinc text — fill in the rest of the ramp on white surfaces */
+:root:not(.dark) .text-zinc-100 { color: hsl(222 25% 14%); }
+:root:not(.dark) .text-zinc-200 { color: hsl(222 22% 18%); }
+:root:not(.dark) .text-zinc-700 { color: hsl(222 14% 22%); }
+:root:not(.dark) .text-zinc-800 { color: hsl(222 18% 16%); }
+:root:not(.dark) .text-zinc-900 { color: hsl(222 25% 10%); }
+
+/* Borders & dividers */
+:root:not(.dark) .border-white\/5,
+:root:not(.dark) .border-white\/10,
+:root:not(.dark) .border-white\/20,
+:root:not(.dark) .divide-white\/10 > :not([hidden]) ~ :not([hidden]) {
+  border-color: hsl(220 14% 88%);
+}
+:root:not(.dark) .border-zinc-700,
+:root:not(.dark) .border-zinc-800,
+:root:not(.dark) .border-zinc-900 {
+  border-color: hsl(220 14% 88%);
+}
+
+/* Common hover states that assume a dark backdrop */
+:root:not(.dark) .hover\:text-white:hover { color: hsl(222 25% 4%); }
+:root:not(.dark) .hover\:bg-white\/5:hover { background-color: hsl(220 14% 96%); }
+:root:not(.dark) .hover\:bg-white\/10:hover { background-color: hsl(220 14% 93%); }
+:root:not(.dark) .hover\:bg-zinc-800:hover { background-color: hsl(240 14% 88%); }
+:root:not(.dark) .hover\:bg-zinc-900:hover { background-color: hsl(240 14% 92%); }
+
+/* Brand gradient ("GlimpseAI" wordmark uses
+   `bg-gradient-to-r from-white to-zinc-400 bg-clip-text`). On a white page
+   that would render as white-on-white. Swap the gradient stops to the slate
+   ramp so the wordmark stays legible. */
+:root:not(.dark) .bg-gradient-to-r.from-white,
+:root:not(.dark) .bg-gradient-to-br.from-white {
+  background-image: linear-gradient(to right, hsl(222 25% 12%), hsl(220 9% 35%));
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * R1: Mid-range zinc text — these were previously inside @layer base which
+ * made them lose to Tailwind's utility layer. Promoted to unlayered so
+ * dim labels ("Make a contribution", credit-pack subtitles, preset tile
+ * captions) actually become readable on white surfaces.
+ * ──────────────────────────────────────────────────────────────────────── */
+:root:not(.dark) .text-zinc-300 { color: hsl(222 14% 30%); }
+:root:not(.dark) .text-zinc-400 { color: hsl(222 14% 28%); }
+:root:not(.dark) .text-zinc-500 { color: hsl(222 14% 32%); }
+:root:not(.dark) .text-zinc-600 { color: hsl(222 18% 22%); }
+
+/* Slightly transparent text variants used in panels */
+:root:not(.dark) .text-zinc-400\/80 { color: hsl(222 14% 30% / 0.92); }
+:root:not(.dark) .text-zinc-500\/80 { color: hsl(222 14% 32% / 0.92); }
+
+/* ────────────────────────────────────────────────────────────────────────
+ * R4: Missing opacity variants on zinc surfaces. The studios use
+ * `bg-zinc-900/30` / `/40` for preset tiles + upload zones, and the
+ * billing cards use `bg-zinc-950/40`. Without these, those tiles stay
+ * dark-on-light.
+ * ──────────────────────────────────────────────────────────────────────── */
+:root:not(.dark) .bg-zinc-900\/30,
+:root:not(.dark) .bg-zinc-900\/40,
+:root:not(.dark) .bg-zinc-900\/60,
+:root:not(.dark) .bg-zinc-900\/70 {
+  background-color: hsl(220 14% 96%);
+}
+:root:not(.dark) .bg-zinc-950\/30,
+:root:not(.dark) .bg-zinc-950\/40,
+:root:not(.dark) .bg-zinc-950\/50,
+:root:not(.dark) .bg-zinc-950\/60,
+:root:not(.dark) .bg-zinc-950\/70,
+:root:not(.dark) .bg-zinc-950\/80 {
+  background-color: hsl(0 0% 100%);
+}
+
+/* Border opacity variants used on hovered tiles + cards */
+:root:not(.dark) .border-zinc-800\/60,
+:root:not(.dark) .border-zinc-800\/80,
+:root:not(.dark) .border-zinc-700\/60 {
+  border-color: hsl(220 14% 88%);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * R2: Override Tailwind v4 gradient-stop CSS variables so any `from-zinc-*`
+ * / `to-zinc-*` / `via-zinc-*` stop becomes a light-surface stop in Light
+ * mode. This is what makes `bg-gradient-to-br from-zinc-900/90 to-zinc-950`
+ * (Dashboard feature tiles, billing credit packs) actually flip — the
+ * gradient is built from these CSS vars, not from `background-color`.
+ *
+ * We use the same `var(--tw-gradient-from-position)` placement Tailwind
+ * itself uses so the gradient-stops machinery keeps working unchanged.
+ * ──────────────────────────────────────────────────────────────────────── */
+:root:not(.dark) .from-zinc-900,
+:root:not(.dark) .from-zinc-900\/95,
+:root:not(.dark) .from-zinc-900\/90,
+:root:not(.dark) .from-zinc-900\/80,
+:root:not(.dark) .from-zinc-900\/70,
+:root:not(.dark) .from-zinc-900\/60,
+:root:not(.dark) .from-zinc-900\/50,
+:root:not(.dark) .from-zinc-900\/40,
+:root:not(.dark) .from-zinc-950,
+:root:not(.dark) .from-zinc-950\/90,
+:root:not(.dark) .from-zinc-950\/80,
+:root:not(.dark) .from-zinc-950\/50,
+:root:not(.dark) .from-black,
+:root:not(.dark) .from-black\/90,
+:root:not(.dark) .from-black\/80,
+:root:not(.dark) .from-black\/50 {
+  --tw-gradient-from: hsl(220 14% 96%) var(--tw-gradient-from-position);
+  --tw-gradient-stops: var(--tw-gradient-via-stops, var(--tw-gradient-position), var(--tw-gradient-from) var(--tw-gradient-from-position), var(--tw-gradient-to) var(--tw-gradient-to-position));
+}
+
+:root:not(.dark) .to-zinc-900,
+:root:not(.dark) .to-zinc-900\/95,
+:root:not(.dark) .to-zinc-900\/90,
+:root:not(.dark) .to-zinc-900\/80,
+:root:not(.dark) .to-zinc-950,
+:root:not(.dark) .to-zinc-950\/90,
+:root:not(.dark) .to-zinc-950\/80,
+:root:not(.dark) .to-black,
+:root:not(.dark) .to-black\/90,
+:root:not(.dark) .to-black\/80,
+:root:not(.dark) .to-black\/50 {
+  --tw-gradient-to: hsl(0 0% 100%) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-via-stops, var(--tw-gradient-position), var(--tw-gradient-from) var(--tw-gradient-from-position), var(--tw-gradient-to) var(--tw-gradient-to-position));
+}
+
+:root:not(.dark) .via-zinc-900,
+:root:not(.dark) .via-zinc-900\/90,
+:root:not(.dark) .via-zinc-900\/80,
+:root:not(.dark) .via-zinc-900\/50,
+:root:not(.dark) .via-zinc-950,
+:root:not(.dark) .via-zinc-950\/90,
+:root:not(.dark) .via-zinc-950\/80,
+:root:not(.dark) .via-zinc-950\/50,
+:root:not(.dark) .via-black,
+:root:not(.dark) .via-black\/90,
+:root:not(.dark) .via-black\/50 {
+  --tw-gradient-via: hsl(0 0% 100%);
+  --tw-gradient-via-stops: var(--tw-gradient-position), var(--tw-gradient-from) var(--tw-gradient-from-position), var(--tw-gradient-via) var(--tw-gradient-via-position), var(--tw-gradient-to) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-via-stops);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * R3: Direct background-image fallbacks for canonical combos. Belt + braces
+ * on top of R2 — if Tailwind's internal gradient machinery shifts shape in
+ * a future patch, these still pin the visual to a light surface.
+ * ──────────────────────────────────────────────────────────────────────── */
+/* Dashboard feature tiles (`from-zinc-900/90 to-zinc-950`) */
+:root:not(.dark) .bg-gradient-to-br.from-zinc-900\/90.to-zinc-950 {
+  background-image: linear-gradient(to bottom right, hsl(220 14% 97%), hsl(0 0% 100%));
+}
+/* Dashboard accent tiles (`from-teal-950/40 to-zinc-950`,
+   `from-emerald-950/40 to-zinc-950`) — keep the accent tint, light backdrop */
+:root:not(.dark) .bg-gradient-to-br.from-teal-950\/40.to-zinc-950 {
+  background-image: linear-gradient(to bottom right, hsl(180 60% 96%), hsl(0 0% 100%));
+}
+:root:not(.dark) .bg-gradient-to-br.from-emerald-950\/40.to-zinc-950 {
+  background-image: linear-gradient(to bottom right, hsl(160 60% 96%), hsl(0 0% 100%));
+}
+/* Billing charity banner (`from-teal-500/10 via-zinc-950 to-fuchsia-500/10`) */
+:root:not(.dark) .bg-gradient-to-r.from-teal-500\/10.via-zinc-950.to-fuchsia-500\/10 {
+  background-image: linear-gradient(to right, hsl(180 80% 95%), hsl(0 0% 100%), hsl(300 80% 96%));
+}
+/* Old-photo CTA / hover gradients on dashboard tiles */
+:root:not(.dark) .bg-gradient-to-t.from-black\/90.via-black\/50.to-transparent {
+  background-image: linear-gradient(to top, hsl(0 0% 100% / 0.95), hsl(0 0% 100% / 0.6), transparent);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * R5: Yellow / amber warning surfaces. Banners use `text-yellow-{200,300}`
+ * which is unreadable on light yellow tinted bg. Bias the foreground to a
+ * deeper amber so the warning still pops on a white-ish backdrop.
+ * ──────────────────────────────────────────────────────────────────────── */
+:root:not(.dark) .text-yellow-200,
+:root:not(.dark) .text-yellow-300,
+:root:not(.dark) .text-amber-200,
+:root:not(.dark) .text-amber-300 {
+  color: hsl(35 85% 28%);
+}
+:root:not(.dark) .text-yellow-100,
+:root:not(.dark) .text-amber-100 {
+  color: hsl(35 85% 22%);
 }

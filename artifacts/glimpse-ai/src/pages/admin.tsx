@@ -28,8 +28,10 @@ import {
   Plus, Pencil, Trash2, Eye, EyeOff, LogOut, Shield, TrendingUp,
   Activity, BarChart3, ArrowUpRight, ArrowDownRight, Search, Filter,
   Loader2, MoreHorizontal, Ban, BadgeDollarSign, Key, ToggleLeft, ToggleRight,
-  FileWarning, Layers, BrainCircuit, Sparkles
+  FileWarning, Layers, BrainCircuit, Sparkles, MessageSquareWarning, MessageSquareText
 } from "lucide-react";
+import { ErrorEventsPanel } from "@/components/admin/error-events-panel";
+import { FeedbackPanel } from "@/components/admin/feedback-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,7 +69,9 @@ type AdminSection =
   | "plans"
   | "providers"
   | "analytics"
-  | "aiinsights";
+  | "aiinsights"
+  | "errors"
+  | "feedback";
 
 function StatCard({
   title, value, sub, icon: Icon, trend, color = "teal"
@@ -2156,13 +2160,35 @@ const navItems: { id: AdminSection; label: string; icon: React.ElementType; badg
   { id: "providers", label: "AI Providers & Keys", icon: Cpu },
   { id: "analytics", label: "Analytics", icon: BarChart3 },
   { id: "aiinsights", label: "AI Insights", icon: BrainCircuit },
+  { id: "errors", label: "Error Events", icon: MessageSquareWarning },
+  { id: "feedback", label: "Feedback", icon: MessageSquareText },
 ];
 
 export default function Admin() {
-  const [section, setSection] = useState<AdminSection>("overview");
+  // Initial section can be deep-linked via `?tab=errors` (used by the admin
+  // notification toaster) so admins land directly on the right panel.
+  const [section, setSection] = useState<AdminSection>(() => {
+    if (typeof window === "undefined") return "overview";
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("tab");
+    const allowed: AdminSection[] = [
+      "overview", "users", "jobs", "payments", "plans",
+      "providers", "analytics", "aiinsights", "errors", "feedback",
+    ];
+    return (allowed.includes(t as AdminSection) ? (t as AdminSection) : "overview");
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
+
+  // Keep ?tab= in sync so reload / share behaves right.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("tab") === section) return;
+    params.set("tab", section);
+    window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+  }, [section]);
 
   const handleLogout = () => {
     logout();
@@ -2272,6 +2298,8 @@ export default function Admin() {
             {section === "providers" && <UnifiedProvidersSection />}
             {section === "analytics" && <AnalyticsSection />}
             {section === "aiinsights" && <AiInsightsSection />}
+            {section === "errors" && <ErrorEventsPanel />}
+            {section === "feedback" && <FeedbackPanel />}
           </div>
         </ScrollArea>
       </div>

@@ -35,7 +35,7 @@ function getBootstrapAccounts(): Array<{ name: string; email: string; password: 
   const email = normalizeBootstrapEmail(process.env.ADMIN_EMAIL);
   const password = normalizeBootstrapPassword(process.env.ADMIN_PASSWORD);
   const name = process.env.ADMIN_NAME?.trim() ?? "Glimpse Admin";
-  const name2 = process.env.ADMIN_NAME_2?.trim() ?? "Future Tech Vision";
+  const name2 = process.env.ADMIN_NAME_2?.trim() ?? "GlimpseAI Global";
 
   if (isProduction) {
     if (!email || !password) {
@@ -56,7 +56,7 @@ function getBootstrapAccounts(): Array<{ name: string; email: string; password: 
   const devEmail = email ?? "admin@glimpse.ai";
   const devEmail2 =
     normalizeBootstrapEmail(process.env.ADMIN_EMAIL_2) ??
-    normalizeBootstrapEmail("futuretechvision.global@gmail.com");
+    normalizeBootstrapEmail("glimpseai.global@gmail.com");
   const devPassword =
     password ??
     (process.env.ALLOW_INSECURE_DEV_ADMIN === "true"
@@ -79,7 +79,7 @@ function getBootstrapAccounts(): Array<{ name: string; email: string; password: 
 /**
  * Ensures bootstrap admin user(s) exist from environment.
  * Primary: ADMIN_EMAIL + ADMIN_PASSWORD; optional second: ADMIN_EMAIL_2 (same password).
- * In development, ADMIN_EMAIL_2 defaults to futuretechvision.global@gmail.com if unset.
+ * In development, ADMIN_EMAIL_2 defaults to glimpseai.global@gmail.com if unset.
  * In production, existing passwords are preserved unless ADMIN_SYNC_PASSWORD_ON_BOOT=true
  * (use once to recover from a bad hash, then disable).
  */

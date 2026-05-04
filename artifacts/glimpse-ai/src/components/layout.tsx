@@ -3,10 +3,12 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "../lib/auth-context";
 import { Button } from "@/components/ui/button";
 import {
-  Sparkles, LogOut, LayoutDashboard, Wand2, Clock, Settings,
+  Sparkles, LogOut, LayoutDashboard, Clock, Settings,
   CreditCard, Shield, ImageIcon, Video, Menu, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FeedbackWidget } from "./feedback-widget";
+import { AdminErrorToaster } from "./admin/admin-error-toaster";
 
 function NavLink({
   href,
@@ -44,6 +46,10 @@ function SidebarContent({ onNavClick }: { onNavClick?: () => void }) {
   const { user, logout } = useAuth();
   return (
     <>
+      {/* Sidebar header: brand only. The theme toggle deliberately lives
+          on Settings (single source of truth) — placing it here as well
+          created two competing controls that could disagree until the
+          broadcast event landed, and the user explicitly asked for one. */}
       <div className="p-6">
         <Link
           href="/dashboard"
@@ -57,7 +63,7 @@ function SidebarContent({ onNavClick }: { onNavClick?: () => void }) {
         </Link>
       </div>
 
-      <div className="px-3 py-2 flex-1 overflow-y-auto">
+      <div className="px-3 py-3 flex-1 overflow-y-auto">
         <div className="space-y-0.5">
           <NavLink href="/dashboard"    icon={LayoutDashboard} label="Dashboard"     exact onClick={onNavClick} />
           <NavLink href="/photo-studio" icon={ImageIcon}       label="Photo Studio"        onClick={onNavClick} />
@@ -79,7 +85,10 @@ function SidebarContent({ onNavClick }: { onNavClick?: () => void }) {
         </div>
       </div>
 
-      <div className="p-4 border-t border-white/10">
+      {/* Bottom: user info + logout. Extra bottom padding clears the
+          floating FeedbackWidget pill (fixed bottom-4 left-4) on every
+          viewport so the row never gets visually overlapped. */}
+      <div className="p-4 pb-16 border-t border-white/10">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-sm font-medium truncate">{user?.name}</div>
@@ -138,7 +147,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       {/* ── Main content ─────────────────────────────────────────── */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Mobile top bar with hamburger */}
+        {/* Mobile top bar with hamburger + brand only. Theme toggle is on
+            the Settings page (single source of truth). */}
         <header className="flex items-center gap-3 px-4 py-3 border-b border-white/10 bg-zinc-950 md:hidden">
           <button
             onClick={() => setDrawerOpen(true)}
@@ -174,6 +184,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </footer>
       </main>
+
+      {/* Global feedback launcher — fixed bottom-left so it never collides
+          with the AI chat widget (bottom-right) or completion-screen promos
+          on the editor (bottom-center). */}
+      <FeedbackWidget />
+
+      {/* Admin-only background poller for new error events.
+          Renders nothing visible — only fires toast notifications when an
+          admin is signed in and a new error has appeared since last poll. */}
+      <AdminErrorToaster />
     </div>
   );
 }

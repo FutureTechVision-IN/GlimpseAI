@@ -490,34 +490,49 @@ class AIProviderService {
         // pipeline (median + normalize + sharpen) so the recommendation is
         // still actionable without Docker.
 
-        // Old/degraded portrait detection: faded chroma (sepia/black-and-white
-        // shift), low contrast (washed out), and soft sharpness together
-        // signal a damaged or aged photo. When all three triggers fire we
-        // upgrade the recommendation from "auto_face" to "old_photo_restore"
-        // (Hybrid GFPGAN + CodeFormer pipeline) which is purpose-built for
-        // scratches, age marks, and noise.
+        // Quality probe — gates whether face restoration runs at all.
+        // Three independent degradation signals combine into a 0–3 score:
+        //   • fadedChroma  — washed-out / sepia / B&W shift (chroma < 22)
+        //   • flatContrast — washed-out tonal range (contrast < 32)
+        //   • softFocus    — blur or low detail (sharpnessScore < 50)
+        // Score ≥ 3 → severe damage → Heritage Restore (Hybrid pipeline)
+        // Score 1–2 → mild/moderate damage → Auto Face (per-photo model routing)
+        // Score 0   → clean, high-quality portrait → general "auto" enhance
+        //             (no face restoration applied — looks natural and avoids
+        //              over-processing pristine photos)
         const fadedChroma = chroma < 22;
         const flatContrast = contrast < 32;
         const softFocus = sharpnessScore < 50;
-        const isDegradedPortrait = fadedChroma && flatContrast && softFocus;
+        const damageScore = (fadedChroma ? 1 : 0) + (flatContrast ? 1 : 0) + (softFocus ? 1 : 0);
 
-        if (isDegradedPortrait) {
+        if (damageScore >= 3) {
           enhancement = "old_photo_restore";
           confidence = 0.85;
-          description = `Old or degraded portrait detected (low chroma ${Math.round(chroma)}, flat contrast ${Math.round(contrast)}, soft sharpness ${Math.round(sharpnessScore)}). Hybrid GFPGAN + CodeFormer pipeline will restore facial detail and reduce age marks or scratches.`;
-        } else if (warmth > 15) {
+          description = `Old or degraded portrait detected (low chroma ${Math.round(chroma)}, flat contrast ${Math.round(contrast)}, soft sharpness ${Math.round(sharpnessScore)}). Heritage Restore will rebuild facial detail and reduce age marks or scratches.`;
+        } else if (damageScore >= 1) {
+          // Some degradation — Auto Face will pick the best per-photo model
           enhancement = "auto_face";
-          confidence = 0.88;
-          description = `Portrait scene with warm skin tones. Auto-Face AI will auto-select the best face model (GFPGAN / CodeFormer / hybrid) for natural skin and detail.`;
-        } else if (warmth < -15) {
-          enhancement = "auto_face";
-          filter = "airy";
-          confidence = 0.85;
-          description = `Portrait scene with cool tones. Auto-Face AI + Airy filter will warm and brighten the subject while preserving facial detail.`;
+          confidence = 0.86;
+          if (warmth < -15) filter = "airy";
+          const warmthHint = warmth > 15
+            ? " warm skin tones"
+            : warmth < -15
+              ? " cool tones (Airy filter recommended to warm the subject)"
+              : "";
+          description = `Portrait with mild softness or fading detected${warmthHint}. Auto Face will route to the best face restoration for this photo while keeping a natural look.`;
         } else {
-          enhancement = "auto_face";
-          confidence = 0.87;
-          description = `Portrait scene detected. Auto-Face AI will auto-select the best face model (GFPGAN / CodeFormer / hybrid) for the cleanest result.`;
+          // Clean, high-quality portrait — face restoration is not needed.
+          // Stick to general enhancement so the result stays natural.
+          enhancement = "auto";
+          confidence = 0.84;
+          if (warmth > 15) {
+            description = `Clean portrait with warm skin tones. Auto enhance will lift exposure and clarity gently — no face restoration needed for this high-quality photo.`;
+          } else if (warmth < -15) {
+            filter = "airy";
+            description = `Clean portrait with cool tones. Auto enhance + Airy filter will warm and brighten the scene without altering facial features.`;
+          } else {
+            description = `Clean, high-quality portrait. Auto enhance will polish exposure, contrast, and clarity without any face restoration.`;
+          }
         }
       } else if (isLandscape) {
         if (chroma > 55) {
@@ -582,17 +597,15 @@ class AIProviderService {
       };
     } catch (err) {
       logger.warn({ err }, "Local analysis failed — returning safe defaults");
-      // Even on failure, prefer auto_face when filename hints at a portrait — it's
-      // strictly safer than "auto" because the sidecar (or native fallback) handles
-      // both face and non-face content gracefully.
+      // On analysis failure we cannot probe quality, so we default to plain
+      // "auto" enhance. Face restoration is reserved for photos where we have
+      // positive evidence of damage — never as a blind fallback.
       const portraitFromFilename = this.filenameHintsPortrait(filename);
       return {
-        description: portraitFromFilename
-          ? "Image ready for enhancement. Auto-Face will pick the best face model."
-          : "Image ready for enhancement.",
-        suggestedEnhancement: portraitFromFilename ? "auto_face" : "auto",
+        description: "Image ready for enhancement. Auto enhance will polish exposure, contrast, and clarity.",
+        suggestedEnhancement: "auto",
         suggestedFilter: null,
-        detectedSubjects: portraitFromFilename ? ["portrait", "person", "face"] : [],
+        detectedSubjects: portraitFromFilename ? ["portrait", "person"] : [],
         confidence: 0.72,
         analysisSource: "local",
         servedBy: "unknown",
@@ -680,10 +693,12 @@ class AIProviderService {
     const bestAi = aiResult ?? geminiResult;
 
     if (bestAi) {
-      // Merge AI description with local heuristics. If AI suggests something
-      // other than auto_face but the local heuristic detected a portrait/face
-      // scene AND the sidecar (or native fallback) can serve auto_face, prefer
-      // auto_face — auto_face is strictly better than "portrait" for faces.
+      // Merge AI description with local heuristics. Promotion to a face-restoration
+      // suggestion is now QUALITY-AWARE: we only force a face suggestion when
+      // BOTH a face is present AND the local quality probe flagged some
+      // degradation (i.e. localResult itself chose auto_face / old_photo_restore).
+      // Clean, high-quality portraits keep the AI's general suggestion (typically
+      // "auto") so we don't apply face restoration where it isn't needed.
       const aiSubjects = bestAi.detectedSubjects.length > 0 ? bestAi.detectedSubjects : localResult.detectedSubjects;
       const merged: AnalysisResult = {
         ...bestAi,
@@ -695,21 +710,30 @@ class AIProviderService {
       const aiSeesFace = aiSubjects.some(s =>
         /(person|portrait|face|selfie)/i.test(s),
       );
-      // Local face signal also counts: if our skin-tone heuristic detected a face,
-      // we should promote to auto_face even if the AI surfaced a generic suggestion.
       const localSeesFace = localResult.detectedSubjects.some(s =>
         /(person|portrait|face|selfie)/i.test(s),
       );
       const anyFaceSignal = aiSeesFace || localSeesFace;
-      // Filters that pair gracefully on top of auto_face — keep the AI-suggested filter
-      // when promoting to auto_face so users still get content-aware styling.
-      const willPromote = anyFaceSignal && merged.suggestedEnhancement !== "auto_face";
+      // Critical gate: only promote when our local quality probe ALSO chose a
+      // face-restoration enhancement. If the local probe picked plain "auto"
+      // for a clean portrait, respect that — face restoration would be
+      // unnecessary and risk over-processing a high-quality photo.
+      const localPickedFaceRestore =
+        localResult.suggestedEnhancement === "auto_face" ||
+        localResult.suggestedEnhancement === "old_photo_restore";
+      const willPromote =
+        anyFaceSignal &&
+        localPickedFaceRestore &&
+        merged.suggestedEnhancement !== "auto_face" &&
+        merged.suggestedEnhancement !== "old_photo_restore";
       if (willPromote) {
-        merged.suggestedEnhancement = "auto_face";
+        merged.suggestedEnhancement = localResult.suggestedEnhancement;
         merged.detectedSubjects = aiSubjects.some(s => /face|portrait|person/i.test(s))
           ? aiSubjects
           : [...new Set([...aiSubjects, "person", "face", "portrait"])];
-        merged.description = `${merged.description} Auto-Face AI will pick the best face model (GFPGAN / CodeFormer / hybrid).`;
+        merged.description = localResult.suggestedEnhancement === "old_photo_restore"
+          ? `${merged.description} Heritage Restore will rebuild facial detail and reduce scratches or age marks.`
+          : `${merged.description} Auto Face will route to the best face model for this photo.`;
       }
       return merged;
     }
