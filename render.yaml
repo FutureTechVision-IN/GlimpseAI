@@ -1,0 +1,65 @@
+services:
+  - type: web
+    name: glimpse-ai-api-docker
+    runtime: docker
+    repo: https://github.com/FutureTechVision-IN/GlimpseAI
+    branch: main
+    dockerContext: .
+    dockerfilePath: ./artifacts/api-server/Dockerfile
+    region: singapore
+    plan: free
+    healthCheckPath: /api/healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: https://glimpse-ai-five.vercel.app
+      - key: CORS_ORIGIN
+        value: https://glimpse-ai-five.vercel.app
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "900000"
+      - key: RATE_LIMIT_MAX
+        value: "300"
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        value: 17-NtAES7W6ua0FS7mqYX3-thbRkQkLQG
+      - key: GOOGLE_DRIVE_MAKE_PUBLIC
+        value: "true"
+      - key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        sync: false
+      - key: GOOGLE_PRIVATE_KEY
+        sync: false
+      - key: ADMIN_NAME
+        value: Glimpse Admin
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_NAME_2
+        value: Future Tech Vision Global
+      - key: ADMIN_EMAIL_2
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_SYNC_PASSWORD_ON_BOOT
+        sync: false
+      - key: VALIDATE_ADMIN_ON_BOOT
+        value: "true"
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: PROVIDER_KEYS_NVIDIA_NEMOTRON_3_NANO_30B_A3B_FREE
+        sync: false
+      - key: PROVIDER_KEYS_NVIDIA_NEMOTRON_3_SUPER_120B_A12B_FREE
+        sync: false
+      - key: PROVIDER_KEYS_STEPFUN_STEP_3_5_FLASH_FREE
+        sync: false
+      - key: PROVIDER_KEYS_ZAI_GLM_4_5_AIR_FREE
+        sync: false

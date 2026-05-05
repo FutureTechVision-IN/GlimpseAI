@@ -11,6 +11,7 @@ COPY lib/api-client-react/package.json lib/api-client-react/package.json
 COPY lib/api-spec/package.json lib/api-spec/package.json
 COPY lib/api-zod/package.json lib/api-zod/package.json
 COPY lib/db/package.json lib/db/package.json
+COPY lib/filter-registry/package.json lib/filter-registry/package.json
 COPY scripts/package.json scripts/package.json
 
 RUN pnpm install --frozen-lockfile
@@ -19,6 +20,6 @@ COPY . .
 
 RUN pnpm --filter @workspace/api-server run build
 
-EXPOSE 3001
+EXPOSE 10000
 
 CMD ["sh", "-lc", "pnpm --filter @workspace/db run push && pnpm --filter @workspace/api-server run start"]
