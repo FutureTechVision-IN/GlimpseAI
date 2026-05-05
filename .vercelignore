@@ -1,0 +1,14 @@
+.git
+.DS_Store
+.env
+.env.*
+.vercel
+.zip-smoke
+node_modules
+**/node_modules
+**/dist
+services/restoration/.venv
+services/restoration/models/*.pth
+services/restoration/gfpgan
+__pycache__
+*.pyc
