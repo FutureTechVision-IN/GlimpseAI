@@ -23,6 +23,32 @@ export interface RenderImageResult {
   height?: number;
 }
 
+function readIntEnv(name: string, fallback: number, min = 0): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+}
+
+const productionMemoryProfile = process.env.NODE_ENV === "production";
+const sharpConcurrency = readIntEnv("SHARP_CONCURRENCY", productionMemoryProfile ? 1 : 0);
+const sharpCacheMemoryMb = readIntEnv("SHARP_CACHE_MEMORY_MB", productionMemoryProfile ? 64 : 0);
+const imageMaxProcessingDimension = readIntEnv(
+  "IMAGE_MAX_PROCESSING_DIMENSION",
+  productionMemoryProfile ? 1920 : 4096,
+  512,
+);
+const imageMaxInputPixels = readIntEnv("IMAGE_MAX_INPUT_PIXELS", 48_000_000, 1_000_000);
+const workingJpegQuality = Math.max(75, Math.min(95, readIntEnv("IMAGE_WORKING_JPEG_QUALITY", 88, 1)));
+
+if (sharpConcurrency > 0) {
+  sharp.concurrency(sharpConcurrency);
+}
+
+if (sharpCacheMemoryMb > 0) {
+  sharp.cache({ memory: sharpCacheMemoryMb, files: 0, items: 32 });
+}
+
 // ---------------------------------------------------------------------------
 // Image analysis helpers — used by adaptive enhancements
 // ---------------------------------------------------------------------------
@@ -268,6 +294,52 @@ async function applyCanonicalPreprocess(
   if (settings.flipV === true) pipeline = pipeline.flip();
 
   return pipeline.toBuffer();
+}
+
+async function constrainInputForMemorySafeProcessing(
+  inputBuffer: Buffer,
+  renderKind: "preview" | "export",
+  previewMaxDimension: number,
+): Promise<Buffer> {
+  const meta = await sharp(inputBuffer, { limitInputPixels: imageMaxInputPixels }).metadata();
+  const width = meta.width ?? 0;
+  const height = meta.height ?? 0;
+  const longestEdge = Math.max(width, height);
+  const maxDimension = renderKind === "preview"
+    ? Math.min(previewMaxDimension, imageMaxProcessingDimension)
+    : imageMaxProcessingDimension;
+
+  if (longestEdge === 0 || longestEdge <= maxDimension) {
+    return inputBuffer;
+  }
+
+  const hasAlpha = meta.hasAlpha === true;
+  const resizedPipeline = sharp(inputBuffer, { limitInputPixels: imageMaxInputPixels })
+    .resize({
+      width: maxDimension,
+      height: maxDimension,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .toColourspace("srgb");
+
+  const resized = hasAlpha
+    ? await resizedPipeline.png({ compressionLevel: 6 }).toBuffer()
+    : await resizedPipeline.jpeg({ quality: workingJpegQuality, mozjpeg: true }).toBuffer();
+
+  const resizedMeta = await sharp(resized).metadata();
+  logger.info({
+    renderKind,
+    originalWidth: width,
+    originalHeight: height,
+    resizedWidth: resizedMeta.width,
+    resizedHeight: resizedMeta.height,
+    originalBytes: inputBuffer.length,
+    resizedBytes: resized.length,
+    maxDimension,
+  }, "Downscaled oversized image for memory-safe processing");
+
+  return resized;
 }
 
 // ---------------------------------------------------------------------------
@@ -645,7 +717,12 @@ async function renderCanonicalImage(
   }
 
   const originalInputBuffer = Buffer.from(base64Data, "base64");
-  const inputBuffer = await applyCanonicalPreprocess(originalInputBuffer, s);
+  const memorySafeInputBuffer = await constrainInputForMemorySafeProcessing(
+    originalInputBuffer,
+    renderKind,
+    previewMaxDimension,
+  );
+  const inputBuffer = await applyCanonicalPreprocess(memorySafeInputBuffer, s);
   let pipeline = sharp(inputBuffer);
   const meta = await sharp(inputBuffer).metadata();
 

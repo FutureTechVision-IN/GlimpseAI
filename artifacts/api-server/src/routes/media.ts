@@ -1,4 +1,4 @@
-import { Router, IRouter } from "express";
+import { Router, IRouter, Response } from "express";
 import { db, mediaJobsTable, usersTable, presetsTable, plansTable } from "@workspace/db";
 import { eq, and, desc, count } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -38,6 +38,32 @@ function getUserTierForAi(planSlug: string | null, user: typeof usersTable.$infe
 
 /** Admins are exempt from all quota enforcement */
 const isAdmin = (req: AuthRequest) => req.userRole === "admin";
+
+const processingJobStaleMs = Number.parseInt(process.env.PROCESSING_JOB_STALE_MS ?? "900000", 10);
+
+function setNoStore(res: Response) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+}
+
+async function recoverInterruptedProcessingJob(job: typeof mediaJobsTable.$inferSelect) {
+  if (job.status !== "processing") return job;
+  const staleAfter = Number.isFinite(processingJobStaleMs) && processingJobStaleMs > 0
+    ? processingJobStaleMs
+    : 900000;
+  const lastTouched = job.updatedAt ?? job.createdAt;
+  if (Date.now() - lastTouched.getTime() < staleAfter) return job;
+
+  const [failed] = await db.update(mediaJobsTable).set({
+    status: "failed",
+    errorMessage: "Processing was interrupted by a server restart. Please retry the enhancement.",
+    updatedAt: new Date(),
+  }).where(eq(mediaJobsTable.id, job.id)).returning();
+
+  logger.warn({ jobId: job.id, staleAfter }, "Recovered interrupted processing job");
+  return failed ?? job;
+}
 
 /**
  * Convert a job row into a safe API response.
@@ -249,7 +275,7 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
 
   // Mark processing
   await db.update(mediaJobsTable)
-    .set({ status: "processing", enhancementType, presetId: presetId ?? null })
+    .set({ status: "processing", enhancementType, presetId: presetId ?? null, updatedAt: new Date() })
     .where(eq(mediaJobsTable.id, jobId));
 
   // Debit credit (monthly + daily)
@@ -267,7 +293,7 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
   // ── Background: real image/video enhancement ──
   // Helper: update job progress message (non-blocking, swallows errors)
   const setProgress = (msg: string) =>
-    db.update(mediaJobsTable).set({ errorMessage: msg }).where(eq(mediaJobsTable.id, jobId)).catch(() => {});
+    db.update(mediaJobsTable).set({ errorMessage: msg, updatedAt: new Date() }).where(eq(mediaJobsTable.id, jobId)).catch(() => {});
 
   try {
     const rawB64 = job.base64Data;
@@ -314,6 +340,7 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
         completedAt,
         referenceCode,
         errorMessage: null,
+        updatedAt: new Date(),
       }).where(eq(mediaJobsTable.id, jobId));
 
       logger.info({ jobId, type: enhancementType, frames: result.framesProcessed, scenes: result.sceneChanges, ms: result.processingMs }, "Video restoration completed");
@@ -382,6 +409,7 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
       completedAt,
       referenceCode,
       errorMessage: null,
+      updatedAt: new Date(),
     }).where(eq(mediaJobsTable.id, jobId));
     mark("db_save");
 
@@ -392,6 +420,7 @@ router.post("/media/enhance", requireAuth, async (req: AuthRequest, res): Promis
       status: "failed",
       processingTimeMs: Date.now() - startTime,
       errorMessage: err instanceof Error ? err.message : "Enhancement failed",
+      updatedAt: new Date(),
     }).where(eq(mediaJobsTable.id, jobId));
   }
 });
@@ -597,6 +626,8 @@ router.get("/media/jobs", requireAuth, async (req: AuthRequest, res): Promise<vo
 
 // ─── Get single job ───────────────────────────────────────────
 router.get("/media/jobs/:id", requireAuth, async (req: AuthRequest, res): Promise<void> => {
+  setNoStore(res);
+
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   if (isNaN(id)) {
@@ -612,7 +643,8 @@ router.get("/media/jobs/:id", requireAuth, async (req: AuthRequest, res): Promis
     return;
   }
 
-  res.json(jobToResponse(job));
+  const recoveredJob = await recoverInterruptedProcessingJob(job);
+  res.json(jobToResponse(recoveredJob));
 });
 
 // ─── Presets ──────────────────────────────────────────────────

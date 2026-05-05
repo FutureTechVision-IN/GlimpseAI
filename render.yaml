@@ -27,6 +27,14 @@ services:
         value: "900000"
       - key: RATE_LIMIT_MAX
         value: "300"
+      - key: SHARP_CONCURRENCY
+        value: "1"
+      - key: SHARP_CACHE_MEMORY_MB
+        value: "64"
+      - key: IMAGE_MAX_PROCESSING_DIMENSION
+        value: "1920"
+      - key: IMAGE_WORKING_JPEG_QUALITY
+        value: "88"
       - key: GOOGLE_DRIVE_FOLDER_ID
         value: 17-NtAES7W6ua0FS7mqYX3-thbRkQkLQG
       - key: GOOGLE_DRIVE_MAKE_PUBLIC
