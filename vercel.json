@@ -6,6 +6,10 @@
   "framework": "vite",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://glimpse-ai-api-docker.onrender.com/api/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
