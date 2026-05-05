@@ -47,3 +47,4 @@ artifacts/glimpse-ai/zip-smoke.mjs
 
 # Cursor session/debug artifacts
 .cursor/
+.vercel
