@@ -22,4 +22,4 @@ RUN pnpm --filter @workspace/api-server run build
 
 EXPOSE 10000
 
-CMD ["sh", "-lc", "pnpm --filter @workspace/db run push && pnpm --filter @workspace/api-server run start"]
+CMD ["sh", "-lc", "pnpm --filter @workspace/db run migrate:compat && pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run start"]
