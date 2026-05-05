@@ -1,6 +1,7 @@
 node_modules
 **/node_modules
 **/dist
+services/restoration/.venv
 .git
 .DS_Store
 .zip-smoke

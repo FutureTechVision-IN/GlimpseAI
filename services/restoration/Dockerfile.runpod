@@ -1,0 +1,24 @@
+FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=7860 \
+    RESTORATION_PORT=7860
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg git libgl1 libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY services/restoration/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY services/restoration/server.py ./server.py
+COPY services/restoration/models/ ./models/
+
+RUN mkdir -p /app/gfpgan/weights
+
+EXPOSE 7860
+
+CMD ["python", "server.py"]

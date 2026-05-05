@@ -55,7 +55,7 @@ from pydantic import BaseModel, Field
 # ─── Configuration ────────────────────────────────────────────────────────────
 MODEL_DIR = Path(__file__).parent / "models"
 WEIGHTS_DIR = Path(__file__).parent / "gfpgan" / "weights"
-PORT = int(os.getenv("RESTORATION_PORT", "7860"))
+PORT = int(os.getenv("PORT", os.getenv("RESTORATION_PORT", "7860")))
 
 # Device selection: CUDA > MPS > CPU
 # GFPGAN/CodeFormer run on CPU for stability (MPS has unsupported ops).
@@ -1035,6 +1035,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/ping")
+async def ping():
+    return {"status": "ok"}
 
 
 @app.get("/health", response_model=HealthResponse)

@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { type ApiFailureCause } from "./api-errors";
+import { getRestorationHealth } from "./restoration-client";
 
 // ---------------------------------------------------------------------------
 // Fetch timeout helper — avoids Node.js undici "Headers Timeout Error" that
@@ -653,18 +654,12 @@ class AIProviderService {
     if (isFaceSuggestion) {
       let sidecarServes = false;
       try {
-        const healthRes = await fetchWithTimeout(
-          `http://localhost:${process.env.RESTORATION_PORT || "7860"}/health`,
-          { timeout: 3000 },
-        );
-        if (healthRes.ok) {
-          const health = await healthRes.json() as { capabilities?: string[] };
-          const caps = health.capabilities ?? [];
-          if (caps.includes("auto_face") || caps.includes("face_restore")) {
-            sidecarServes = true;
-            // Confidence bump when premium model is reachable
-            localResult.confidence = Math.min(0.95, localResult.confidence + 0.05);
-          }
+        const { ok, health } = await getRestorationHealth();
+        const caps = health?.capabilities ?? [];
+        if (ok && (caps.includes("auto_face") || caps.includes("face_restore"))) {
+          sidecarServes = true;
+          // Confidence bump when premium model is reachable
+          localResult.confidence = Math.min(0.95, localResult.confidence + 0.05);
         }
       } catch {
         // Sidecar unreachable — auto_face still served by native Sharp fallback

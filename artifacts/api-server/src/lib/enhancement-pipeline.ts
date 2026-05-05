@@ -94,6 +94,7 @@ export async function runEnhancementChain(
   const stages: ChainStageReport[] = [];
   const sidecarAvailable = await isRestorationServiceAvailable();
   let servedBySidecar = false;
+  let restoredFaceProfile = false;
 
   let buffer = base64Data;
   let bufferMime = mimeType;
@@ -117,6 +118,7 @@ export async function runEnhancementChain(
         servedBy: useSidecar ? "sidecar" : "native",
       });
       if (useSidecar) servedBySidecar = true;
+      if (RESTORATION_ENHANCE_OPS.has(spec.enhance)) restoredFaceProfile = true;
     } catch (err) {
       logger.error({ err, op: spec.enhance }, "Enhancement chain: enhance stage failed");
       throw err;
@@ -133,7 +135,11 @@ export async function runEnhancementChain(
     try {
       const out = await enhanceImage(buffer, bufferMime, {
         enhancementType: "filter",
-        settings: { ...(spec.settings ?? {}), filterId: spec.filterId },
+        settings: {
+          ...(spec.settings ?? {}),
+          filterId: spec.filterId,
+          ...(restoredFaceProfile ? { filterProfile: "restored-face" } : {}),
+        },
         aiGuidance: null,
       });
       buffer = out.base64;

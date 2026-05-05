@@ -6,6 +6,14 @@ import {
 } from "@workspace/filter-registry";
 import { logger } from "./logger";
 import type { AIEnhancementGuidance } from "./ai-provider";
+import {
+  fetchRestorationService,
+  getRedactedRestorationServiceUrl,
+  invalidateRestorationHealthCache,
+  isRestorationServiceAvailable as probeRestorationService,
+} from "./restoration-client";
+
+export const isRestorationServiceAvailable = probeRestorationService;
 
 export interface EnhanceOptions {
   enhancementType: string;
@@ -184,47 +192,90 @@ function resolveCanonicalFilterId(settings: Record<string, unknown>): string | n
   return null;
 }
 
+type FilterApplicationProfile = "standard" | "restored-face";
+type RecombMatrix3x3 = [[number, number, number], [number, number, number], [number, number, number]];
+
+function softenMultiplier(value: number | undefined, amount: number): number | undefined {
+  if (value === undefined) return undefined;
+  return 1 + ((value - 1) * amount);
+}
+
+function softenLinearOffset(value: number, amount: number): number {
+  return value * amount;
+}
+
+function softenChannel(value: number, amount: number): number {
+  return Math.round(128 + ((value - 128) * amount));
+}
+
+function softenRecombMatrix(matrix: number[][], amount: number): RecombMatrix3x3 {
+  const identity = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ];
+  return matrix.map((row, rowIndex) =>
+    row.map((value, colIndex) => {
+      const base = identity[rowIndex]?.[colIndex] ?? 0;
+      return base + ((value - base) * amount);
+    }),
+  ) as [[number, number, number], [number, number, number], [number, number, number]];
+}
+
 function applyFilterOperations(
   pipeline: sharp.Sharp,
   operations: FilterOperation[],
+  profile: FilterApplicationProfile = "standard",
 ): sharp.Sharp {
   let next = pipeline;
   for (const operation of operations) {
+    const faceSafe = profile === "restored-face";
     switch (operation.type) {
       case "modulate":
         next = next.modulate({
-          ...(operation.brightness !== undefined ? { brightness: operation.brightness } : {}),
-          ...(operation.saturation !== undefined ? { saturation: operation.saturation } : {}),
+          ...(operation.brightness !== undefined
+            ? { brightness: faceSafe ? softenMultiplier(operation.brightness, 0.45) : operation.brightness }
+            : {}),
+          ...(operation.saturation !== undefined
+            ? { saturation: faceSafe ? softenMultiplier(operation.saturation, 0.38) : operation.saturation }
+            : {}),
           ...(operation.hue !== undefined ? { hue: operation.hue } : {}),
         });
         break;
       case "normalize":
-        next = next.normalize();
+        if (!faceSafe) next = next.normalize();
         break;
       case "sharpen":
         next = next.sharpen({
-          sigma: operation.sigma,
-          ...(operation.m1 !== undefined ? { m1: operation.m1 } : {}),
-          ...(operation.m2 !== undefined ? { m2: operation.m2 } : {}),
+          sigma: faceSafe ? Math.min(0.55, operation.sigma * 0.45) : operation.sigma,
+          ...(operation.m1 !== undefined ? { m1: faceSafe ? operation.m1 * 0.45 : operation.m1 } : {}),
+          ...(operation.m2 !== undefined ? { m2: faceSafe ? operation.m2 * 0.45 : operation.m2 } : {}),
         });
         break;
       case "gamma":
-        next = next.gamma(operation.value);
+        next = next.gamma(faceSafe ? (1 + ((operation.value - 1) * 0.6)) : operation.value);
         break;
       case "safeGamma":
-        next = safeGamma(next, operation.value);
+        next = safeGamma(next, faceSafe ? (1 + ((operation.value - 1) * 0.6)) : operation.value);
         break;
       case "grayscale":
         next = next.grayscale();
         break;
       case "tint":
-        next = next.tint({ r: operation.r, g: operation.g, b: operation.b });
+        next = next.tint({
+          r: faceSafe ? softenChannel(operation.r, 0.35) : operation.r,
+          g: faceSafe ? softenChannel(operation.g, 0.35) : operation.g,
+          b: faceSafe ? softenChannel(operation.b, 0.35) : operation.b,
+        });
         break;
       case "linear":
-        next = next.linear(operation.a, operation.b);
+        next = next.linear(
+          faceSafe ? (1 + ((operation.a - 1) * 0.45)) : operation.a,
+          faceSafe ? softenLinearOffset(operation.b, 0.45) : operation.b,
+        );
         break;
       case "recomb":
-        next = next.recomb(operation.matrix);
+        next = next.recomb(faceSafe ? softenRecombMatrix(operation.matrix, 0.35) : operation.matrix);
         break;
     }
   }
@@ -234,10 +285,11 @@ function applyFilterOperations(
 function applyRegisteredFilterPipeline(
   pipeline: sharp.Sharp,
   filterId: string,
+  profile: FilterApplicationProfile = "standard",
 ): sharp.Sharp {
   const filter = CANONICAL_FILTERS_BY_ID.get(filterId);
   if (!filter) return pipeline;
-  return applyFilterOperations(pipeline, filter.operations);
+  return applyFilterOperations(pipeline, filter.operations, profile);
 }
 
 /** Apply registry filter on an already-restored raster (sidecar output). */
@@ -248,7 +300,7 @@ async function applyCanonicalFilterToRestoredBase64(
   const buf = Buffer.from(base64, "base64");
   const metaIn = await sharp(buf).metadata();
   const hasAlpha = metaIn.hasAlpha === true;
-  const pipe = applyRegisteredFilterPipeline(sharp(buf), filterId);
+  const pipe = applyRegisteredFilterPipeline(sharp(buf), filterId, "restored-face");
   const outBuf = hasAlpha
     ? await pipe.png({ compressionLevel: 6 }).toBuffer()
     : await pipe.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
@@ -342,13 +394,6 @@ async function constrainInputForMemorySafeProcessing(
   return resized;
 }
 
-// ---------------------------------------------------------------------------
-// AI Restoration Service Bridge (GFPGAN + CodeFormer + Real-ESRGAN)
-// ---------------------------------------------------------------------------
-
-const RESTORATION_SERVICE_URL = process.env.RESTORATION_SERVICE_URL
-  || `http://localhost:${process.env.RESTORATION_PORT || "7860"}`;
-
 /** Set of enhancement types that route to the Python restoration sidecar. */
 const RESTORATION_TYPES = new Set([
   "face_restore",
@@ -360,6 +405,10 @@ const RESTORATION_TYPES = new Set([
   "esrgan_upscale_4x",
   "old_photo_restore",
 ]);
+
+// ---------------------------------------------------------------------------
+// AI Restoration Service Bridge (GFPGAN + CodeFormer + Real-ESRGAN)
+// ---------------------------------------------------------------------------
 
 interface RestorationResponse {
   image_base64: string;
@@ -375,60 +424,6 @@ interface RestorationResponse {
     degradation_level: string;
     recommended_model: string;
   }>;
-}
-
-// ---------------------------------------------------------------------------
-// Shared undici Agent — reused across all restoration requests to avoid
-// creating a new TCP connection + TLS handshake per request.
-// ---------------------------------------------------------------------------
-let _sharedDispatcher: unknown | undefined;
-async function getSharedDispatcher(): Promise<unknown | undefined> {
-  if (_sharedDispatcher) return _sharedDispatcher;
-  try {
-    const moduleName = "undici";
-    const undici = await import(moduleName);
-    _sharedDispatcher = new undici.Agent({
-      headersTimeout: 15 * 60 * 1000,
-      bodyTimeout: 15 * 60 * 1000,
-      connectTimeout: 10_000,
-      keepAliveTimeout: 60_000,
-      keepAliveMaxTimeout: 600_000,
-      connections: 4,
-    });
-  } catch {
-    // undici not available — fall back to default
-  }
-  return _sharedDispatcher;
-}
-
-// ---------------------------------------------------------------------------
-// Health-check cache — avoids hammering /health on rapid successive calls
-// ---------------------------------------------------------------------------
-let _healthCacheResult = false;
-let _healthCacheExpiry = 0;
-const HEALTH_CACHE_TTL_MS = 10_000; // 10 seconds
-
-/**
- * Check whether the restoration sidecar is reachable.
- * Caches result for 10s to avoid excessive health checks during bursts.
- */
-export async function isRestorationServiceAvailable(): Promise<boolean> {
-  const now = Date.now();
-  if (now < _healthCacheExpiry) return _healthCacheResult;
-
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(`${RESTORATION_SERVICE_URL}/health`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    _healthCacheResult = res.ok;
-    _healthCacheExpiry = now + HEALTH_CACHE_TTL_MS;
-    return _healthCacheResult;
-  } catch {
-    _healthCacheResult = false;
-    _healthCacheExpiry = now + HEALTH_CACHE_TTL_MS;
-    return false;
-  }
 }
 
 /**
@@ -457,7 +452,12 @@ async function callRestorationService(
   const restorationModel = (settings?.restorationModel as string) || "auto";
   const fidelity = typeof settings?.fidelity === "number" ? settings.fidelity : 0.5;
 
-  logger.info({ enhancementType, mode, restorationModel, serviceUrl: RESTORATION_SERVICE_URL }, "Calling restoration service");
+  logger.info({
+    enhancementType,
+    mode,
+    restorationModel,
+    serviceUrl: getRedactedRestorationServiceUrl(),
+  }, "Calling restoration service");
 
   // Downscale large images before sending to ML sidecar.
   const MAX_RESTORATION_DIM = 1024;
@@ -476,7 +476,6 @@ async function callRestorationService(
 
   const TIMEOUT_MS = 15 * 60 * 1000; // 15 min
   const MAX_RETRIES = 2;
-  const dispatcher = await getSharedDispatcher();
   const requestBody = JSON.stringify({
     image_base64: sendBase64,
     mode,
@@ -493,23 +492,15 @@ async function callRestorationService(
       const backoffMs = 2000 * Math.pow(2, attempt - 1);
       logger.info({ attempt, backoffMs }, "Retrying restoration service after backoff");
       await new Promise(resolve => setTimeout(resolve, backoffMs));
-      // Invalidate health cache on retry so we re-check availability
-      _healthCacheExpiry = 0;
+      invalidateRestorationHealthCache();
     }
 
-    const ctrl = new AbortController();
-    const timeoutId = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-
     try {
-      const response = await fetch(`${RESTORATION_SERVICE_URL}/restore`, {
+      const response = await fetchRestorationService("/restore", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: ctrl.signal,
         body: requestBody,
-        ...(dispatcher ? { dispatcher } : {}),
-      } as RequestInit);
-
-      clearTimeout(timeoutId);
+      }, { timeoutMs: TIMEOUT_MS });
 
       if (!response.ok) {
         const errBody = await response.text();
@@ -535,7 +526,6 @@ async function callRestorationService(
 
       return { base64: result.image_base64, mimeType: result.mime_type };
     } catch (err) {
-      clearTimeout(timeoutId);
       if (err instanceof Error && err.message.includes("Restoration service failed (4")) {
         throw err; // Don't retry client errors
       }
@@ -600,30 +590,20 @@ export async function callVideoRestoration(
       ? "upscale_2x"
       : mode;
 
-  // 10-minute timeout for video processing (frame-by-frame ML)
-  const ctrl = new AbortController();
-  const timeoutId = setTimeout(() => ctrl.abort(), 10 * 60 * 1000);
-
-  let response: Response;
-  try {
-    response = await fetch(`${RESTORATION_SERVICE_URL}/restore-video`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: ctrl.signal,
-      body: JSON.stringify({
-        video_base64: videoBase64,
-        mode: effectiveMode,
-        face_enhance: faceEnhance,
-        max_frames: maxFrames,
-        temporal_consistency: temporalConsistency,
-        restoration_model: restorationModel,
-        color_grade: mappedColorGrade ?? undefined,
-        filter_id: unmappedFilterId ?? undefined,
-      }),
-    });
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  const response = await fetchRestorationService("/restore-video", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      video_base64: videoBase64,
+      mode: effectiveMode,
+      face_enhance: faceEnhance,
+      max_frames: maxFrames,
+      temporal_consistency: temporalConsistency,
+      restoration_model: restorationModel,
+      color_grade: mappedColorGrade ?? undefined,
+      filter_id: unmappedFilterId ?? undefined,
+    }),
+  }, { timeoutMs: 10 * 60 * 1000 });
 
   if (!response.ok) {
     const errBody = await response.text();
@@ -674,7 +654,7 @@ async function renderCanonicalImage(
 
   // Route restoration types to the Python sidecar
   if (RESTORATION_TYPES.has(type)) {
-    const available = await isRestorationServiceAvailable();
+    const available = await probeRestorationService();
     if (!available) {
       logger.warn({ type }, "Restoration service unreachable — falling back to local sharp processing");
     } else {
@@ -735,8 +715,10 @@ async function renderCanonicalImage(
     renderKind,
   }, "Enhancing image");
 
+  const filterProfile = s.filterProfile === "restored-face" ? "restored-face" : "standard";
+
   if (type === "filter" && filterId) {
-    pipeline = applyRegisteredFilterPipeline(pipeline, filterId);
+    pipeline = applyRegisteredFilterPipeline(pipeline, filterId, filterProfile);
   } else {
     switch (type) {
       case "auto": {
@@ -1202,7 +1184,8 @@ async function renderCanonicalImage(
   }
 
   if (filterId && type !== "filter") {
-    pipeline = applyRegisteredFilterPipeline(pipeline, filterId);
+    const postEnhanceFilterProfile = RESTORATION_TYPES.has(type) ? "restored-face" : "standard";
+    pipeline = applyRegisteredFilterPipeline(pipeline, filterId, postEnhanceFilterProfile);
   }
 
   // Apply granular settings overrides
