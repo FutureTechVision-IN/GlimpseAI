@@ -32,6 +32,7 @@ import { getEnhancementMeta, getFaceRestorationDisplay, VIDEO_ROADMAP } from "@/
 import { describeQuotaError } from "@/components/usage-summary";
 import { ProgressTimeline } from "@/components/progress-timeline";
 import { supportMailto } from "@/lib/support";
+import { apiUrl } from "@/lib/api-url";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -267,7 +268,7 @@ function trackAiEvent(evt: AiAnalyticsEvent) {
   if (evt.action === "applied" || evt.action === "dismissed") {
     const token = localStorage.getItem("glimpse_token");
     if (token) {
-      fetch("/api/media/feedback", {
+      fetch(apiUrl("/api/media/feedback"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ enhancement: evt.enhancement, action: evt.action }),
@@ -1028,7 +1029,7 @@ export default function Editor() {
       setIsRenderingPreview(true);
       try {
         const token = localStorage.getItem("glimpse_token");
-        const response = await fetch("/api/media/preview", {
+        const response = await fetch(apiUrl("/api/media/preview"), {
           method: "POST",
           signal: controller.signal,
           headers: {
@@ -1268,7 +1269,7 @@ export default function Editor() {
                 upscale: upscaleAfter ?? null,
                 settings,
               };
-              const resp = await fetch("/api/media/enhance-chain", {
+              const resp = await fetch(apiUrl("/api/media/enhance-chain"), {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
@@ -1397,7 +1398,7 @@ export default function Editor() {
         const blob = await fetch(item.dataUrl).then((r) => r.blob());
         const base64 = item.dataUrl.split(",")[1] ?? "";
         const isVideo = (item.type || "").startsWith("video/");
-        const uploadResp = await fetch("/api/media/upload", {
+        const uploadResp = await fetch(apiUrl("/api/media/upload"), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeader },
           body: JSON.stringify({
@@ -1433,7 +1434,7 @@ export default function Editor() {
       return;
     }
     try {
-      const resp = await fetch("/api/media/enhance-batch", {
+      const resp = await fetch(apiUrl("/api/media/enhance-batch"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader },
         body: JSON.stringify({ jobIds: ids, enhancementType: effectiveType, settings }),
@@ -1528,7 +1529,7 @@ export default function Editor() {
 
       for (const it of completed) {
         try {
-          const r = await fetch(`/api/media/jobs/${it.jobId}`, { headers: authHeader });
+          const r = await fetch(apiUrl(`/api/media/jobs/${it.jobId}`), { headers: authHeader });
           if (!r.ok) {
             skippedNoData++;
             continue;
@@ -1626,7 +1627,7 @@ export default function Editor() {
       const updates = await Promise.all(
         inflight.map(async (it) => {
           try {
-            const r = await fetch(`/api/media/jobs/${it.jobId}`, { headers: authHeader });
+            const r = await fetch(apiUrl(`/api/media/jobs/${it.jobId}`), { headers: authHeader });
             if (!r.ok) return null;
             const j = await r.json() as { status?: string; errorMessage?: string };
             return { id: it.id, status: j.status, error: j.errorMessage };

@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/auth-context";
 import { UsageSummary, type UsageSnapshot } from "@/components/usage-summary";
 import { CurrencySelector } from "@/components/currency-selector";
 import { PolicyNotice } from "@/components/policy-notice";
+import { apiUrl } from "@/lib/api-url";
 import {
   type CurrencyCode,
   formatInDisplay,
@@ -121,9 +122,9 @@ export default function Billing(): React.ReactElement {
     (async (): Promise<void> => {
       try {
         const [packsResp, tiersResp, charityResp] = await Promise.all([
-          fetch("/api/payments/credit-packs"),
-          fetch("/api/payments/contribution-tiers"),
-          fetch("/api/payments/charity-info"),
+          fetch(apiUrl("/api/payments/credit-packs")),
+          fetch(apiUrl("/api/payments/contribution-tiers")),
+          fetch(apiUrl("/api/payments/charity-info")),
         ]);
         const packsBody = await readJson<{ packs?: CreditPack[] }>(packsResp);
         const tiersBody = await readJson<{ tiers?: ContributionTier[] }>(tiersResp);
@@ -178,7 +179,7 @@ export default function Billing(): React.ReactElement {
   async function purchasePack(pack: CreditPack): Promise<void> {
     setBusyPackId(pack.id);
     try {
-      const orderResp = await fetch("/api/payments/credit-packs/create-order", {
+      const orderResp = await fetch(apiUrl("/api/payments/credit-packs/create-order"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({ packId: pack.id }),
@@ -299,7 +300,7 @@ export default function Billing(): React.ReactElement {
     };
     setBusy(true);
     try {
-      const orderResp = await fetch("/api/contributions/create-order", {
+      const orderResp = await fetch(apiUrl("/api/contributions/create-order"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify(tierId ? { tierId } : { customAmountInr }),

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { AlertOctagon, AlertTriangle, Bell, BookOpen, CheckCircle2, ChevronRight, Loader2, RefreshCw, ShieldAlert, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/api-url";
 
 /**
  * Admin-facing panel that surfaces structured error events written by
@@ -98,7 +99,7 @@ export function ErrorEventsPanel(): React.ReactElement {
 
   const updateStatus = useCallback(async (id: number, status: string): Promise<void> => {
     try {
-      const resp = await fetch(`/api/admin/error-events/${id}`, {
+      const resp = await fetch(apiUrl(`/api/admin/error-events/${id}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({ status }),

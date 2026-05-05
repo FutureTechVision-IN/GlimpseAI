@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { MessageSquarePlus, Star, X, Loader2, CheckCircle2, Bug, Lightbulb, Heart, MoreHorizontal } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { SUPPORT_EMAIL } from "@/lib/support";
+import { apiUrl } from "@/lib/api-url";
 
 /**
  * Floating "Send feedback" widget mounted globally inside Layout.
@@ -66,7 +67,7 @@ export function FeedbackWidget(): React.ReactElement {
       const token = readToken();
       if (token) headers.Authorization = `Bearer ${token}`;
 
-      const resp = await fetch("/api/feedback", {
+      const resp = await fetch(apiUrl("/api/feedback"), {
         method: "POST",
         headers,
         body: JSON.stringify({

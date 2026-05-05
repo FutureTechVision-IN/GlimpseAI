@@ -3,6 +3,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { useLocation } from "wouter";
 import { ToastAction } from "@/components/ui/toast";
+import { apiUrl } from "@/lib/api-url";
 
 /**
  * Background poller that surfaces newly opened admin error events as
@@ -33,7 +34,7 @@ export function AdminErrorToaster(): React.ReactElement | null {
       try {
         const token = window.localStorage.getItem("glimpse_token");
         if (!token) return;
-        const resp = await fetch("/api/admin/notifications/summary", {
+        const resp = await fetch(apiUrl("/api/admin/notifications/summary"), {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!resp.ok) return;

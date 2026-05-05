@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Bug, Heart, Lightbulb, Loader2, MoreHorizontal, RefreshCw, Star, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/api-url";
 
 /**
  * Admin triage view over the persisted `feedback_entries` table. The page
@@ -61,7 +62,7 @@ export function FeedbackPanel(): React.ReactElement {
       qs.set("limit", "100");
       if (statusFilter && statusFilter !== "all") qs.set("status", statusFilter);
       if (categoryFilter) qs.set("category", categoryFilter);
-      const resp = await fetch(`/api/admin/feedback?${qs.toString()}`, { headers: authHeader() });
+      const resp = await fetch(apiUrl(`/api/admin/feedback?${qs.toString()}`), { headers: authHeader() });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = (await resp.json()) as ListResponse;
       setItems(data.items ?? []);
@@ -81,7 +82,7 @@ export function FeedbackPanel(): React.ReactElement {
 
   const updateEntry = useCallback(async (id: number, patch: Partial<{ status: string; resolutionNote: string }>) => {
     try {
-      const resp = await fetch(`/api/admin/feedback/${id}`, {
+      const resp = await fetch(apiUrl(`/api/admin/feedback/${id}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify(patch),

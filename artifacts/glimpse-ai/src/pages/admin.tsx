@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { ErrorEventsPanel } from "@/components/admin/error-events-panel";
 import { FeedbackPanel } from "@/components/admin/feedback-panel";
+import { apiUrl } from "@/lib/api-url";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -144,9 +145,9 @@ function Overview() {
   useEffect(() => {
     const token = localStorage.getItem("glimpse_token");
     if (!token) return;
-    fetch("/api/admin/usage", { headers: { Authorization: `Bearer ${token}` } })
+    fetch(apiUrl("/api/admin/usage"), { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json()).then(d => setUsageData(d.daily ?? [])).catch(() => {});
-    fetch("/api/admin/funnel", { headers: { Authorization: `Bearer ${token}` } })
+    fetch(apiUrl("/api/admin/funnel"), { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json()).then(d => setFunnelData(d)).catch(() => {});
   }, []);
 
@@ -413,7 +414,7 @@ function UsersSection() {
         toast({ title: "Select a plan", variant: "destructive" });
         return;
       }
-      const res = await fetch(`/api/admin/users/${planDialog.userId}/plan`, {
+      const res = await fetch(apiUrl(`/api/admin/users/${planDialog.userId}/plan`), {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -1105,9 +1106,9 @@ function ApiKeysSection() {
     setIsLoading(true);
     try {
       const [keysRes, statusRes, reportRes] = await Promise.all([
-        fetch("/api/admin/provider-keys", { headers }),
-        fetch("/api/admin/provider-keys/status", { headers }),
-        fetch("/api/admin/provider-keys/usage-report", { headers }),
+        fetch(apiUrl("/api/admin/provider-keys"), { headers }),
+        fetch(apiUrl("/api/admin/provider-keys/status"), { headers }),
+        fetch(apiUrl("/api/admin/provider-keys/usage-report"), { headers }),
       ]);
       const keysData = await keysRes.json();
       const statusData = await statusRes.json();
@@ -1123,7 +1124,7 @@ function ApiKeysSection() {
   const handleValidateAll = async () => {
     setValidating(true);
     try {
-      await fetch("/api/admin/provider-keys/validate-all", { method: "POST", headers });
+      await fetch(apiUrl("/api/admin/provider-keys/validate-all"), { method: "POST", headers });
       toast({ title: "Validation complete" });
       await fetchKeys();
     } catch {}
@@ -1132,7 +1133,7 @@ function ApiKeysSection() {
 
   const handleLoadEnv = async () => {
     try {
-      await fetch("/api/admin/provider-keys/load-env", { method: "POST", headers });
+      await fetch(apiUrl("/api/admin/provider-keys/load-env"), { method: "POST", headers });
       toast({ title: "Keys reloaded from .env" });
       await fetchKeys();
     } catch {}
@@ -1140,7 +1141,7 @@ function ApiKeysSection() {
 
   const handleToggleStatus = async (id: number, currentStatus: string) => {
     const newStatus = currentStatus === "active" ? "inactive" : "active";
-    await fetch(`/api/admin/provider-keys/${id}/status`, {
+    await fetch(apiUrl(`/api/admin/provider-keys/${id}/status`), {
       method: "PATCH", headers, body: JSON.stringify({ status: newStatus }),
     });
     await fetchKeys();
@@ -1148,7 +1149,7 @@ function ApiKeysSection() {
 
   const handleDelete = async (id: number) => {
     if (!confirm("Remove this key?")) return;
-    await fetch(`/api/admin/provider-keys/${id}`, { method: "DELETE", headers });
+    await fetch(apiUrl(`/api/admin/provider-keys/${id}`), { method: "DELETE", headers });
     toast({ title: "Key removed" });
     await fetchKeys();
   };
@@ -1166,7 +1167,7 @@ function ApiKeysSection() {
       .map((k) => k.trim())
       .filter((k) => k.length > 0);
     if (lines.length === 0) return;
-    const res = await fetch("/api/admin/provider-keys/bulk-import", {
+    const res = await fetch(apiUrl("/api/admin/provider-keys/bulk-import"), {
       method: "POST", headers,
       body: JSON.stringify({ keys: lines, provider: bulkForm.provider, model: bulkForm.model, tier: bulkForm.tier }),
     });
@@ -1545,11 +1546,11 @@ function AnalyticsSection() {
       setIsLoading(true);
       try {
         const [dailyRes, typesRes, usersRes, monthlyRes, keyUsageRes] = await Promise.all([
-          fetch("/api/admin/analytics/daily-summary?days=30", { headers }),
-          fetch("/api/admin/analytics/enhancement-types", { headers }),
-          fetch("/api/admin/analytics/top-users?limit=15", { headers }),
-          fetch("/api/admin/analytics/monthly-summary", { headers }),
-          fetch("/api/admin/analytics/key-usage?days=30", { headers }),
+          fetch(apiUrl("/api/admin/analytics/daily-summary?days=30"), { headers }),
+          fetch(apiUrl("/api/admin/analytics/enhancement-types"), { headers }),
+          fetch(apiUrl("/api/admin/analytics/top-users?limit=15"), { headers }),
+          fetch(apiUrl("/api/admin/analytics/monthly-summary"), { headers }),
+          fetch(apiUrl("/api/admin/analytics/key-usage?days=30"), { headers }),
         ]);
         const [daily, types, users, monthly, keys] = await Promise.all([
           dailyRes.json(), typesRes.json(), usersRes.json(), monthlyRes.json(), keyUsageRes.json(),
@@ -1844,12 +1845,12 @@ function AiInsightsSection() {
 
     const token = localStorage.getItem("glimpse_token");
     if (token) {
-      fetch("/api/admin/ai-pool", { headers: { Authorization: `Bearer ${token}` } })
+      fetch(apiUrl("/api/admin/ai-pool"), { headers: { Authorization: `Bearer ${token}` } })
         .then(r => r.ok ? r.json() : null)
         .then(d => { if (d) setPool(d); })
         .catch(() => {});
 
-      fetch("/api/admin/ai-recommendations", { headers: { Authorization: `Bearer ${token}` } })
+      fetch(apiUrl("/api/admin/ai-recommendations"), { headers: { Authorization: `Bearer ${token}` } })
         .then(r => r.ok ? r.json() : null)
         .then(d => { if (d?.recommendations) setRecommendations(d.recommendations); })
         .catch(() => {});
