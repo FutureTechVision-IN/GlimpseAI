@@ -16,6 +16,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/restoration/server.py ./server.py
 COPY services/restoration/models/ ./models/
+COPY services/restoration/gfpgan/weights/ ./gfpgan/weights/
+COPY enhancement_modules/CodeFormer-master/ /enhancement_modules/CodeFormer-master/
 
 RUN mkdir -p /app/gfpgan/weights
 
