@@ -75,3 +75,17 @@ services:
         sync: false
       - key: PROVIDER_KEYS_ZAI_GLM_4_5_AIR_FREE
         sync: false
+      - key: GEMINI_API_KEYS
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_QWEN_IMAGE_EDIT_API_KEY
+        sync: false
+      - key: NVIDIA_FLUX_2_KLEIN_4B_API_KEY
+        sync: false
+      - key: NVIDIA_FLUX_1_DEV_API_KEY
+        sync: false
+      - key: NVIDIA_RELIGHTING_API_KEY
+        sync: false
+      - key: NVIDIA_ACTIVE_SPEAKER_API_KEY
+        sync: false
