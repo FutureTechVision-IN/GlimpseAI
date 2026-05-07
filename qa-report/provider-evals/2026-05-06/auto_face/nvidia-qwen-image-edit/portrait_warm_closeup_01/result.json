@@ -1,0 +1,55 @@
+{
+  "date": "2026-05-06T01:13:19.005Z",
+  "capability": "auto_face",
+  "productFeature": "Photo Studio -> Face Restoration -> Auto",
+  "provider": "NVIDIA",
+  "model": "qwen-image-edit",
+  "keyEnvVarUsed": "NVIDIA_API_KEY",
+  "input": {
+    "sourceOriginal": "/Users/bipbabu/Downloads/portrait-happy-attractive-woman-warm-pink-sweater-long-hair-natural-look-sincere-smile-positive-mood-holding-hands-up-feeling-surprised-isolated.jpg",
+    "degradedPath": "/Users/bipbabu/Library/CloudStorage/OneDrive-Cisco/Personal/05-Education & Learning/Future Tech Vision AI/GitHub/GlimpseAI.v1.1/qa-report/provider-evals/2026-05-06/auto_face/nvidia-qwen-image-edit/portrait_warm_closeup_01/input-degraded.jpg",
+    "width": 768,
+    "height": 512,
+    "mime": "jpeg"
+  },
+  "prompt": "Restore natural facial detail and reduce JPEG/compression softness. Preserve the person identity, pose, clothing, hands, hair, pink background, and camera framing. Do not stylize, beautify, change age, change expression, or alter facial geometry. Keep skin natural and avoid waxy texture.",
+  "baseline": {
+    "sharpFallbackPath": "/Users/bipbabu/Library/CloudStorage/OneDrive-Cisco/Personal/05-Education & Learning/Future Tech Vision AI/GitHub/GlimpseAI.v1.1/qa-report/provider-evals/2026-05-06/auto_face/nvidia-qwen-image-edit/portrait_warm_closeup_01/sharp-baseline-auto_face.jpg",
+    "width": 768,
+    "height": 512
+  },
+  "providerStatus": "api-unreachable-or-unsupported",
+  "providerOutputPath": null,
+  "providerDecodeNote": "",
+  "attempts": [
+    {
+      "name": "hosted-genai-qwen-image-edit",
+      "url": "https://ai.api.nvidia.com/v1/genai/qwen/qwen-image-edit",
+      "status": 404,
+      "latencyMs": 210,
+      "bodyPreview": "404 page not found\n"
+    },
+    {
+      "name": "hosted-genai-qwen-image-edit-infer",
+      "url": "https://ai.api.nvidia.com/v1/genai/qwen/qwen-image-edit/infer",
+      "status": 404,
+      "latencyMs": 93,
+      "bodyPreview": "404 page not found\n"
+    },
+    {
+      "name": "hosted-genai-qwen-image-edit-2511",
+      "url": "https://ai.api.nvidia.com/v1/genai/qwen/qwen-image-edit-2511",
+      "status": 404,
+      "latencyMs": 50,
+      "bodyPreview": "404 page not found\n"
+    },
+    {
+      "name": "openai-compatible-images-edits",
+      "url": "https://ai.api.nvidia.com/v1/images/edits",
+      "status": 404,
+      "latencyMs": 26,
+      "bodyPreview": "404 page not found\n"
+    }
+  ],
+  "decision": "reject-for-auto_face-until-hosted-image-edit-endpoint-is-available"
+}
