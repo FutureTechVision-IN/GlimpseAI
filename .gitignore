@@ -38,6 +38,7 @@ backup.sql
 services/restoration/.venv/
 services/restoration/models/*.pth
 services/restoration/gfpgan/
+gfpgan/weights/
 __pycache__/
 *.pyc
 
