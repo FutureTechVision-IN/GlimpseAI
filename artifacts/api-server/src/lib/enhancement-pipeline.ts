@@ -21,6 +21,28 @@ import { enhanceImage, isRestorationServiceAvailable } from "./image-enhancer";
 import { logger } from "./logger";
 import type { AIEnhancementGuidance } from "./ai-provider";
 
+// #region agent log
+// Debug instrumentation for canvas-composition bug (session 957e6d).
+// Posts NDJSON to the local debug ingest, never logs the actual image bytes.
+function dbgLog(location: string, message: string, data: Record<string, unknown>) {
+  fetch("http://127.0.0.1:7307/ingest/071cac76-2b29-46f5-aa80-40a508d8eceb", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "957e6d" },
+    body: JSON.stringify({ sessionId: "957e6d", location, message, data, timestamp: Date.now() }),
+  }).catch(() => {});
+}
+async function dbgImageMeta(label: string, b64: string): Promise<Record<string, unknown>> {
+  try {
+    const sharp = (await import("sharp")).default;
+    const buf = Buffer.from(b64, "base64");
+    const meta = await sharp(buf).metadata();
+    return { label, bytes: buf.length, w: meta.width, h: meta.height, format: meta.format, hasAlpha: meta.hasAlpha };
+  } catch (e) {
+    return { label, error: (e as Error).message };
+  }
+}
+// #endregion
+
 export type UpscaleOp = "upscale" | "upscale_4x" | "esrgan_upscale_2x" | "esrgan_upscale_4x";
 
 export interface ChainSpec {
@@ -99,6 +121,22 @@ export async function runEnhancementChain(
   let buffer = base64Data;
   let bufferMime = mimeType;
 
+  // #region agent log
+  dbgLog("enhancement-pipeline.ts:chainStart", "chain entry", {
+    hypothesisId: "H7",
+    spec_enhance: spec.enhance, spec_filterId: spec.filterId, spec_upscale: spec.upscale,
+    settings_keys: Object.keys(spec.settings ?? {}),
+    settings_crop: spec.settings?.crop ?? null,
+    settings_rotation: spec.settings?.rotation ?? null,
+    settings_flipH: spec.settings?.flipH ?? null,
+    settings_flipV: spec.settings?.flipV ?? null,
+    settings_brightness: spec.settings?.brightness ?? null,
+    settings_contrast: spec.settings?.contrast ?? null,
+    settings_saturation: spec.settings?.saturation ?? null,
+    input_meta: await dbgImageMeta("chain_input", buffer),
+  });
+  // #endregion
+
   // ─── Stage 1: Enhance ────────────────────────────────────────────────
   if (spec.enhance && spec.enhance !== "none") {
     const t0 = Date.now();
@@ -111,6 +149,14 @@ export async function runEnhancementChain(
       });
       buffer = out.base64;
       bufferMime = out.mimeType;
+      // #region agent log
+      dbgLog("enhancement-pipeline.ts:afterStage1Enhance", "after enhance stage", {
+        hypothesisId: "H7",
+        op: spec.enhance, servedBy: useSidecar ? "sidecar" : "native",
+        ms: Date.now() - t0,
+        out_meta: await dbgImageMeta("after_enhance", buffer),
+      });
+      // #endregion
       stages.push({
         stage: "enhance",
         op: spec.enhance,
@@ -133,17 +179,37 @@ export async function runEnhancementChain(
   if (spec.filterId && spec.filterId !== "original") {
     const t0 = Date.now();
     try {
+      const filterSettings = {
+        ...(spec.settings ?? {}),
+        filterId: spec.filterId,
+        ...(restoredFaceProfile ? { filterProfile: "restored-face" } : {}),
+      };
+      // #region agent log
+      dbgLog("enhancement-pipeline.ts:beforeStage2Filter", "about to apply filter", {
+        hypothesisId: "H7",
+        filterId: spec.filterId, restoredFaceProfile,
+        filter_settings_keys: Object.keys(filterSettings),
+        filter_settings_crop: (filterSettings as Record<string, unknown>).crop ?? null,
+        filter_settings_rotation: (filterSettings as Record<string, unknown>).rotation ?? null,
+        filter_settings_flipH: (filterSettings as Record<string, unknown>).flipH ?? null,
+        filter_settings_flipV: (filterSettings as Record<string, unknown>).flipV ?? null,
+        in_meta: await dbgImageMeta("filter_input", buffer),
+      });
+      // #endregion
       const out = await enhanceImage(buffer, bufferMime, {
         enhancementType: "filter",
-        settings: {
-          ...(spec.settings ?? {}),
-          filterId: spec.filterId,
-          ...(restoredFaceProfile ? { filterProfile: "restored-face" } : {}),
-        },
+        settings: filterSettings,
         aiGuidance: null,
       });
       buffer = out.base64;
       bufferMime = out.mimeType;
+      // #region agent log
+      dbgLog("enhancement-pipeline.ts:afterStage2Filter", "filter stage complete", {
+        hypothesisId: "H7",
+        filterId: spec.filterId, ms: Date.now() - t0,
+        out_meta: await dbgImageMeta("after_filter", buffer),
+      });
+      // #endregion
       stages.push({
         stage: "filter",
         op: spec.filterId,

@@ -55,7 +55,12 @@ from pydantic import BaseModel, Field
 # ─── Configuration ────────────────────────────────────────────────────────────
 MODEL_DIR = Path(__file__).parent / "models"
 WEIGHTS_DIR = Path(__file__).parent / "gfpgan" / "weights"
-PORT = int(os.getenv("PORT", os.getenv("RESTORATION_PORT", "7860")))
+# Prefer the dedicated RESTORATION_PORT so this sidecar doesn't get hijacked
+# by the API server's PORT env var when both are co-located on one host
+# (the local `start.sh --native` path exports PORT=3001 for the Node API).
+# RunPod's Dockerfile.runpod sets BOTH PORT and RESTORATION_PORT to 7860,
+# so RunPod load-balanced endpoints keep working with this precedence.
+PORT = int(os.getenv("RESTORATION_PORT", os.getenv("PORT", "7860")))
 
 # Device selection: CUDA > MPS > CPU
 # GFPGAN/CodeFormer run on CPU for stability (MPS has unsupported ops).
@@ -1177,6 +1182,55 @@ def _run_restore_sync(img: np.ndarray, req_mode: str, req_restoration_model: str
     return result, faces_detected, backend_used, face_analysis
 
 
+# #region agent log
+def _dbg_post(location: str, message: str, data: dict) -> None:
+    """Fire-and-forget NDJSON log post to debug ingest. Never raises."""
+    try:
+        import urllib.request, json as _json
+        body = _json.dumps({
+            "sessionId": "957e6d",
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:7307/ingest/071cac76-2b29-46f5-aa80-40a508d8eceb",
+            data=body,
+            headers={"Content-Type": "application/json", "X-Debug-Session-Id": "957e6d"},
+        )
+        urllib.request.urlopen(req, timeout=1).read()
+    except Exception:
+        pass
+
+
+def _dbg_image_stats(label: str, arr) -> dict:
+    """Cheap stats: shape, dtype, mean, std, black-pixel %."""
+    try:
+        import numpy as _np
+        if arr is None:
+            return {"label": label, "shape": None}
+        h, w = arr.shape[:2]
+        ch = arr.shape[2] if arr.ndim == 3 else 1
+        sample = arr[::4, ::4] if max(h, w) > 256 else arr
+        flat = sample.reshape(-1, ch) if ch > 1 else sample.reshape(-1)
+        mean = float(flat.mean())
+        std = float(flat.std())
+        if ch > 1:
+            black_px = int((flat.sum(axis=1) < 24).sum())
+        else:
+            black_px = int((flat < 8).sum())
+        total = int(flat.shape[0])
+        return {
+            "label": label, "w": int(w), "h": int(h), "channels": int(ch),
+            "dtype": str(arr.dtype), "mean": round(mean, 2), "std": round(std, 2),
+            "black_pct": round(black_px / total * 100.0, 2) if total else None,
+        }
+    except Exception as _e:
+        return {"label": label, "stats_error": str(_e)}
+# #endregion
+
+
 @app.post("/restore", response_model=RestoreResponse)
 async def restore_image_endpoint(req: RestoreRequest):
     """
@@ -1196,13 +1250,47 @@ async def restore_image_endpoint(req: RestoreRequest):
     logger.info("Restore request: mode=%s, model=%s, input=%dx%d",
                 req.mode, req.restoration_model, img.shape[1], img.shape[0])
 
-    # ── Cache lookup ──
-    cached = _result_cache.get(img_bytes, req.mode, req.restoration_model, req.fidelity)
+    # #region agent log
+    import hashlib as _hashlib
+    _input_hash = _hashlib.md5(img_bytes).hexdigest()[:12]
+    # Dump the raw input bytes so we can compare what each caller sends
+    try:
+        _in_path = f"/tmp/sidecar_debug_input_{_input_hash}.jpg"
+        with open(_in_path, "wb") as _f:
+            _f.write(img_bytes)
+    except Exception:
+        _in_path = None
+    _dbg_post(
+        "server.py:restore.entry",
+        "request entry",
+        {
+            "hypothesisId": "H10",
+            "input_hash": _input_hash,
+            "input_bytes": len(img_bytes),
+            "input_dump_path": _in_path,
+            "mode": req.mode,
+            "restoration_model": req.restoration_model,
+            "fidelity": req.fidelity,
+            "face_enhance": req.face_enhance,
+            "input_stats": _dbg_image_stats("decoded_input", img),
+        },
+    )
+    # #endregion
+
+    # ── Cache lookup ── (DISABLED FOR DEBUG to force fresh inference each request)
+    DEBUG_BYPASS_CACHE = True
+    cached = None if DEBUG_BYPASS_CACHE else _result_cache.get(
+        img_bytes, req.mode, req.restoration_model, req.fidelity,
+    )
     if cached is not None:
         result, faces_detected, backend_used = cached
         b64, mime = encode_image(result)
         elapsed_ms = int((time.time() - start) * 1000)
         logger.info("Cache HIT: mode=%s, backend=%s, time=%dms", req.mode, backend_used, elapsed_ms)
+        # #region agent log
+        _dbg_post("server.py:restore.cacheHit", "served from cache",
+                  {"hypothesisId": "H17", "backend": backend_used, "elapsed_ms": elapsed_ms})
+        # #endregion
         return RestoreResponse(
             image_base64=b64, mime_type=mime, processing_ms=elapsed_ms,
             faces_detected=faces_detected, mode=req.mode, device=DEVICE,
@@ -1218,7 +1306,38 @@ async def restore_image_endpoint(req: RestoreRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Restoration failed: %s", e, exc_info=True)
+        # #region agent log
+        _dbg_post("server.py:restore.exception", "inference failed",
+                  {"hypothesisId": "H10", "error": str(e)})
+        # #endregion
         raise HTTPException(status_code=500, detail=f"Restoration failed: {str(e)}")
+
+    # #region agent log
+    _result_stats = _dbg_image_stats("ml_result", result)
+    _dbg_post(
+        "server.py:restore.afterInference",
+        "ML pipeline complete",
+        {
+            "hypothesisId": "H10",
+            "input_hash": _input_hash,
+            "mode": req.mode,
+            "backend_used": backend_used,
+            "faces_detected": faces_detected,
+            "result_stats": _result_stats,
+            "is_suspiciously_dark": (_result_stats.get("mean", 255) < 40) or (_result_stats.get("black_pct", 0) > 50),
+        },
+    )
+    # Dump raw result to disk so we can inspect it visually
+    try:
+        import cv2 as _cv2
+        _dump_path = "/tmp/sidecar_debug_last.png"
+        _cv2.imwrite(_dump_path, result)
+        _dbg_post("server.py:restore.diskDump", "wrote raw result to disk",
+                  {"hypothesisId": "H10", "path": _dump_path})
+    except Exception as _e:
+        _dbg_post("server.py:restore.diskDump.error", "disk dump failed",
+                  {"error": str(_e)})
+    # #endregion
 
     # ── Cache store ──
     _result_cache.put(img_bytes, req.mode, req.restoration_model, req.fidelity,
@@ -1226,6 +1345,19 @@ async def restore_image_endpoint(req: RestoreRequest):
 
     b64, mime = encode_image(result)
     elapsed_ms = int((time.time() - start) * 1000)
+
+    # #region agent log
+    _dbg_post(
+        "server.py:restore.afterEncode",
+        "encoded response",
+        {
+            "hypothesisId": "H10",
+            "encoded_bytes": len(b64) * 3 // 4,
+            "mime": mime,
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+    # #endregion
 
     logger.info("Restored: mode=%s, backend=%s, faces=%d, time=%dms, input=%dx%d",
                 req.mode, backend_used, faces_detected, elapsed_ms,

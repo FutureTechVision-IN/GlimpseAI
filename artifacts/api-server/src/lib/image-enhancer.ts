@@ -331,21 +331,56 @@ async function applyCanonicalPreprocess(
 
   let pipeline = sharp(inputBuffer);
   const crop = isCropBox(settings.crop) ? settings.crop : null;
+  let appliedCrop: Record<string, number> | null = null;
   if (crop && width > 0 && height > 0) {
     const left = Math.max(0, Math.min(width - 1, Math.round((crop.x / 100) * width)));
     const top = Math.max(0, Math.min(height - 1, Math.round((crop.y / 100) * height)));
     const extractWidth = Math.max(1, Math.min(width - left, Math.round(((crop.x2 - crop.x) / 100) * width)));
     const extractHeight = Math.max(1, Math.min(height - top, Math.round(((crop.y2 - crop.y) / 100) * height)));
     pipeline = pipeline.extract({ left, top, width: extractWidth, height: extractHeight });
+    appliedCrop = { left, top, width: extractWidth, height: extractHeight };
   }
 
+  let appliedRotation: number | null = null;
   if (typeof settings.rotation === "number" && settings.rotation % 360 !== 0) {
     pipeline = pipeline.rotate(settings.rotation, { background: { r: 0, g: 0, b: 0, alpha: 0 } });
+    appliedRotation = settings.rotation;
   }
-  if (settings.flipH === true) pipeline = pipeline.flop();
-  if (settings.flipV === true) pipeline = pipeline.flip();
+  const appliedFlipH = settings.flipH === true;
+  const appliedFlipV = settings.flipV === true;
+  if (appliedFlipH) pipeline = pipeline.flop();
+  if (appliedFlipV) pipeline = pipeline.flip();
 
-  return pipeline.toBuffer();
+  const outBuf = await pipeline.toBuffer();
+
+  // #region agent log
+  const outMeta = await sharp(outBuf).metadata();
+  fetch("http://127.0.0.1:7307/ingest/071cac76-2b29-46f5-aa80-40a508d8eceb", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "957e6d" },
+    body: JSON.stringify({
+      sessionId: "957e6d",
+      location: "image-enhancer.ts:applyCanonicalPreprocess",
+      message: "preprocess geometry decisions",
+      data: {
+        hypothesisId: "H7",
+        in_w: width, in_h: height, in_bytes: inputBuffer.length,
+        out_w: outMeta.width, out_h: outMeta.height, out_bytes: outBuf.length, out_hasAlpha: outMeta.hasAlpha,
+        appliedCrop, appliedRotation, appliedFlipH, appliedFlipV,
+        settings_seen_keys: Object.keys(settings),
+        settings_crop_raw: settings.crop ?? null,
+        settings_rotation_raw: settings.rotation ?? null,
+        settings_brightness: settings.brightness ?? null,
+        settings_contrast: settings.contrast ?? null,
+        settings_saturation: settings.saturation ?? null,
+        settings_sharpness: settings.sharpness ?? null,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+
+  return outBuf;
 }
 
 async function constrainInputForMemorySafeProcessing(
@@ -718,6 +753,19 @@ async function renderCanonicalImage(
   const filterProfile = s.filterProfile === "restored-face" ? "restored-face" : "standard";
 
   if (type === "filter" && filterId) {
+    // #region agent log
+    fetch("http://127.0.0.1:7307/ingest/071cac76-2b29-46f5-aa80-40a508d8eceb", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "957e6d" },
+      body: JSON.stringify({
+        sessionId: "957e6d",
+        location: "image-enhancer.ts:renderCanonicalImage:filterBranch",
+        message: "entering filter pipeline",
+        data: { hypothesisId: "H9", filterId, filterProfile, pipeline_in_w: meta.width, pipeline_in_h: meta.height, pipeline_in_format: meta.format },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     pipeline = applyRegisteredFilterPipeline(pipeline, filterId, filterProfile);
   } else {
     switch (type) {
